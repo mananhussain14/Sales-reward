@@ -1,12 +1,65 @@
 import type { Metadata } from "next";
-import { StatCard } from "@/components/admin/stat-card";
-import { PLACEHOLDER_STATS } from "@/lib/placeholder-stats";
+import { redirect } from "next/navigation";
+import { StatCard, type DashboardStat } from "@/components/admin/stat-card";
+import { getVendorAdminDashboardSummary } from "@/lib/dashboard/vendor-admin-summary";
 
 export const metadata: Metadata = {
   title: "Dashboard · SalesReward Admin",
 };
 
-export default function DashboardPage() {
+/**
+ * Vendor Admin dashboard. A Server Component: every figure below is fetched and
+ * rendered on the server, so no Supabase query, organization id, or session
+ * token is exposed to the browser.
+ *
+ * The authorization check here is deliberate duplication of the (admin) layout's
+ * check, not an oversight — see the note on the redirects below.
+ */
+export default async function DashboardPage() {
+  const summary = await getVendorAdminDashboardSummary();
+
+  // This page does not assume the layout already guarded it. A layout protects
+  // what renders *inside* it, but that is a property of the current route tree,
+  // not of this module: the same rule must hold if this page is ever moved,
+  // re-exported, or reached through a route that composes a different layout.
+  // The check is one function call against the single source of truth, and the
+  // two can never disagree because neither re-implements the decision.
+  if (summary.status === "unauthenticated") {
+    redirect("/login");
+  }
+
+  if (summary.status === "unauthorized") {
+    redirect("/access-denied");
+  }
+
+  // Every value below is a real count or `null` (unreadable) — never a sample.
+  const stats: DashboardStat[] = [
+    {
+      key: "active-members",
+      label: "Active Members",
+      value: summary.activeMemberCount,
+      hint: "Active memberships in this organization",
+    },
+    {
+      key: "active-roles",
+      label: "Active Roles",
+      value: summary.activeRoleCount,
+      hint: "Roles available in the role catalogue",
+    },
+    {
+      key: "permissions",
+      label: "Permissions",
+      value: summary.permissionCount,
+      hint: "Permissions defined across all modules",
+    },
+    {
+      key: "audit-events",
+      label: "Audit Events",
+      value: summary.auditEventCount,
+      hint: "Recorded admin actions for this organization",
+    },
+  ];
+
   return (
     <div className="mx-auto max-w-6xl space-y-6">
       <div>
@@ -14,37 +67,18 @@ export default function DashboardPage() {
           Dashboard
         </h2>
         <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-          Overview of retailer activity, campaigns, claims, and payouts.
-        </p>
-      </div>
-
-      {/* Placeholder-data notice */}
-      <div
-        role="note"
-        className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-300"
-      >
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth={1.75}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          className="mt-0.5 h-4 w-4 shrink-0"
-          aria-hidden="true"
-        >
-          <path d="M12 9v3.75m0 3.75h.008M10.34 3.94l-8.02 13.5A1.5 1.5 0 003.6 19.5h16.8a1.5 1.5 0 001.28-2.06l-8.02-13.5a1.5 1.5 0 00-2.58 0z" />
-        </svg>
-        <p>
-          <span className="font-semibold">Placeholder data.</span> All figures
-          below are sample values for layout purposes only and are not connected
-          to any live data source yet.
+          Managing{" "}
+          <span className="font-medium text-zinc-700 dark:text-zinc-300">
+            {summary.organizationName}
+          </span>
+          . Overview of your organization&apos;s members, access control, and
+          recorded activity.
         </p>
       </div>
 
       <section aria-label="Key metrics">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {PLACEHOLDER_STATS.map((stat) => (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          {stats.map((stat) => (
             <StatCard key={stat.key} stat={stat} />
           ))}
         </div>
