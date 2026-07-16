@@ -1,5 +1,7 @@
 "use client";
 
+import { SignOutButton } from "@/components/auth/sign-out-button";
+
 type AdminHeaderProps = {
   /** Whether the mobile sidebar drawer is currently open. */
   sidebarOpen: boolean;
@@ -48,6 +50,14 @@ export function AdminHeader({ sidebarOpen, onToggleSidebar }: AdminHeaderProps) 
         >
           VC
         </span>
+
+        {/* Separator between the identity lockup and the sign-out action. */}
+        <span
+          aria-hidden="true"
+          className="hidden h-6 w-px bg-zinc-200 sm:block dark:bg-zinc-800"
+        />
+
+        <SignOutButton variant="header" />
       </div>
     </header>
   );

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { getVendorSuperAdminAccess } from "@/lib/auth/vendor-admin-access";
+import { SignOutButton } from "@/components/auth/sign-out-button";
 
 export const metadata: Metadata = {
   title: "Access denied · SalesReward Admin",
@@ -20,7 +21,10 @@ export const metadata: Metadata = {
  * unauthorized (possibly hostile) account exactly what to acquire next, and
  * would confirm which organizations exist.
  *
- * No logout button yet — out of scope for this milestone.
+ * The sign-out button is the page's only action, and the reason this page is not
+ * a dead end: without it, a user who reaches here with the wrong account has no
+ * way back to /login except by clearing cookies by hand. Signing out requires no
+ * authorization — see app/auth/actions.ts.
  */
 export default async function AccessDeniedPage() {
   const access = await getVendorSuperAdminAccess();
@@ -81,6 +85,11 @@ export default async function AccessDeniedPage() {
               If you believe this is a mistake, please contact your system
               administrator.
             </p>
+
+            {/* Lets the user sign out and return to /login with another account. */}
+            <div className="mt-6 w-full">
+              <SignOutButton variant="card" />
+            </div>
           </div>
         </div>
 
