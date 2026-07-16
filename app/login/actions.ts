@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import type { LoginState } from "@/app/login/login-state";
 
 /**
  * Server Action backing the Vendor Admin sign-in form.
@@ -13,15 +14,13 @@ import { createClient } from "@/lib/supabase/server";
  * state lives entirely in the httpOnly cookies that @supabase/ssr manages.
  *
  * Nothing in this module logs the submitted email or password.
+ *
+ * Because of the "use server" directive above, `signIn` must be this module's
+ * only runtime export — every export here is exposed as a callable server
+ * endpoint, so Next.js rejects anything that is not an async function. The
+ * LoginState type and INITIAL_LOGIN_STATE therefore live in ./login-state.
+ * `import type` below is erased at compile time and adds no export.
  */
-
-/** Typed state for `useActionState`. `error` is the only thing sent to the browser. */
-export type LoginState = {
-  /** Human-readable message to display, or null when there is nothing to report. */
-  error: string | null;
-};
-
-export const INITIAL_LOGIN_STATE: LoginState = { error: null };
 
 /**
  * The single message used for every authentication failure.

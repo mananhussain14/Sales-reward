@@ -1,7 +1,8 @@
 "use client";
 
 import { useActionState } from "react";
-import { signIn, INITIAL_LOGIN_STATE } from "@/app/login/actions";
+import { signIn } from "@/app/login/actions";
+import { INITIAL_LOGIN_STATE } from "@/app/login/login-state";
 
 /**
  * Sign-in form for the Vendor Admin.
