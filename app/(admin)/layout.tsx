@@ -38,9 +38,14 @@ export default async function AdminLayout({
     redirect("/access-denied");
   }
 
-  // Past this point `access.status` is "authorized", so the organization name is
-  // the one resolved by the check above — the only source it may come from.
+  // Past this point `access.status` is "authorized", so both display values are
+  // the ones resolved by the check above — the only source they may come from.
   return (
-    <AdminShell organizationName={access.organizationName}>{children}</AdminShell>
+    <AdminShell
+      organizationName={access.organizationName}
+      userDisplayName={access.userDisplayName}
+    >
+      {children}
+    </AdminShell>
   );
 }

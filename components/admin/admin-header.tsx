@@ -5,6 +5,8 @@ import { SignOutButton } from "@/components/auth/sign-out-button";
 type AdminHeaderProps = {
   /** Organization name from the authorized server-side access result. */
   organizationName: string;
+  /** Signed-in administrator's name from the authorized server-side result. */
+  userDisplayName: string;
   /** Whether the mobile sidebar drawer is currently open. */
   sidebarOpen: boolean;
   /** Toggles the mobile sidebar drawer. */
@@ -37,6 +39,7 @@ function getOrganizationInitials(organizationName: string): string {
 
 export function AdminHeader({
   organizationName,
+  userDisplayName,
   sidebarOpen,
   onToggleSidebar,
 }: AdminHeaderProps) {
@@ -73,9 +76,16 @@ export function AdminHeader({
       </div>
 
       <div className="flex items-center gap-3">
-        <span className="hidden max-w-[16rem] truncate text-sm text-zinc-500 sm:inline dark:text-zinc-400">
-          {organizationName}
-        </span>
+        {/* Identity lockup: who is signed in, over which organization they are
+            managing. Hidden below `sm`, where the avatar alone carries it. */}
+        <div className="hidden min-w-0 flex-col items-end leading-tight sm:flex">
+          <span className="max-w-[12rem] truncate text-sm font-medium text-zinc-900 md:max-w-[16rem] dark:text-zinc-100">
+            {userDisplayName}
+          </span>
+          <span className="max-w-[12rem] truncate text-xs text-zinc-500 md:max-w-[16rem] dark:text-zinc-400">
+            {organizationName}
+          </span>
+        </div>
         <span
           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-zinc-200 text-sm font-semibold text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
           aria-hidden="true"

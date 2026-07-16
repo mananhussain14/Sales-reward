@@ -7,10 +7,16 @@ import { AdminSidebar } from "@/components/admin/admin-sidebar";
 type AdminShellProps = {
   /** Organization name from the authorized server-side access result. */
   organizationName: string;
+  /** Signed-in administrator's name from the authorized server-side result. */
+  userDisplayName: string;
   children: React.ReactNode;
 };
 
-export function AdminShell({ organizationName, children }: AdminShellProps) {
+export function AdminShell({
+  organizationName,
+  userDisplayName,
+  children,
+}: AdminShellProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const closeSidebar = useCallback(() => setSidebarOpen(false), []);
@@ -51,6 +57,7 @@ export function AdminShell({ organizationName, children }: AdminShellProps) {
       <div className="flex min-h-screen flex-col lg:pl-64">
         <AdminHeader
           organizationName={organizationName}
+          userDisplayName={userDisplayName}
           sidebarOpen={sidebarOpen}
           onToggleSidebar={() => setSidebarOpen((prev) => !prev)}
         />

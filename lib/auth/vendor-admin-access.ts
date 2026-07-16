@@ -30,24 +30,46 @@ const VENDOR_SUPER_ADMIN_ROLE_CODE = "VENDOR_SUPER_ADMIN";
 /** Only organizations of this type can host Vendor Super Admins. */
 const VENDOR_ORGANIZATION_TYPE = "VENDOR";
 
-/** The lifecycle state required of both memberships and organizations. */
+/** The lifecycle state required of profiles, memberships, and organizations. */
 const ACTIVE_STATUS = "ACTIVE";
+
+/**
+ * Shown when a profile's stored names unexpectedly produce an empty string.
+ * public.profiles constrains both name columns to be NOT NULL and non-empty
+ * after trimming, so this is a defensive floor rather than a reachable branch —
+ * the header must never render a blank identity even if that schema loosens.
+ */
+const FALLBACK_USER_DISPLAY_NAME = "Vendor Admin";
 
 export type VendorSuperAdminAccess =
   | {
       status: "authorized";
       userId: string;
+      userDisplayName: string;
       organizationId: string;
       organizationName: string;
     }
   | { status: "unauthenticated" }
   | { status: "unauthorized" };
 
+/** Shape of the two columns read from public.profiles. */
+type ProfileRow = { first_name: string; last_name: string };
+
 /** Shape of the single column read from public.organization_members. */
 type MembershipRow = { organization_id: string };
 
 /** Shape of the two columns read from public.organizations. */
 type VendorOrganizationRow = { id: string; name: string };
+
+/** Joins the stored name parts into one display string, ignoring blank parts. */
+function buildUserDisplayName(profile: ProfileRow): string {
+  const displayName = [profile.first_name, profile.last_name]
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0)
+    .join(" ");
+
+  return displayName || FALLBACK_USER_DISPLAY_NAME;
+}
 
 /**
  * Resolves the caller's Vendor Super Admin access from their own verified
@@ -92,7 +114,40 @@ export async function getVendorSuperAdminAccess(): Promise<VendorSuperAdminAcces
   const userId = claimsSubject;
 
   // ---------------------------------------------------------------------------
-  // 2. Candidate organizations — discovered only from the caller's own rows.
+  // 2. Profile — the caller's own row, for display only.
+  // ---------------------------------------------------------------------------
+  // public.profiles.id IS the auth user id (1:1 with auth.users), so the
+  // verified token subject addresses this row directly and auth.users is never
+  // queried. `supabase` is the ordinary authenticated client, so the
+  // profiles_select_self_or_authorized_members policy applies underneath: its
+  // first branch (profiles.id = auth.uid()) is what makes this read legal, and
+  // it would still scope the result to the caller even without the explicit
+  // filter. Only the two name columns are selected — no email, no id, no
+  // mobile number.
+  //
+  // The ACTIVE filter is an authorization condition, not a cosmetic one: a
+  // SUSPENDED or DEACTIVATED profile must not reach the dashboard, and
+  // has_organization_role() re-checks the same ACTIVE profile requirement in
+  // step 4, so the two agree rather than either standing alone.
+  const profileResult = await supabase
+    .from("profiles")
+    .select("first_name, last_name")
+    .eq("id", userId)
+    .eq("status", ACTIVE_STATUS)
+    .maybeSingle<ProfileRow>();
+
+  // maybeSingle() returns data: null rather than erroring on zero rows, so a
+  // missing, inactive, or RLS-invisible profile lands here and denies. The raw
+  // PostgREST error is swallowed for the same reason as every other read below:
+  // its message can name tables, columns, and policies.
+  if (profileResult.error || !profileResult.data) {
+    return { status: "unauthorized" };
+  }
+
+  const userDisplayName = buildUserDisplayName(profileResult.data);
+
+  // ---------------------------------------------------------------------------
+  // 3. Candidate organizations — discovered only from the caller's own rows.
   // ---------------------------------------------------------------------------
   // Organization ids are never guessed, enumerated, or taken from the request.
   // The search space starts as the caller's own ACTIVE memberships and can only
@@ -126,7 +181,7 @@ export async function getVendorSuperAdminAccess(): Promise<VendorSuperAdminAcces
   }
 
   // ---------------------------------------------------------------------------
-  // 3. Narrow to ACTIVE VENDOR organizations.
+  // 4. Narrow to ACTIVE VENDOR organizations.
   // ---------------------------------------------------------------------------
   // Still the authenticated client, so the organizations RLS policy
   // (is_active_organization_member) remains in force underneath these filters.
@@ -145,7 +200,7 @@ export async function getVendorSuperAdminAccess(): Promise<VendorSuperAdminAcces
   }
 
   // ---------------------------------------------------------------------------
-  // 4. Role decision — delegated to the database helper.
+  // 5. Role decision — delegated to the database helper.
   // ---------------------------------------------------------------------------
   // public.has_organization_role() is the single source of truth for this
   // decision. It is SECURITY DEFINER with search_path = '', identifies the caller
@@ -175,6 +230,7 @@ export async function getVendorSuperAdminAccess(): Promise<VendorSuperAdminAcces
       return {
         status: "authorized",
         userId,
+        userDisplayName,
         organizationId: organization.id,
         organizationName: organization.name,
       };
