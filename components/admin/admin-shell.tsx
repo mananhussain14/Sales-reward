@@ -4,7 +4,13 @@ import { useCallback, useEffect, useState } from "react";
 import { AdminHeader } from "@/components/admin/admin-header";
 import { AdminSidebar } from "@/components/admin/admin-sidebar";
 
-export function AdminShell({ children }: { children: React.ReactNode }) {
+type AdminShellProps = {
+  /** Organization name from the authorized server-side access result. */
+  organizationName: string;
+  children: React.ReactNode;
+};
+
+export function AdminShell({ organizationName, children }: AdminShellProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const closeSidebar = useCallback(() => setSidebarOpen(false), []);
@@ -44,6 +50,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
 
       <div className="flex min-h-screen flex-col lg:pl-64">
         <AdminHeader
+          organizationName={organizationName}
           sidebarOpen={sidebarOpen}
           onToggleSidebar={() => setSidebarOpen((prev) => !prev)}
         />
