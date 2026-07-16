@@ -1,10 +1,10 @@
 import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { getVendorSuperAdminAccess } from "@/lib/auth/vendor-admin-access";
 import { AdminShell } from "@/components/admin/admin-shell";
 
 /**
- * Server layout for the (admin) route group — the security boundary for every
- * Vendor Admin route.
+ * Server layout for the (admin) route group — the authorization boundary for
+ * every Vendor Admin route.
  *
  * This check is what actually protects these routes. proxy.ts also redirects
  * unauthenticated traffic, but that is an optimistic pre-filter and must not be
@@ -12,29 +12,30 @@ import { AdminShell } from "@/components/admin/admin-shell";
  * advises against treating Proxy as an authorization solution. Because this
  * layout runs as part of rendering, no admin route can render around it.
  *
- * Scope: authentication ONLY. Role and permission checks, profile lookups, and
- * organization_members queries are deliberately not here yet — a verified
- * identity is currently the whole requirement.
+ * Scope: authentication AND authorization. A verified identity is no longer
+ * sufficient — the caller must resolve to an active VENDOR_SUPER_ADMIN in an
+ * active VENDOR organization. The decision is delegated entirely to the shared
+ * server function; the queries behind it are deliberately not repeated here, so
+ * this layout and any future Server Action enforce exactly the same rule.
  */
 export default async function AdminLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const supabase = await createClient();
+  const access = await getVendorSuperAdminAccess();
 
-  // getClaims() cryptographically verifies the JWT (and refreshes it if it is
-  // close to expiring). getSession() would hand back the cookie's contents
-  // without verifying them, which cannot support a trust decision.
-  //
-  // On no session it returns { data: null, error: null }, so presence of
-  // `claims` — not absence of `error` — is the condition to test.
-  const { data } = await supabase.auth.getClaims();
-
-  if (!data?.claims) {
-    // Fail closed: an unverifiable identity (expired, tampered, absent, or an
-    // Auth server the client could not reach) never renders the admin.
+  // Unverifiable identity (expired, tampered, absent, or an Auth server the
+  // client could not reach): back to sign-in.
+  if (access.status === "unauthenticated") {
     redirect("/login");
+  }
+
+  // Verified identity, but not an active Vendor Super Admin. Also where every
+  // fail-closed path inside the access check lands — a database or RPC error
+  // denies rather than admits.
+  if (access.status === "unauthorized") {
+    redirect("/access-denied");
   }
 
   return <AdminShell>{children}</AdminShell>;
