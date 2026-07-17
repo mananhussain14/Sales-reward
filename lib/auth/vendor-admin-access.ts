@@ -5,6 +5,7 @@
 // if it ever reaches the browser bundle — the same guard lib/supabase/server.ts
 // relies on. The `server-only` package would state this more directly, but no
 // new dependency is added for it.
+import { cache } from "react";
 import { createClient } from "@/lib/supabase/server";
 
 /**
@@ -22,16 +23,14 @@ import { createClient } from "@/lib/supabase/server";
  * Fails CLOSED throughout: a database error, an RPC error, a transport failure,
  * or an unverifiable token can only ever produce a non-authorized result. No
  * branch here can turn an error into access.
+ *
+ * The chain itself lives in public.get_vendor_super_admin_context(), which
+ * evaluates every condition in one round trip. The role code, the VENDOR
+ * organization type, and the ACTIVE requirements on profile, membership,
+ * organization, and role are therefore SQL literals in that function rather than
+ * TypeScript constants here — there is deliberately no second copy of them to
+ * drift out of step with the database.
  */
-
-/** The role code that grants Vendor Admin dashboard access. */
-const VENDOR_SUPER_ADMIN_ROLE_CODE = "VENDOR_SUPER_ADMIN";
-
-/** Only organizations of this type can host Vendor Super Admins. */
-const VENDOR_ORGANIZATION_TYPE = "VENDOR";
-
-/** The lifecycle state required of profiles, memberships, and organizations. */
-const ACTIVE_STATUS = "ACTIVE";
 
 /**
  * Shown when a profile's stored names unexpectedly produce an empty string.
@@ -52,17 +51,29 @@ export type VendorSuperAdminAccess =
   | { status: "unauthenticated" }
   | { status: "unauthorized" };
 
-/** Shape of the two columns read from public.profiles. */
-type ProfileRow = { first_name: string; last_name: string };
-
-/** Shape of the single column read from public.organization_members. */
-type MembershipRow = { organization_id: string };
-
-/** Shape of the two columns read from public.organizations. */
-type VendorOrganizationRow = { id: string; name: string };
+/**
+ * One row of public.get_vendor_super_admin_context(). Declared explicitly rather
+ * than inferred, because an untyped rpc() call yields `any` and would silently
+ * accept whatever the function returned — including, if the SQL ever drifted, a
+ * column this module has no business receiving.
+ *
+ * These five columns are the function's entire output. There are no permission
+ * details, no role codes or names, no membership id, no email, and no status
+ * columns: the statuses are conditions inside the SQL, not values it hands back.
+ */
+type VendorSuperAdminContextRow = {
+  user_id: string;
+  first_name: string;
+  last_name: string;
+  organization_id: string;
+  organization_name: string;
+};
 
 /** Joins the stored name parts into one display string, ignoring blank parts. */
-function buildUserDisplayName(profile: ProfileRow): string {
+function buildUserDisplayName(profile: {
+  first_name: string;
+  last_name: string;
+}): string {
   const displayName = [profile.first_name, profile.last_name]
     .map((part) => part.trim())
     .filter((part) => part.length > 0)
@@ -75,8 +86,11 @@ function buildUserDisplayName(profile: ProfileRow): string {
  * Resolves the caller's Vendor Super Admin access from their own verified
  * session. Takes no arguments by design — see the note on the claims subject
  * below.
+ *
+ * Private: every caller goes through the cached getVendorSuperAdminAccess()
+ * export at the bottom of this module.
  */
-export async function getVendorSuperAdminAccess(): Promise<VendorSuperAdminAccess> {
+async function resolveVendorSuperAdminAccess(): Promise<VendorSuperAdminAccess> {
   const supabase = await createClient();
 
   // ---------------------------------------------------------------------------
@@ -114,131 +128,127 @@ export async function getVendorSuperAdminAccess(): Promise<VendorSuperAdminAcces
   const userId = claimsSubject;
 
   // ---------------------------------------------------------------------------
-  // 2. Profile — the caller's own row, for display only.
+  // 2. Authorization — the whole chain, in one round trip.
   // ---------------------------------------------------------------------------
-  // public.profiles.id IS the auth user id (1:1 with auth.users), so the
-  // verified token subject addresses this row directly and auth.users is never
-  // queried. `supabase` is the ordinary authenticated client, so the
-  // profiles_select_self_or_authorized_members policy applies underneath: its
-  // first branch (profiles.id = auth.uid()) is what makes this read legal, and
-  // it would still scope the result to the caller even without the explicit
-  // filter. Only the two name columns are selected — no email, no id, no
-  // mobile number.
+  // public.get_vendor_super_admin_context() is the single source of truth for
+  // this decision, exactly as has_organization_role() was before it. It is
+  // SECURITY DEFINER with search_path = '', identifies the caller solely via
+  // auth.uid() (it accepts NO arguments at all), and evaluates the full chain in
+  // one query: ACTIVE profile owned by auth.uid(), ACTIVE membership, ACTIVE
+  // VENDOR organization, ACTIVE VENDOR_SUPER_ADMIN role reached through that
+  // membership. Zero rows means not authorized.
   //
-  // The ACTIVE filter is an authorization condition, not a cosmetic one: a
-  // SUSPENDED or DEACTIVATED profile must not reach the dashboard, and
-  // has_organization_role() re-checks the same ACTIVE profile requirement in
-  // step 4, so the two agree rather than either standing alone.
-  const profileResult = await supabase
-    .from("profiles")
-    .select("first_name, last_name")
-    .eq("id", userId)
-    .eq("status", ACTIVE_STATUS)
-    .maybeSingle<ProfileRow>();
+  // This replaces four sequential remote calls — profile and memberships, then
+  // organizations, then one role RPC per candidate organization — with one. The
+  // conditions did not change; only the number of network round trips did. The
+  // joins are the same joins, and reassembling any part of them in TypeScript
+  // would let the application and the RLS policies drift apart, with only one of
+  // the two being right.
+  //
+  // Still the ordinary authenticated client: the caller's own token is what
+  // auth.uid() resolves inside the function. service_role is not used here or
+  // anywhere in this codebase — it would bypass RLS entirely and make the
+  // caller's identity a parameter rather than a fact.
+  //
+  // Promise.resolve() because the PostgREST builder is a thenable, not a real
+  // Promise — it implements `then` and has no `.catch()` of its own. Adopting it
+  // gives a genuine Promise to attach the rejection handler to, without altering
+  // when the request fires or what it returns.
+  const contextResult = await Promise.resolve(
+    supabase.rpc("get_vendor_super_admin_context"),
+  ).catch(() => null);
 
-  // maybeSingle() returns data: null rather than erroring on zero rows, so a
-  // missing, inactive, or RLS-invisible profile lands here and denies. The raw
-  // PostgREST error is swallowed for the same reason as every other read below:
-  // its message can name tables, columns, and policies.
-  if (profileResult.error || !profileResult.data) {
+  // A throw: fetch-level TypeError, aborted request, DNS or TLS failure. Reduced
+  // to `null` here, and the thrown value is deliberately not bound, inspected, or
+  // logged — it may carry request URLs, headers, or token material. A chain that
+  // could not be evaluated can only ever deny.
+  if (contextResult === null) {
     return { status: "unauthorized" };
   }
 
-  const userDisplayName = buildUserDisplayName(profileResult.data);
-
-  // ---------------------------------------------------------------------------
-  // 3. Candidate organizations — discovered only from the caller's own rows.
-  // ---------------------------------------------------------------------------
-  // Organization ids are never guessed, enumerated, or taken from the request.
-  // The search space starts as the caller's own ACTIVE memberships and can only
-  // narrow from there, so an organization the caller has no membership in can
-  // never even be tested. `supabase` is the ordinary authenticated client, so
-  // the organization_members RLS policy applies to this read as well — the
-  // explicit user_id filter and RLS agree rather than either standing alone.
-  const membershipsResult = await supabase
-    .from("organization_members")
-    .select("organization_id")
-    .eq("user_id", userId)
-    .eq("status", ACTIVE_STATUS)
-    .returns<MembershipRow[]>();
-
-  if (membershipsResult.error || !membershipsResult.data) {
-    // The raw PostgREST error is swallowed, not surfaced or logged: its message
-    // can name tables, columns, and policies. The caller is authenticated, so
-    // "unauthorized" (not "unauthenticated") is the honest fail-closed answer —
-    // it sends them to /access-denied rather than looping them through /login.
+  // A reported PostgREST/RPC error. Swallowed unbound for the same reason as
+  // every read this module ever made: its message can name tables, columns,
+  // functions, and policies. The caller is authenticated, so "unauthorized" (not
+  // "unauthenticated") is the honest fail-closed answer — it sends them to
+  // /access-denied rather than looping them through /login. A database failure
+  // never downgrades a verified caller to "unauthenticated".
+  if (contextResult.error || !contextResult.data) {
     return { status: "unauthorized" };
   }
 
-  // A user may hold several memberships in one organization. Deduplicate so the
-  // RPC below is called once per distinct organization rather than once per row.
-  const organizationIds = [
-    ...new Set(membershipsResult.data.map((membership) => membership.organization_id)),
-  ];
+  // rpc() is untyped here — this project has no generated database types, so the
+  // client cannot know this function's shape and infers `any` (the same reason
+  // the has_organization_role() call this replaced was untyped, and why it
+  // compared `=== true` rather than trusting a truthy value). The assertion below
+  // names the shape for the code that follows; it is a claim about the SQL, NOT a
+  // check of it, and TypeScript erases it at runtime. That is precisely why the
+  // subject equality below is verified rather than assumed.
+  const contextRows = contextResult.data as VendorSuperAdminContextRow[];
 
-  if (organizationIds.length === 0) {
+  // The function returns rows ordered by organization id, so this is a stable
+  // choice rather than whatever the planner emitted: a caller holding the role in
+  // two vendor organizations lands in the same one on every request.
+  //
+  // Zero rows is the ordinary deny — an authenticated caller who is not an ACTIVE
+  // VENDOR_SUPER_ADMIN in an ACTIVE VENDOR organization. It is also where a
+  // suspended profile, a suspended membership, a suspended or retailer
+  // organization, and an inactive role all land. The function does not
+  // distinguish them, and neither does this.
+  const context = contextRows[0];
+
+  if (!context) {
     return { status: "unauthorized" };
   }
 
-  // ---------------------------------------------------------------------------
-  // 4. Narrow to ACTIVE VENDOR organizations.
-  // ---------------------------------------------------------------------------
-  // Still the authenticated client, so the organizations RLS policy
-  // (is_active_organization_member) remains in force underneath these filters.
-  // A membership in a RETAILER organization, or in a suspended vendor, is
-  // discarded here before any role check is attempted.
-  const organizationsResult = await supabase
-    .from("organizations")
-    .select("id, name")
-    .in("id", organizationIds)
-    .eq("organization_type", VENDOR_ORGANIZATION_TYPE)
-    .eq("status", ACTIVE_STATUS)
-    .returns<VendorOrganizationRow[]>();
-
-  if (organizationsResult.error || !organizationsResult.data) {
+  // Defense in depth. The function derives its subject from auth.uid() and can
+  // only ever return the caller's own row, so this cannot fail today — auth.uid()
+  // and the claims subject are both read from the same verified token. It is
+  // checked anyway because the alternative to checking is trusting: if the SQL
+  // were ever edited to accept a parameter, join loosely, or return another
+  // user's profile, that bug would otherwise become a silent identity swap, with
+  // this module rendering one user's name and organization to a different signed-
+  // in user. A mismatch is not a scenario to explain — it is a reason to deny.
+  if (context.user_id !== userId) {
     return { status: "unauthorized" };
   }
 
-  // ---------------------------------------------------------------------------
-  // 5. Role decision — delegated to the database helper.
-  // ---------------------------------------------------------------------------
-  // public.has_organization_role() is the single source of truth for this
-  // decision. It is SECURITY DEFINER with search_path = '', identifies the caller
-  // solely via auth.uid() (it accepts no user id), and re-checks the full active
-  // chain: ACTIVE profile, ACTIVE membership, ACTIVE organization, ACTIVE role,
-  // matching role code. The roles and member_roles tables are deliberately not
-  // read here — reassembling that logic in TypeScript would let the dashboard and
-  // the RLS policies drift apart, and only one of the two would be right.
-  for (const organization of organizationsResult.data) {
-    const { data: hasRole, error } = await supabase.rpc("has_organization_role", {
-      target_organization_id: organization.id,
-      target_role_code: VENDOR_SUPER_ADMIN_ROLE_CODE,
-    });
-
-    if (error) {
-      // Fail closed for THIS organization only, and keep checking the rest: a
-      // transient error on one row must not silently revoke access granted by
-      // another. It can never grant access, because only an explicit `true`
-      // below does that.
-      continue;
-    }
-
-    // Strict `=== true`. The helper returns a plain boolean (EXISTS is never
-    // null), but a truthy check would also accept a non-empty error string or an
-    // unexpected object were the contract ever to change.
-    if (hasRole === true) {
-      return {
-        status: "authorized",
-        userId,
-        userDisplayName,
-        organizationId: organization.id,
-        organizationName: organization.name,
-      };
-    }
-  }
-
-  // Authenticated, but holding no ACTIVE VENDOR_SUPER_ADMIN role in any ACTIVE
-  // vendor organization. This is also the landing point for every fail-closed
-  // path above.
-  return { status: "unauthorized" };
+  // Past this point the caller is authorized. `userId` is the verified claims
+  // subject — the same value the function matched on, and still never anything
+  // the caller supplied.
+  return {
+    status: "authorized",
+    userId,
+    userDisplayName: buildUserDisplayName(context),
+    organizationId: context.organization_id,
+    organizationName: context.organization_name,
+  };
 }
+
+/**
+ * Shared Vendor Super Admin authorization check — the only export.
+ *
+ * React `cache` here is REQUEST-SCOPED memoization for a single Server Component
+ * render, and nothing more. React allocates a fresh cache per request, so the
+ * (admin) layout and the /users data module — which both call this while
+ * rendering the same request — run the authorization chain once and share its
+ * result, instead of verifying claims and calling the authorization RPC twice.
+ *
+ * It is NOT a cache in the persistent sense, and it must never become one. An
+ * authorization result belongs to exactly one caller for exactly one request:
+ * carrying it across requests would serve one user's access decision to another,
+ * and holding it beyond the request would keep a stale `authorized` alive after a
+ * role, membership, or organization was suspended. Nothing about this call is
+ * durable — no unstable_cache, no "use cache", no revalidation window, no module
+ * global, no browser caching. The lifetime is the render, and the render ends.
+ *
+ * cache() is called exactly once, at module scope: calling it inside a function
+ * would build a new cache per call and memoize nothing. The function takes no
+ * arguments, so there is no cache key — deliberately. A key derived from a user
+ * id, organization id, token, cookie, or email would mean accepting the caller's
+ * identity as input, which is exactly the vulnerability the chain avoids by
+ * reading its subject from the verified token instead.
+ *
+ * Behavior is unchanged: same queries, same filters, same ACTIVE requirements,
+ * same RPC, same authenticated client under RLS, same fail-closed results.
+ */
+export const getVendorSuperAdminAccess = cache(resolveVendorSuperAdminAccess);
