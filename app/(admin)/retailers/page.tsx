@@ -24,6 +24,29 @@ function ShopCount({ shopCount }: { shopCount: number }) {
   );
 }
 
+/**
+ * The Retailer name, linked to its detail route. Shared by the table and the
+ * cards so both stay identical in target, styling, and focus behaviour.
+ *
+ * Only the NAME is the link — not the row, not the card. A row-wide link would
+ * swallow the status badges and the shop count into one enormous anchor, which
+ * screen readers announce as a single unreadable label, and it would leave no
+ * way to add a second action to a row later without nesting interactive
+ * elements. A named target is also what a keyboard user tabs to.
+ *
+ * The relationship id appears only in the href. It is never rendered as text.
+ */
+function RetailerNameLink({ retailer }: { retailer: VendorRetailer }) {
+  return (
+    <Link
+      href={`/retailers/${retailer.relationshipId}`}
+      className="rounded-sm font-medium text-zinc-900 underline-offset-4 transition-colors hover:text-indigo-600 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 dark:text-zinc-50 dark:hover:text-indigo-400 dark:focus-visible:ring-offset-zinc-950"
+    >
+      {retailer.retailerName}
+    </Link>
+  );
+}
+
 /** Wide-screen presentation. Hidden below `md`, where the cards take over. */
 function RetailerTable({ retailers }: { retailers: VendorRetailer[] }) {
   return (
@@ -46,14 +69,10 @@ function RetailerTable({ retailers }: { retailers: VendorRetailer[] }) {
           </tr>
         </thead>
         <tbody className="divide-y divide-zinc-200 bg-white dark:divide-zinc-800 dark:bg-zinc-950">
-          {retailers.map((retailer, index) => (
-            // The directory carries no ids by design, so there is no natural key:
-            // two Retailers may legitimately share a name. The index is stable
-            // here because this list is server-rendered in a fixed alphabetical
-            // sort order and never reordered, filtered, or mutated on the client.
-            <tr key={index}>
-              <td className="px-4 py-3 font-medium text-zinc-900 dark:text-zinc-50">
-                {retailer.retailerName}
+          {retailers.map((retailer) => (
+            <tr key={retailer.relationshipId}>
+              <td className="px-4 py-3">
+                <RetailerNameLink retailer={retailer} />
               </td>
               <td className="px-4 py-3">
                 <StatusBadge status={retailer.retailerStatus} />
@@ -85,14 +104,13 @@ function RetailerTable({ retailers }: { retailers: VendorRetailer[] }) {
 function RetailerCards({ retailers }: { retailers: VendorRetailer[] }) {
   return (
     <ul className="space-y-3 md:hidden">
-      {retailers.map((retailer, index) => (
-        // Index key for the same reason as the table above: no id, fixed order.
+      {retailers.map((retailer) => (
         <li
-          key={index}
+          key={retailer.relationshipId}
           className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950"
         >
-          <p className="font-medium text-zinc-900 dark:text-zinc-50">
-            {retailer.retailerName}
+          <p>
+            <RetailerNameLink retailer={retailer} />
           </p>
           <dl className="mt-2 space-y-2">
             <div className="flex items-center gap-2">

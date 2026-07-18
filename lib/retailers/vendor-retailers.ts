@@ -30,11 +30,28 @@ import { getVendorSuperAdminAccess } from "@/lib/auth/vendor-admin-access";
  * vendor_organization_id filter below narrows within what the policies already
  * permit; it is not what makes the read safe.
  *
- * The rows this returns are display-only projections: every internal id
- * (relationship, Retailer organization) is used to join on the server and then
- * dropped, so no UUID crosses into the RSC payload. An id in a payload is an id
- * a page can put in a URL, a form, or a link — and this milestone has no
- * legitimate use for one.
+ * The rows this returns are display-only projections plus EXACTLY ONE id: the
+ * vendor_retailers row's own primary key, carried as `relationshipId` so the
+ * directory can link each Retailer to its detail route. Every other internal id
+ * — the Retailer organization id, the Vendor organization id, shop ids — is
+ * still used to join on the server and then dropped, and none reaches the RSC
+ * payload.
+ *
+ * That one exception is deliberate and narrow. A detail route needs some
+ * addressable handle, so the question is which id to expose, not whether. The
+ * relationship id is the least consequential one available: it is referenced by
+ * no other table, it means nothing outside this Vendor's own view, and it keeps
+ * the Retailer organization's primary key — the id that products, campaigns,
+ * claims, coins, and the Retailer's own future portal will all join on — out of
+ * URLs, logs, referrers, and screenshots entirely.
+ *
+ * `relationshipId` IS NOT AUTHORIZATION AND MUST NEVER BE TREATED AS ANY. It is
+ * an address, not a capability: holding one grants nothing. The detail loader
+ * that receives it back must still resolve the caller's own Vendor through
+ * getVendorSuperAdminAccess(), still filter the relationship row by that
+ * Vendor's organization id, and still read under RLS — exactly as this module
+ * does. A relationship id belonging to another Vendor must read as not-found,
+ * not as access.
  *
  * Two failure kinds stay strictly apart, as in the member directory and the
  * audit history:
@@ -46,8 +63,17 @@ import { getVendorSuperAdminAccess } from "@/lib/auth/vendor-admin-access";
 /** The organization type a row must hold to be a Retailer. */
 const RETAILER_ORGANIZATION_TYPE = "RETAILER";
 
-/** One rendered directory row. Deliberately carries no ids. */
+/**
+ * One rendered directory row. Carries exactly one id — the relationship's own —
+ * and no other, for the reasons set out in the module comment above.
+ */
 export type VendorRetailer = {
+  /**
+   * public.vendor_retailers.id: the opaque handle for this Vendor's relationship
+   * to this Retailer. Its ONLY purpose is to address /retailers/[relationshipId].
+   * It is never an authorization token, and it is never rendered as text.
+   */
+  relationshipId: string;
   retailerName: string;
   /** The Retailer organization's own lifecycle state. */
   retailerStatus: string;
@@ -70,10 +96,13 @@ export type VendorRetailersResult =
   | { status: "unauthorized" };
 
 // Shapes of the columns read from each table, matching the migrations exactly.
-// Selected narrowly: no relationship id, no timestamps, no shop names, codes, or
-// addresses. A column that is never read cannot leak from a page, a payload, a
-// log, or a future refactor of this file.
-type VendorRetailerRow = { retailer_organization_id: string; status: string };
+// Selected narrowly: no timestamps, no shop names, codes, or addresses. A column
+// that is never read cannot leak from a page, a payload, a log, or a future
+// refactor of this file.
+//
+// The relationship id is now read — it is the one id this module returns — while
+// retailer_organization_id remains join-only and is dropped during assembly.
+type VendorRetailerRow = { id: string; retailer_organization_id: string; status: string };
 type RetailerOrganizationRow = { id: string; name: string; status: string };
 type RetailerShopRow = { retailer_organization_id: string };
 
@@ -122,7 +151,11 @@ async function loadRetailers(
   const relationships = unwrap<VendorRetailerRow>(
     await supabase
       .from("vendor_retailers")
-      .select("retailer_organization_id, status")
+      // `id` is the relationship's own primary key, returned to the page as
+      // relationshipId. The vendor_organization_id is a FILTER only and is never
+      // selected: the page already knows which Vendor it is looking at, and a
+      // Vendor id in the payload is one a form or link could later echo back.
+      .select("id, retailer_organization_id, status")
       .eq("vendor_organization_id", organizationId),
   );
 
@@ -173,7 +206,8 @@ async function loadRetailers(
   ]);
 
   // ---------------------------------------------------------------------------
-  // 4. Assemble — ids are used here and then discarded.
+  // 4. Assemble — join ids are used here and then discarded; only the
+  //    relationship id survives into the returned rows.
   // ---------------------------------------------------------------------------
   const retailerOrganizationsById = new Map(
     retailerOrganizations.map((organization) => [organization.id, organization]),
@@ -202,6 +236,11 @@ async function loadRetailers(
     if (!organization) continue;
 
     retailers.push({
+      // From the relationship row this query returned under RLS for the
+      // authorized Vendor — never from a parameter, a URL, or the organizations
+      // read. An id assembled from anywhere else would be an id the caller could
+      // influence.
+      relationshipId: relationship.id,
       retailerName: organization.name,
       retailerStatus: organization.status,
       relationshipStatus: relationship.status,
