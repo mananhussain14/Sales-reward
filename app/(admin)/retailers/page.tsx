@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { StatusBadge } from "@/components/admin/status-badge";
 import {
@@ -116,6 +117,42 @@ function RetailerCards({ retailers }: { retailers: VendorRetailer[] }) {
   );
 }
 
+/**
+ * Confirmation shown once, immediately after onboarding, when the action
+ * redirects here with `?created=1`.
+ *
+ * The flag is the entire message. It carries no Retailer id, no organization id,
+ * no shop id, and no name — nothing from the database travels in the URL, so
+ * there is nothing here to leak, tamper with, or address a row by. A forged
+ * `?created=1` therefore shows a banner and changes nothing else, which is the
+ * whole reason the flag is allowed to be this dumb.
+ *
+ * role="status" rather than "alert": this is a confirmation, announced politely,
+ * not something demanding interruption.
+ */
+function CreatedBanner() {
+  return (
+    <div
+      role="status"
+      className="flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-300"
+    >
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={1.75}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="mt-0.5 h-4 w-4 shrink-0"
+        aria-hidden="true"
+      >
+        <path d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+      </svg>
+      <p>Retailer created successfully.</p>
+    </div>
+  );
+}
+
 /** Neutral panel used for both the empty and the unavailable states. */
 function NoticePanel({ title, body }: { title: string; body: string }) {
   return (
@@ -131,8 +168,17 @@ function NoticePanel({ title, body }: { title: string; body: string }) {
  * Component: the queries, the organization id, and the session all stay on the
  * server, and only display strings reach the browser.
  */
-export default async function RetailersPage() {
-  const directory = await getVendorRetailers();
+export default async function RetailersPage({
+  searchParams,
+}: {
+  // A promise in this version of Next.js — it must be awaited before any value
+  // is read.
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+}) {
+  const [directory, resolvedSearchParams] = await Promise.all([
+    getVendorRetailers(),
+    searchParams,
+  ]);
 
   // As on the dashboard and the users page, this page does not assume the layout
   // already guarded it — the rule must hold for this module regardless of the
@@ -148,21 +194,61 @@ export default async function RetailersPage() {
 
   const { organizationName, retailers } = directory;
 
+  // A repeated parameter arrives as an array, so the value is compared only when
+  // it is a single string. Anything else — absent, repeated, or any other value
+  // — simply means no banner.
+  const justCreated = resolvedSearchParams.created === "1";
+
   return (
     <div className="mx-auto max-w-6xl space-y-6">
-      <div>
-        <h2 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-          Retailers
-        </h2>
-        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-          Retailer organizations managed by{" "}
-          <span className="font-medium text-zinc-700 dark:text-zinc-300">
-            {organizationName}
-          </span>
-          , with each Retailer&apos;s own state, the state of its relationship
-          with this Vendor, and how many shops it has on record.
-        </p>
+      {/*
+        The heading and the action sit in one row so "Add Retailer" aligns with
+        the title. It is placed here, outside the three body states below, so it
+        is present whether the directory lists Retailers, is empty, or could not
+        be loaded — the empty state is exactly when a Vendor most needs it. It is
+        also after both redirects above, so it can never render for a caller who
+        is not an authorized Vendor Super Admin.
+      */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h2 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+            Retailers
+          </h2>
+          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+            Retailer organizations managed by{" "}
+            <span className="font-medium text-zinc-700 dark:text-zinc-300">
+              {organizationName}
+            </span>
+            , with each Retailer&apos;s own state, the state of its relationship
+            with this Vendor, and how many shops it has on record.
+          </p>
+        </div>
+
+        {/*
+          A plain link, not a Client Component: navigating to the form needs no
+          client state. The form on the other side is where interactivity begins.
+        */}
+        <Link
+          href="/retailers/new"
+          className="inline-flex shrink-0 items-center justify-center gap-2 rounded-md bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-zinc-950"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={1.75}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="h-4 w-4"
+            aria-hidden="true"
+          >
+            <path d="M12 4.5v15m7.5-7.5h-15" />
+          </svg>
+          Add Retailer
+        </Link>
       </div>
+
+      {justCreated && <CreatedBanner />}
 
       {retailers === null ? (
         // Deliberately generic and reason-free: the only cause is a database
