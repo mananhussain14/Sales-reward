@@ -160,7 +160,23 @@ site_url = "http://127.0.0.1:3000"
 # The public URL that Auth serves on. Defaults to the API external URL with `/auth/v1` appended.
 # external_url = ""
 # A list of *exact* URLs that auth providers are permitted to redirect to post authentication.
-additional_redirect_urls = ["https://127.0.0.1:3000"]
+# The invitation callback is listed EXPLICITLY, as an exact URL, because GoTrue
+# matches this list against the `redirectTo` a client asks for and refuses
+# anything absent from it. Both loopback spellings are present because Next.js
+# serves on localhost while this file's site_url uses 127.0.0.1, and an invitation
+# generated against one must not be refused because the browser used the other.
+#
+# The pre-existing https://127.0.0.1:3000 entry is preserved untouched.
+#
+# LOCAL ONLY. This file configures `supabase start`; it has NO effect on the
+# hosted project. The production callback must be added by hand in the Supabase
+# Dashboard under Authentication -> URL Configuration -> Redirect URLs, and no
+# production domain is invented here.
+additional_redirect_urls = [
+  "https://127.0.0.1:3000",
+  "http://127.0.0.1:3000/invitations/accept",
+  "http://localhost:3000/invitations/accept",
+]
 # How long tokens are valid for, in seconds. Defaults to 3600 (1 hour), maximum 604,800 (1 week).
 jwt_expiry = 3600
 # JWT issuer URL. If not set, defaults to auth.external_url.
@@ -231,7 +247,22 @@ max_frequency = "1s"
 # Number of characters used in the email OTP.
 otp_length = 6
 # Number of seconds before the email OTP expires (defaults to 1 hour).
-otp_expiry = 3600
+#
+# Raised from 3600 (1 hour) to 86400 (24 hours) to match the approved invitation
+# lifetime. One hour is a reasonable default for a password-reset code the user
+# requested seconds ago; it is far too short for an invitation that arrives
+# unannounced in somebody's inbox, possibly overnight or over a weekend.
+#
+# These are still TWO separate clocks and are deliberately not coupled in code:
+# this one governs how long the emailed link remains clickable, while
+# public.retailer_invitations.expires_at governs how long the person may still
+# become the owner. Aligning their values keeps the common case coherent, but the
+# invitation row remains the authority — accept_retailer_owner_invitation()
+# re-checks expires_at regardless of what GoTrue allowed through.
+#
+# LOCAL ONLY. Set the hosted equivalent in the Supabase Dashboard under
+# Authentication -> Providers -> Email -> Email OTP Expiration.
+otp_expiry = 86400
 
 # Use a production-ready SMTP server
 # [auth.email.smtp]
@@ -243,10 +274,25 @@ otp_expiry = 3600
 # admin_email = "admin@email.com"
 # sender_name = "Admin"
 
-# Uncomment to customize email template
-# [auth.email.template.invite]
-# subject = "You have been invited"
-# content_path = "./supabase/templates/invite.html"
+# Custom invitation template.
+#
+# ENABLED deliberately, and the reason is a security one rather than branding.
+# GoTrue's DEFAULT invite template emits {{ .ConfirmationURL }}, which delivers the
+# token to the browser in a URL FRAGMENT — readable only by client-side JavaScript,
+# which means the token must live in the browser before it can be exchanged. The
+# custom template below emits {{ .TokenHash }} as an ordinary query parameter
+# instead, so the callback can verify it SERVER-side with verifyOtp() and the raw
+# credential never enters client JavaScript at all.
+#
+# content_path follows the spelling of the example this replaces: it is resolved
+# relative to the project root, not to the supabase/ directory.
+#
+# LOCAL ONLY. The hosted project needs the same template pasted into the Supabase
+# Dashboard under Authentication -> Emails -> Invite user, or hosted invitations
+# will keep using the default fragment-based link and the callback will reject them.
+[auth.email.template.invite]
+subject = "You have been invited to SalesReward"
+content_path = "./supabase/templates/invite.html"
 
 # Uncomment to customize notification email template
 # [auth.email.notification.password_changed]
