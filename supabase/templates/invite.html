@@ -1,0 +1,111 @@
+<!--
+  Retailer Owner invitation email.
+
+  WHY THIS TEMPLATE EXISTS RATHER THAN GOTRUE'S DEFAULT
+    The default invite template emits {{ .ConfirmationURL }}, which carries the
+    token in a URL FRAGMENT (#access_token=...). A fragment is never sent to the
+    server, so the token can only be read by client-side JavaScript — meaning the
+    credential must be handled in the browser before it can be exchanged.
+
+    This template emits {{ .TokenHash }} as an ordinary query parameter instead.
+    The callback at /invitations/accept reads it on the SERVER and exchanges it
+    via supabase.auth.verifyOtp(), so the raw credential never enters client
+    JavaScript, never reaches a client component, and never appears in any
+    browser-side state.
+
+  WHAT IS DELIBERATELY ABSENT FROM THIS EMAIL
+    * No database identifier of any kind: no invitation id, Vendor organization
+      id, Retailer organization id, profile id, membership id, or Auth user id.
+      An email is forwarded, archived, and quoted; it is not a place to put
+      internal identifiers.
+    * No visible token. The token hash appears exactly once, inside the href, and
+      is never printed as readable text where it could be shoulder-surfed,
+      screenshotted, or pasted into a support ticket.
+    * No service-role key, no JWT, and no API key. Nothing in this file is
+      substituted with a credential belonging to the application itself.
+    * No JavaScript. Mail clients strip it, and a template that relies on it is a
+      template that silently fails.
+    * No remote images, tracking pixels, web fonts, or external stylesheets. Every
+      style below is inline. Beyond the privacy argument, a remote resource in an
+      invitation email is a beacon confirming to a third party that a specific
+      address opened it.
+    * No Retailer or Vendor NAME. The recipient may not be the intended person —
+      an admin can mistype an address — and the fact that a particular company is
+      onboarding a partner should not leak to whoever receives a misdirected
+      invitation. They are told what to do and nothing about who is involved.
+
+  SUPPORTED VARIABLES USED
+    {{ .SiteURL }}    the configured site_url. Combined with the fixed path below
+                      it produces the callback address. Not caller-controlled: it
+                      comes from Supabase Auth configuration, and the redirect the
+                      application requests is separately checked against the
+                      redirect allow-list.
+    {{ .TokenHash }}  the single-use invitation token hash.
+-->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>You have been invited to SalesReward</title>
+  </head>
+  <body style="margin:0; padding:0; background-color:#f4f4f5; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; color:#18181b;">
+    <!--
+      A table-based shell, which is still the only layout mechanism email clients
+      agree on. role="presentation" keeps it out of the accessibility tree so a
+      screen reader announces the content as prose rather than as a data table.
+    -->
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f4f4f5; padding:32px 16px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:520px; background-color:#ffffff; border-radius:12px; border:1px solid #e4e4e7;">
+            <tr>
+              <td style="padding:32px;">
+
+                <h1 style="margin:0 0 16px 0; font-size:20px; line-height:28px; font-weight:600; color:#18181b;">
+                  You have been invited to SalesReward
+                </h1>
+
+                <p style="margin:0 0 16px 0; font-size:15px; line-height:24px; color:#3f3f46;">
+                  You have been invited to set up a retailer account on SalesReward.
+                  To get started, confirm your email address and choose a password.
+                </p>
+
+                <!--
+                  The single action. The token hash travels as a query parameter so
+                  the server can verify it; type=invite tells verifyOtp which flow
+                  this is. There is deliberately no `next`, `redirectTo`, or
+                  `returnUrl` parameter — a redirect target in an emailed link is a
+                  value an attacker would love to control, and the callback's
+                  destination is fixed in application code instead.
+                -->
+                <p style="margin:0 0 24px 0;">
+                  <a
+                    href="{{ .SiteURL }}/invitations/accept?token_hash={{ .TokenHash }}&type=invite"
+                    style="display:inline-block; background-color:#4f46e5; color:#ffffff; font-size:15px; font-weight:600; line-height:20px; text-decoration:none; padding:12px 24px; border-radius:6px;"
+                  >
+                    Accept invitation
+                  </a>
+                </p>
+
+                <p style="margin:0 0 8px 0; font-size:13px; line-height:20px; color:#71717a;">
+                  This invitation expires in 24 hours and can be used once.
+                </p>
+
+                <p style="margin:0; font-size:13px; line-height:20px; color:#71717a;">
+                  If you were not expecting this invitation, you can ignore this
+                  email. No account will be activated unless the link above is used.
+                </p>
+
+              </td>
+            </tr>
+          </table>
+
+          <p style="margin:24px 0 0 0; font-size:12px; line-height:18px; color:#a1a1aa;">
+            SalesReward
+          </p>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

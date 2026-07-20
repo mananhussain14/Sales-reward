@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { StatusBadge } from "@/components/admin/status-badge";
+import { isRetailerOwnerInvitationsEnabled } from "@/lib/features/retailer-owner-invitations";
 import {
   getVendorRetailerDetail,
   type VendorRetailerDetail,
@@ -293,6 +294,123 @@ function ShopCreatedBanner() {
 }
 
 /**
+ * Confirmation shown once, immediately after an owner invitation is sent, when the
+ * action redirects here with `?ownerInvited=1`.
+ *
+ * The flag is the entire message. It carries no invitation id, Auth user id,
+ * email, Retailer id, or organization id — nothing from the database travels in
+ * the URL, so there is nothing here to leak, tamper with, or address a row by. A
+ * forged `?ownerInvited=1` therefore shows a banner and changes nothing else,
+ * which is the whole reason the flag is allowed to be this dumb. This mirrors the
+ * `?shopCreated=1` and `?created=1` banners exactly.
+ *
+ * The invitee's email is deliberately NOT echoed back, even though the admin just
+ * typed it: it would put an address into a URL, into browser history, and into any
+ * referrer this page generates, for no benefit the admin does not already have.
+ *
+ * role="status" rather than "alert": this is a confirmation, announced politely,
+ * not something demanding interruption.
+ */
+function OwnerInvitedBanner() {
+  return (
+    <div
+      role="status"
+      className="flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-300"
+    >
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={1.75}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="mt-0.5 h-4 w-4 shrink-0"
+        aria-hidden="true"
+      >
+        <path d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+      </svg>
+      <p>Retailer Owner invitation sent.</p>
+    </div>
+  );
+}
+
+/**
+ * The one Invite Retailer Owner control.
+ *
+ * Rendered only when both the Retailer and its relationship are ACTIVE — the same
+ * gate public.reserve_retailer_owner_invitation() enforces — so an admin is never
+ * offered an action the database will refuse.
+ *
+ * This milestone deliberately ships no invitation directory and no invitation
+ * management UI, so the control does not know whether an invitation is already
+ * pending. Submitting a second time for the same person is safe and idempotent:
+ * the reservation resolves the existing live invitation and re-sends it rather
+ * than creating a duplicate. Submitting for a Retailer that already has an owner
+ * is refused by the database and surfaced as a field error on the form.
+ */
+function InviteOwnerLink({ relationshipId }: { relationshipId: string }) {
+  return (
+    <Link
+      href={`/retailers/${relationshipId}/owner/invite`}
+      className="inline-flex shrink-0 items-center justify-center gap-2 rounded-md border border-zinc-300 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 shadow-sm transition-colors hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:focus-visible:ring-offset-zinc-950"
+    >
+      <InviteOwnerIcon />
+      Invite Retailer Owner
+    </Link>
+  );
+}
+
+/** The Invite Retailer Owner glyph, shared by the active and paused controls. */
+function InviteOwnerIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.75}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-4 w-4"
+      aria-hidden="true"
+    >
+      <path d="M18 7.5v3m0 0v3m0-3h3m-3 0h-3m-2.25-4.125a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zM3 19.235v-.11a6.375 6.375 0 0112.75 0v.109A12.318 12.318 0 019.374 21c-2.331 0-4.512-.645-6.374-1.766z" />
+    </svg>
+  );
+}
+
+/**
+ * The paused stand-in for the Invite Retailer Owner control, rendered wherever
+ * the link would have been while the feature flag is disabled.
+ *
+ * A <span>, not a disabled <button> or a styled <Link>. There is nothing here to
+ * press and nowhere to go, so it carries no href, no click target, and no tab
+ * stop — a disabled button would still be a control an admin tries to click, and
+ * a `pointer-events-none` link would still be reachable by keyboard and by
+ * copying its address. Rendering non-interactive markup is the honest shape for a
+ * capability that is not currently available.
+ *
+ * `aria-disabled` announces the state to assistive technology, and the visible
+ * "paused" wording carries it for everyone else. Nothing here names the
+ * environment variable, the flag's value, SMTP, the email template, or the
+ * Supabase project, and nothing implies that invitations currently work.
+ *
+ * The route itself stays reachable by URL, and the Server Action refuses
+ * regardless — see lib/features/retailer-owner-invitations.ts. This is the
+ * affordance, not the enforcement.
+ */
+function InviteOwnerPaused() {
+  return (
+    <span
+      aria-disabled="true"
+      className="inline-flex shrink-0 cursor-not-allowed items-center justify-center gap-2 rounded-md border border-dashed border-zinc-300 bg-zinc-50 px-4 py-2 text-sm font-semibold text-zinc-400 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-500"
+    >
+      <InviteOwnerIcon />
+      Owner invitations paused
+    </span>
+  );
+}
+
+/**
  * The one Add Shop control, rendered in exactly one place per state — beside the
  * Shops heading when the Retailer has shops, inside the empty panel when it does
  * not.
@@ -407,6 +525,10 @@ export default async function RetailerDetailPage({
   // simply means no banner. Same treatment as the directory's `created` flag.
   const justCreatedShop = resolvedSearchParams.shopCreated === "1";
 
+  // Same treatment as the shop flag above: a repeated parameter arrives as an
+  // array, so the value is compared only when it is a single string.
+  const justInvitedOwner = resolvedSearchParams.ownerInvited === "1";
+
   // The same gate public.add_vendor_retailer_shop() enforces. Offering the action
   // only when it can succeed means an admin is never sent to a form that the
   // database will refuse — and a suspended or deactivated Retailer shows no Add
@@ -415,24 +537,58 @@ export default async function RetailerDetailPage({
     retailer.retailerStatus === ACTIVE_STATUS &&
     retailer.relationshipStatus === ACTIVE_STATUS;
 
+  // The same two conditions gate inviting an owner. They are computed separately
+  // rather than reusing `canAddShop` because the two capabilities are governed by
+  // different permissions (RETAILER_SHOPS_CREATE and RETAILER_OWNERS_INVITE) and
+  // will diverge the moment a role holds one without the other — at which point a
+  // shared boolean would silently show the wrong control.
+  const canInviteOwner =
+    retailer.retailerStatus === ACTIVE_STATUS &&
+    retailer.relationshipStatus === ACTIVE_STATUS;
+
+  // Read HERE, in a Server Component, and used only to choose which of two
+  // pre-rendered pieces of markup to emit. The boolean itself is never passed to
+  // a Client Component from this page and process.env is never read in one — the
+  // browser receives finished HTML and learns nothing about the configuration
+  // beyond the fact that the control says "paused".
+  //
+  // This is presentation only. The Server Action gates itself independently, so a
+  // forged POST is refused whether or not this page ever rendered.
+  const invitationsEnabled = isRetailerOwnerInvitationsEnabled();
+
   return (
     <div className="mx-auto max-w-6xl space-y-6">
       <BackToRetailersLink />
 
       {justCreatedShop && <ShopCreatedBanner />}
+      {justInvitedOwner && <OwnerInvitedBanner />}
 
-      <div>
-        <h2 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-          {retailer.retailerName}
-        </h2>
-        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-          A read-only view of this Retailer organization and its shops, as managed
-          by{" "}
-          <span className="font-medium text-zinc-700 dark:text-zinc-300">
-            {organizationName}
-          </span>
-          .
-        </p>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h2 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+            {retailer.retailerName}
+          </h2>
+          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+            A read-only view of this Retailer organization and its shops, as managed
+            by{" "}
+            <span className="font-medium text-zinc-700 dark:text-zinc-300">
+              {organizationName}
+            </span>
+            .
+          </p>
+        </div>
+
+        {/*
+          The owner invitation sits beside the Retailer heading rather than inside
+          the Shops section: it is an action on the ORGANIZATION, not on its shop
+          list, and putting it next to Add Shop would imply the two are peers.
+        */}
+        {canInviteOwner &&
+          (invitationsEnabled ? (
+            <InviteOwnerLink relationshipId={relationshipId} />
+          ) : (
+            <InviteOwnerPaused />
+          ))}
       </div>
 
       <RetailerSummary retailer={retailer} />

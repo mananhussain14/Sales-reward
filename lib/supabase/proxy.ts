@@ -20,11 +20,43 @@ import { getSupabaseEnv } from "@/lib/env/supabase";
  * and app/login/page.tsx, each of which independently verifies claims.
  */
 
-/** The only path an unauthenticated visitor may render. */
+/** The sign-in page. */
 const LOGIN_PATH = "/login";
 
 /** Where a verified user is sent when they hit the login page. */
 const AUTHENTICATED_HOME = "/";
+
+/**
+ * The complete set of paths an unauthenticated visitor may render.
+ *
+ * An explicit allowlist of EXACT paths, deliberately not a prefix test. A prefix
+ * rule such as `pathname.startsWith("/invitations")` would open every current and
+ * future path beneath that segment, including ones nobody reviewed when they were
+ * added. Exact matching means opening a route is always a visible edit to this
+ * set.
+ *
+ * Each entry, and why it must be reachable without a session:
+ *
+ *   /login              the sign-in form itself.
+ *   /invitations/accept the invitation callback. The invitee arrives here
+ *                       carrying a one-time token and NO session — establishing
+ *                       one is the entire purpose of the route. Redirecting them
+ *                       to /login would consume the token's single use and strand
+ *                       them permanently.
+ *   /invitations/error  the generic failure page for the above. It must render for
+ *                       a visitor who never obtained a session, which is precisely
+ *                       the case that sends them there.
+ *
+ * Nothing under (admin) appears here, and no Retailer route does either. This set
+ * grants VISIBILITY of a page, never authorization: /invitations/accept performs
+ * its own token verification, and every admin route is guarded independently at
+ * the server layout boundary regardless of what this file allows.
+ */
+const PUBLIC_PATHS = new Set<string>([
+  LOGIN_PATH,
+  "/invitations/accept",
+  "/invitations/error",
+]);
 
 /**
  * Builds a redirect that carries over every cookie Supabase just wrote.
@@ -108,10 +140,17 @@ export async function updateSession(request: NextRequest): Promise<NextResponse>
 
   const { pathname } = request.nextUrl;
 
-  if (!hasVerifiedClaims && pathname !== LOGIN_PATH) {
+  if (!hasVerifiedClaims && !PUBLIC_PATHS.has(pathname)) {
     return redirectPreservingCookies(request, response, LOGIN_PATH);
   }
 
+  // Only the LOGIN page bounces an already-verified user away. The invitation
+  // paths deliberately do not: verifyOtp establishes a session as part of
+  // accepting, so by the time the callback finishes its work the visitor IS
+  // authenticated — bouncing them off their own callback mid-flight would abort
+  // the acceptance it had just performed. The same applies to /invitations/error,
+  // which must be able to explain a failure to someone who now holds a session but
+  // whose acceptance did not complete.
   if (hasVerifiedClaims && pathname === LOGIN_PATH) {
     return redirectPreservingCookies(request, response, AUTHENTICATED_HOME);
   }
