@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { getVendorSuperAdminAccess } from "@/lib/auth/vendor-admin-access";
+import { isIsoCountryCode } from "@/lib/reference/iso-country-codes";
 import type {
   OnboardRetailerField,
   OnboardRetailerState,
@@ -73,11 +74,15 @@ function orNull(value: string): string | null {
 }
 
 /**
- * Exactly two ASCII letters. The character class is ASCII-only in JavaScript, so
- * this matches the intent of retailer_shops_country_code_format, which pins its
- * operand to the C collation to get the same guarantee in PostgreSQL.
+ * Rejected for a country code that is well-shaped but not a real country.
+ *
+ * The message names the RULE and gives one example. It deliberately does NOT
+ * enumerate the 249 accepted codes: a wall of them would be unreadable in a
+ * field error, and the admin's problem is almost always a typo rather than
+ * ignorance of the standard. It also says nothing about the database — no table,
+ * constraint, or foreign key is mentioned or implied.
  */
-const COUNTRY_CODE_PATTERN = /^[A-Z]{2}$/;
+const INVALID_COUNTRY_CODE_ERROR = "Enter a valid country code, such as AE.";
 
 /** Exactly three ASCII letters, matching organizations_default_currency_len. */
 const CURRENCY_PATTERN = /^[A-Z]{3}$/;
@@ -129,11 +134,23 @@ export async function onboardRetailer(
     fieldErrors.shopName = "Enter the first shop's name.";
   }
 
+  // Membership in the ISO 3166-1 alpha-2 list, not merely "two letters". A
+  // shape check accepted DD (a retired code), II and ZZ (user-assigned ranges),
+  // and every other well-formed non-country — values the schema was willing to
+  // store and nobody could act on. isIsoCountryCode() is case-sensitive by
+  // design, which is why the value was upper-cased during canonicalization above
+  // rather than here.
+  //
+  // The database now enforces the same rule underneath, via the NOT VALID
+  // foreign key from organizations.country_code to public.iso_country_codes.
+  // This check exists so the admin gets a named field and a clear message
+  // instead of one generic failure after a round trip; it does not replace the
+  // constraint, which has the final say.
   if (
     values.countryCode.length > 0 &&
-    !COUNTRY_CODE_PATTERN.test(values.countryCode)
+    !isIsoCountryCode(values.countryCode)
   ) {
-    fieldErrors.countryCode = "Use exactly two letters, such as AE.";
+    fieldErrors.countryCode = INVALID_COUNTRY_CODE_ERROR;
   }
 
   if (

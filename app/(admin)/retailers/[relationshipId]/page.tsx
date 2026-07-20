@@ -20,14 +20,18 @@ export const metadata: Metadata = {
 };
 
 /**
- * `params` is a Promise in this version of Next.js and must be awaited before
- * any value is read — the same shape the directory's `searchParams` uses.
+ * Both `params` and `searchParams` are Promises in this version of Next.js and
+ * must be awaited before any value is read — the same shape the directory uses.
  */
 type PageProps = {
   params: Promise<{
     relationshipId: string;
   }>;
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
 };
+
+/** The status a Retailer and its relationship must both hold to accept new shops. */
+const ACTIVE_STATUS = "ACTIVE";
 
 /**
  * A stored value that is absent. The dash is decorative, so it is hidden from
@@ -225,13 +229,109 @@ function ShopCards({ shops }: { shops: VendorRetailerShopDetail[] }) {
   );
 }
 
-/** Neutral panel, used for the empty-shops and unavailable states alike. */
-function NoticePanel({ title, body }: { title: string; body: string }) {
+/**
+ * Neutral panel, used for the empty-shops and unavailable states alike.
+ *
+ * `action` is optional and used only by the empty state: when a Retailer has no
+ * shops, the panel is the most natural place to offer adding one, and putting the
+ * control there means the page still shows exactly ONE Add Shop control rather
+ * than repeating it beside the heading.
+ */
+function NoticePanel({
+  title,
+  body,
+  action,
+}: {
+  title: string;
+  body: string;
+  action?: React.ReactNode;
+}) {
   return (
     <div className="rounded-xl border border-zinc-200 bg-white px-6 py-10 text-center dark:border-zinc-800 dark:bg-zinc-950">
       <p className="text-sm font-medium text-zinc-900 dark:text-zinc-50">{title}</p>
       <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">{body}</p>
+      {action && <div className="mt-4 flex justify-center">{action}</div>}
     </div>
+  );
+}
+
+/**
+ * Confirmation shown once, immediately after a shop is added, when the action
+ * redirects here with `?shopCreated=1`.
+ *
+ * The flag is the entire message. It carries no shop id, Retailer id,
+ * organization id, or name — nothing from the database travels in the URL, so
+ * there is nothing here to leak, tamper with, or address a row by. A forged
+ * `?shopCreated=1` therefore shows a banner and changes nothing else, which is
+ * the whole reason the flag is allowed to be this dumb. This mirrors the
+ * directory's `?created=1` banner exactly.
+ *
+ * role="status" rather than "alert": this is a confirmation, announced politely,
+ * not something demanding interruption.
+ */
+function ShopCreatedBanner() {
+  return (
+    <div
+      role="status"
+      className="flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-300"
+    >
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={1.75}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="mt-0.5 h-4 w-4 shrink-0"
+        aria-hidden="true"
+      >
+        <path d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+      </svg>
+      <p>Shop added successfully.</p>
+    </div>
+  );
+}
+
+/**
+ * The one Add Shop control, rendered in exactly one place per state — beside the
+ * Shops heading when the Retailer has shops, inside the empty panel when it does
+ * not.
+ *
+ * `emphasis` distinguishes the two: the empty state gets the solid indigo button
+ * because it is the page's primary next step, while the heading variant is a
+ * quieter outlined control so it does not compete with the content beneath it.
+ */
+function AddShopLink({
+  relationshipId,
+  emphasis,
+}: {
+  relationshipId: string;
+  emphasis: "primary" | "secondary";
+}) {
+  const base =
+    "inline-flex shrink-0 items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-semibold shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-zinc-950";
+
+  const variant =
+    emphasis === "primary"
+      ? "bg-indigo-600 text-white hover:bg-indigo-500"
+      : "border border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800";
+
+  return (
+    <Link href={`/retailers/${relationshipId}/shops/new`} className={`${base} ${variant}`}>
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={1.75}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="h-4 w-4"
+        aria-hidden="true"
+      >
+        <path d="M12 4.5v15m7.5-7.5h-15" />
+      </svg>
+      Add Shop
+    </Link>
   );
 }
 
@@ -246,9 +346,16 @@ function NoticePanel({ title, body }: { title: string; body: string }) {
  * logged. Every authorization decision belongs to the loader's own call to
  * getVendorSuperAdminAccess().
  */
-export default async function RetailerDetailPage({ params }: PageProps) {
+export default async function RetailerDetailPage({
+  params,
+  searchParams,
+}: PageProps) {
   const { relationshipId } = await params;
-  const detail = await getVendorRetailerDetail(relationshipId);
+
+  const [detail, resolvedSearchParams] = await Promise.all([
+    getVendorRetailerDetail(relationshipId),
+    searchParams,
+  ]);
 
   // As on the directory, the dashboard, and the users page, this page does not
   // assume the layout already guarded it — the rule must hold for this module
@@ -295,9 +402,24 @@ export default async function RetailerDetailPage({ params }: PageProps) {
 
   const { organizationName, retailer } = detail;
 
+  // A repeated parameter arrives as an array, so the value is compared only when
+  // it is a single string. Anything else — absent, repeated, or any other value —
+  // simply means no banner. Same treatment as the directory's `created` flag.
+  const justCreatedShop = resolvedSearchParams.shopCreated === "1";
+
+  // The same gate public.add_vendor_retailer_shop() enforces. Offering the action
+  // only when it can succeed means an admin is never sent to a form that the
+  // database will refuse — and a suspended or deactivated Retailer shows no Add
+  // Shop control at all, rather than one that fails on submit.
+  const canAddShop =
+    retailer.retailerStatus === ACTIVE_STATUS &&
+    retailer.relationshipStatus === ACTIVE_STATUS;
+
   return (
     <div className="mx-auto max-w-6xl space-y-6">
       <BackToRetailersLink />
+
+      {justCreatedShop && <ShopCreatedBanner />}
 
       <div>
         <h2 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
@@ -316,12 +438,22 @@ export default async function RetailerDetailPage({ params }: PageProps) {
       <RetailerSummary retailer={retailer} />
 
       <section aria-labelledby="shops-heading" className="space-y-3">
-        <h3
-          id="shops-heading"
-          className="text-lg font-semibold tracking-tight text-zinc-900 dark:text-zinc-50"
-        >
-          Shops
-        </h3>
+        <div className="flex items-center justify-between gap-4">
+          <h3
+            id="shops-heading"
+            className="text-lg font-semibold tracking-tight text-zinc-900 dark:text-zinc-50"
+          >
+            Shops
+          </h3>
+
+          {/*
+            Only when there ARE shops. With none, the empty panel below carries
+            the action instead, so the page never shows two Add Shop controls.
+          */}
+          {canAddShop && retailer.shops.length > 0 && (
+            <AddShopLink relationshipId={relationshipId} emphasis="secondary" />
+          )}
+        </div>
 
         {retailer.shops.length === 0 ? (
           // Not an error, and deliberately worded so it cannot be mistaken for
@@ -330,6 +462,11 @@ export default async function RetailerDetailPage({ params }: PageProps) {
           <NoticePanel
             title="No shops yet"
             body="This Retailer has no shops recorded."
+            action={
+              canAddShop ? (
+                <AddShopLink relationshipId={relationshipId} emphasis="primary" />
+              ) : undefined
+            }
           />
         ) : (
           <>
