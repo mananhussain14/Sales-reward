@@ -8,6 +8,14 @@ import {
   type VendorRetailerDetail,
   type VendorRetailerShopDetail,
 } from "@/lib/retailers/vendor-retailer-detail";
+import type { VendorRetailerOwnerStatusResult } from "@/lib/retailers/vendor-retailer-owner-status";
+import {
+  buildOwnerStatusView,
+  formatOwnerDisplayName,
+  formatOwnerTimestamp,
+  resolveOwnerInvitedMessage,
+  type VendorRetailerOwnerStatus,
+} from "@/lib/retailers/owner-status-normalization";
 
 /**
  * Static, and deliberately generic. Naming the Retailer in the title would mean
@@ -294,15 +302,19 @@ function ShopCreatedBanner() {
 }
 
 /**
- * Confirmation shown once, immediately after an owner invitation is sent, when the
- * action redirects here with `?ownerInvited=1`.
+ * Confirmation shown once, immediately after an owner invitation is sent, resent,
+ * retried, or replaced, when the action redirects here with `?ownerInvited=<code>`.
  *
- * The flag is the entire message. It carries no invitation id, Auth user id,
- * email, Retailer id, or organization id — nothing from the database travels in
- * the URL, so there is nothing here to leak, tamper with, or address a row by. A
- * forged `?ownerInvited=1` therefore shows a banner and changes nothing else,
- * which is the whole reason the flag is allowed to be this dumb. This mirrors the
- * `?shopCreated=1` and `?created=1` banners exactly.
+ * The message is chosen from a FIXED vocabulary by resolveOwnerInvitedMessage():
+ * the URL carries only a short code (`sent`, `resent`, `new`, or the legacy `1`),
+ * never free text, so no arbitrary string from the query can be rendered here. An
+ * unknown code resolves to null and no banner is shown at all.
+ *
+ * The code carries no invitation id, Auth user id, email, Retailer id, or
+ * organization id — nothing from the database travels in the URL, so there is
+ * nothing here to leak, tamper with, or address a row by. A forged code therefore
+ * shows one of the fixed messages (or none) and changes nothing else. This mirrors
+ * the `?shopCreated=1` and `?created=1` banners.
  *
  * The invitee's email is deliberately NOT echoed back, even though the admin just
  * typed it: it would put an address into a URL, into browser history, and into any
@@ -311,7 +323,7 @@ function ShopCreatedBanner() {
  * role="status" rather than "alert": this is a confirmation, announced politely,
  * not something demanding interruption.
  */
-function OwnerInvitedBanner() {
+function OwnerInvitedBanner({ message }: { message: string }) {
   return (
     <div
       role="status"
@@ -329,38 +341,12 @@ function OwnerInvitedBanner() {
       >
         <path d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
       </svg>
-      <p>Retailer Owner invitation sent.</p>
+      <p>{message}</p>
     </div>
   );
 }
 
-/**
- * The one Invite Retailer Owner control.
- *
- * Rendered only when both the Retailer and its relationship are ACTIVE — the same
- * gate public.reserve_retailer_owner_invitation() enforces — so an admin is never
- * offered an action the database will refuse.
- *
- * This milestone deliberately ships no invitation directory and no invitation
- * management UI, so the control does not know whether an invitation is already
- * pending. Submitting a second time for the same person is safe and idempotent:
- * the reservation resolves the existing live invitation and re-sends it rather
- * than creating a duplicate. Submitting for a Retailer that already has an owner
- * is refused by the database and surfaced as a field error on the form.
- */
-function InviteOwnerLink({ relationshipId }: { relationshipId: string }) {
-  return (
-    <Link
-      href={`/retailers/${relationshipId}/owner/invite`}
-      className="inline-flex shrink-0 items-center justify-center gap-2 rounded-md border border-zinc-300 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 shadow-sm transition-colors hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:focus-visible:ring-offset-zinc-950"
-    >
-      <InviteOwnerIcon />
-      Invite Retailer Owner
-    </Link>
-  );
-}
-
-/** The Invite Retailer Owner glyph, shared by the active and paused controls. */
+/** The Retailer Owner glyph, shared by the owner-management card's controls. */
 function InviteOwnerIcon() {
   return (
     <svg
@@ -379,26 +365,44 @@ function InviteOwnerIcon() {
 }
 
 /**
- * The paused stand-in for the Invite Retailer Owner control, rendered wherever
- * the link would have been while the feature flag is disabled.
+ * The single owner-management action. One route serves every state — the invite
+ * page re-reads the owner status server-side and renders the correct form (invite,
+ * retry, resend, or new) — so the label varies while the destination does not.
+ *
+ * The label comes from buildOwnerStatusView(); this component never invents one.
+ * `relationshipId` is a routing address, not authorization: the invite page and
+ * the Server Action both re-derive the Vendor from the caller's own token.
+ */
+function OwnerActionLink({
+  relationshipId,
+  label,
+}: {
+  relationshipId: string;
+  label: string;
+}) {
+  return (
+    <Link
+      href={`/retailers/${relationshipId}/owner/invite`}
+      className="inline-flex shrink-0 items-center justify-center gap-2 rounded-md border border-zinc-300 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 shadow-sm transition-colors hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:focus-visible:ring-offset-zinc-950"
+    >
+      <InviteOwnerIcon />
+      {label}
+    </Link>
+  );
+}
+
+/**
+ * The paused stand-in for the owner action, rendered while the feature flag is
+ * disabled.
  *
  * A <span>, not a disabled <button> or a styled <Link>. There is nothing here to
  * press and nowhere to go, so it carries no href, no click target, and no tab
- * stop — a disabled button would still be a control an admin tries to click, and
- * a `pointer-events-none` link would still be reachable by keyboard and by
- * copying its address. Rendering non-interactive markup is the honest shape for a
- * capability that is not currently available.
- *
- * `aria-disabled` announces the state to assistive technology, and the visible
- * "paused" wording carries it for everyone else. Nothing here names the
- * environment variable, the flag's value, SMTP, the email template, or the
- * Supabase project, and nothing implies that invitations currently work.
- *
- * The route itself stays reachable by URL, and the Server Action refuses
- * regardless — see lib/features/retailer-owner-invitations.ts. This is the
- * affordance, not the enforcement.
+ * stop. `aria-disabled` announces the state; the visible wording carries it for
+ * everyone else. Nothing here names the environment variable, SMTP, the template,
+ * or the project. The route stays reachable by URL and the Server Action refuses
+ * regardless — this is the affordance, not the enforcement.
  */
-function InviteOwnerPaused() {
+function OwnerActionPaused() {
   return (
     <span
       aria-disabled="true"
@@ -407,6 +411,182 @@ function InviteOwnerPaused() {
       <InviteOwnerIcon />
       Owner invitations paused
     </span>
+  );
+}
+
+/** One labelled fact inside the owner card. Hidden when the value is absent. */
+function OwnerDetail({ label, value }: { label: string; value: string | null }) {
+  if (value === null) return null;
+  return (
+    <div>
+      <dt className="text-xs font-medium text-zinc-500 dark:text-zinc-400">{label}</dt>
+      <dd className="mt-0.5 text-sm text-zinc-900 dark:text-zinc-50">{value}</dd>
+    </div>
+  );
+}
+
+/**
+ * Human-readable body text per state. Names the human-readable state only — never
+ * a role code, permission code, membership status, invitation status database
+ * term, or identifier.
+ */
+const OWNER_STATE_DESCRIPTIONS: Record<
+  VendorRetailerOwnerStatus["state"],
+  string
+> = {
+  NONE: "No owner has been invited for this Retailer yet.",
+  DELIVERY_FAILED:
+    "The last invitation could not be sent. You can retry sending it to the same person.",
+  PENDING:
+    "An invitation is awaiting acceptance. Resending refreshes the invitation window.",
+  EXPIRED:
+    "The last invitation expired before it was accepted. You can send a new one.",
+  ACTIVE: "This Retailer has an active owner.",
+};
+
+/**
+ * The owner-management card — the single, state-aware home for everything about
+ * this Retailer's owner. It replaces the previous generic "Invite Retailer Owner"
+ * button.
+ *
+ * The card shows the human-readable state, whatever recipient/owner details are
+ * safely available, and exactly one primary action (or none, for ACTIVE). The
+ * action is offered only when the database would actually accept it: both the
+ * Retailer and its relationship must be ACTIVE (`canInvite`), and invitations must
+ * not be paused. When paused, a non-interactive stand-in is shown instead.
+ *
+ * An `unavailable` owner-status read renders a generic, retry-safe notice — never
+ * the NONE state, which would falsely claim the Retailer has no owner.
+ */
+function OwnerManagementCard({
+  ownerStatusResult,
+  relationshipId,
+  canInvite,
+  invitationsEnabled,
+}: {
+  ownerStatusResult: VendorRetailerOwnerStatusResult;
+  relationshipId: string;
+  canInvite: boolean;
+  invitationsEnabled: boolean;
+}) {
+  return (
+    <section aria-labelledby="owner-heading" className="space-y-3">
+      <h3
+        id="owner-heading"
+        className="text-lg font-semibold tracking-tight text-zinc-900 dark:text-zinc-50"
+      >
+        Retailer Owner
+      </h3>
+
+      {ownerStatusResult.status === "unavailable" ? (
+        // Fail closed: a read that could not complete is NOT NONE. Generic and
+        // reason-free — the only cause is a database or network failure, whose
+        // detail must never reach a browser.
+        <div className="rounded-xl border border-zinc-200 bg-white px-6 py-8 text-center dark:border-zinc-800 dark:bg-zinc-950">
+          <p className="text-sm font-medium text-zinc-900 dark:text-zinc-50">
+            Owner status unavailable
+          </p>
+          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+            The Retailer Owner status is temporarily unavailable. Please try again.
+          </p>
+        </div>
+      ) : (
+        <OwnerManagementBody
+          ownerStatus={ownerStatusResult.ownerStatus}
+          relationshipId={relationshipId}
+          canInvite={canInvite}
+          invitationsEnabled={invitationsEnabled}
+        />
+      )}
+    </section>
+  );
+}
+
+/** The card body for a successfully read owner status. */
+function OwnerManagementBody({
+  ownerStatus,
+  relationshipId,
+  canInvite,
+  invitationsEnabled,
+}: {
+  ownerStatus: VendorRetailerOwnerStatus;
+  relationshipId: string;
+  canInvite: boolean;
+  invitationsEnabled: boolean;
+}) {
+  const view = buildOwnerStatusView(ownerStatus.state);
+  const displayName = formatOwnerDisplayName(
+    ownerStatus.firstName,
+    ownerStatus.lastName,
+  );
+  const hasName = ownerStatus.firstName !== null || ownerStatus.lastName !== null;
+
+  // Which recipient/owner facts to surface per state. Absent values render nothing
+  // (OwnerDetail returns null), so a state with no accepted date simply omits it.
+  const showRecipient = ownerStatus.state !== "NONE";
+  const showSentAt =
+    ownerStatus.state === "PENDING" || ownerStatus.state === "EXPIRED";
+  const showExpiresAt =
+    ownerStatus.state === "DELIVERY_FAILED" ||
+    ownerStatus.state === "PENDING" ||
+    ownerStatus.state === "EXPIRED";
+  const showAcceptedAt = ownerStatus.state === "ACTIVE";
+
+  return (
+    <div className="rounded-xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+            {view.heading}
+          </p>
+          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+            {OWNER_STATE_DESCRIPTIONS[ownerStatus.state]}
+          </p>
+        </div>
+
+        {/*
+          The action is offered only when the database would accept it: an ACTIVE
+          owner offers none (view.action is null), an inactive Retailer/relationship
+          offers none (canInvite is false — the reserve RPC would refuse), and a
+          paused feature shows the non-interactive stand-in. Direct-URL entry to the
+          route is still gated server-side by the invite page and the Server Action.
+        */}
+        {view.action &&
+          canInvite &&
+          (invitationsEnabled ? (
+            <OwnerActionLink relationshipId={relationshipId} label={view.action.label} />
+          ) : (
+            <OwnerActionPaused />
+          ))}
+      </div>
+
+      {(showRecipient || showAcceptedAt) && (
+        <dl className="mt-5 grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
+          {showRecipient && (
+            <OwnerDetail
+              label={ownerStatus.state === "ACTIVE" ? "Owner" : "Recipient"}
+              value={hasName ? displayName : null}
+            />
+          )}
+          {showRecipient && <OwnerDetail label="Email" value={ownerStatus.email} />}
+          {showSentAt && (
+            <OwnerDetail label="Sent" value={formatOwnerTimestamp(ownerStatus.sentAt)} />
+          )}
+          {showExpiresAt && (
+            <OwnerDetail
+              label={ownerStatus.state === "EXPIRED" ? "Expired" : "Expires"}
+              value={formatOwnerTimestamp(ownerStatus.expiresAt)}
+            />
+          )}
+          {showAcceptedAt && (
+            <OwnerDetail
+              label="Accepted"
+              value={formatOwnerTimestamp(ownerStatus.acceptedAt)}
+            />
+          )}
+        </dl>
+      )}
+    </div>
   );
 }
 
@@ -518,16 +698,20 @@ export default async function RetailerDetailPage({
     );
   }
 
-  const { organizationName, retailer } = detail;
+  const { organizationName, retailer, ownerStatus } = detail;
 
   // A repeated parameter arrives as an array, so the value is compared only when
   // it is a single string. Anything else — absent, repeated, or any other value —
   // simply means no banner. Same treatment as the directory's `created` flag.
   const justCreatedShop = resolvedSearchParams.shopCreated === "1";
 
-  // Same treatment as the shop flag above: a repeated parameter arrives as an
-  // array, so the value is compared only when it is a single string.
-  const justInvitedOwner = resolvedSearchParams.ownerInvited === "1";
+  // The success banner text is chosen from a FIXED vocabulary by the URL's short
+  // code — `sent`, `resent`, `new`, or the legacy `1`. Any other value (arbitrary
+  // text, a repeated parameter, an inherited key) resolves to null, so no
+  // attacker-supplied string can ever be rendered as a success message.
+  const ownerInvitedMessage = resolveOwnerInvitedMessage(
+    resolvedSearchParams.ownerInvited,
+  );
 
   // The same gate public.add_vendor_retailer_shop() enforces. Offering the action
   // only when it can succeed means an admin is never sent to a form that the
@@ -561,37 +745,37 @@ export default async function RetailerDetailPage({
       <BackToRetailersLink />
 
       {justCreatedShop && <ShopCreatedBanner />}
-      {justInvitedOwner && <OwnerInvitedBanner />}
+      {ownerInvitedMessage && <OwnerInvitedBanner message={ownerInvitedMessage} />}
 
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h2 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-            {retailer.retailerName}
-          </h2>
-          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-            A read-only view of this Retailer organization and its shops, as managed
-            by{" "}
-            <span className="font-medium text-zinc-700 dark:text-zinc-300">
-              {organizationName}
-            </span>
-            .
-          </p>
-        </div>
-
-        {/*
-          The owner invitation sits beside the Retailer heading rather than inside
-          the Shops section: it is an action on the ORGANIZATION, not on its shop
-          list, and putting it next to Add Shop would imply the two are peers.
-        */}
-        {canInviteOwner &&
-          (invitationsEnabled ? (
-            <InviteOwnerLink relationshipId={relationshipId} />
-          ) : (
-            <InviteOwnerPaused />
-          ))}
+      <div className="flex flex-col gap-4">
+        <h2 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+          {retailer.retailerName}
+        </h2>
+        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+          A read-only view of this Retailer organization and its shops, as managed
+          by{" "}
+          <span className="font-medium text-zinc-700 dark:text-zinc-300">
+            {organizationName}
+          </span>
+          .
+        </p>
       </div>
 
       <RetailerSummary retailer={retailer} />
+
+      {/*
+        The owner-management card sits between the Retailer summary and the Shops
+        section: it is an action on the ORGANIZATION, not on its shop list. It is
+        state-aware — no owner, delivery failed, pending, expired, or active — and
+        offers exactly one primary action per state, gated so an admin is never
+        shown a control the database would refuse.
+      */}
+      <OwnerManagementCard
+        ownerStatusResult={ownerStatus}
+        relationshipId={relationshipId}
+        canInvite={canInviteOwner}
+        invitationsEnabled={invitationsEnabled}
+      />
 
       <section aria-labelledby="shops-heading" className="space-y-3">
         <div className="flex items-center justify-between gap-4">

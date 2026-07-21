@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { useActionState } from "react";
+import type { InviteFormModel } from "@/lib/retailers/owner-status-normalization";
 import { inviteRetailerOwnerAction } from "@/app/(admin)/retailers/[relationshipId]/owner/invite/actions";
 import {
-  INITIAL_INVITE_OWNER_STATE,
+  buildInitialInviteOwnerState,
   type InviteOwnerField,
 } from "@/app/(admin)/retailers/[relationshipId]/owner/invite/invite-owner-state";
 
@@ -100,18 +101,49 @@ function Field({
 type InviteOwnerFormProps = {
   /** Route segment, used only as the action's routing address and for Cancel. */
   relationshipId: string;
+  /**
+   * State-aware behavior: submit labels, prefilled values, and — for a resend or
+   * retry — the fixed recipient email. The MODEL IS PRESENTATION ONLY. The Server
+   * Action re-reads the owner status itself and, for a resend/retry, ignores the
+   * submitted email entirely in favor of the RPC's own value, so nothing here is
+   * trusted as authorization or as the source of truth for who is invited.
+   */
+  model: InviteFormModel;
 };
 
-export function InviteOwnerForm({ relationshipId }: InviteOwnerFormProps) {
+export function InviteOwnerForm({ relationshipId, model }: InviteOwnerFormProps) {
   const [state, formAction, pending] = useActionState(
     inviteRetailerOwnerAction,
-    INITIAL_INVITE_OWNER_STATE,
+    buildInitialInviteOwnerState(model),
   );
+
+  // The email is fixed for a resend/retry: the recipient must not change, and the
+  // action enforces that on the server regardless. A readOnly (not disabled) input
+  // keeps the value visible AND submitted; the action re-derives it either way.
+  const emailLocked = model.lockedEmail !== null;
 
   return (
     <form action={formAction} className="space-y-5" noValidate>
       {/* The single routing address. See the component docblock. */}
       <input type="hidden" name="relationshipId" value={relationshipId} />
+
+      {/*
+        Prior recipient shown as read-only context for an expiry replacement, so an
+        admin can see who the expired invitation was for before choosing to reuse
+        or change the address. Purely informational — the fields below are what get
+        submitted.
+      */}
+      {model.previousRecipient && (
+        <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm dark:border-zinc-800 dark:bg-zinc-900/50">
+          <p className="font-medium text-zinc-700 dark:text-zinc-300">
+            Previous recipient
+          </p>
+          <p className="mt-0.5 text-zinc-600 dark:text-zinc-400">
+            {model.previousRecipient.name}
+            {model.previousRecipient.email ? ` · ${model.previousRecipient.email}` : ""}
+          </p>
+        </div>
+      )}
 
       {/*
         Form-level errors in a live region so screen readers announce them on
@@ -168,16 +200,59 @@ export function InviteOwnerForm({ relationshipId }: InviteOwnerFormProps) {
         />
       </div>
 
-      <Field
-        name="email"
-        label="Email address"
-        type="email"
-        autoComplete="off"
-        hint="The invitation link will be sent to this address."
-        value={state.values.email}
-        error={state.fieldErrors.email}
-        disabled={pending}
-      />
+      {emailLocked ? (
+        // Resend/retry: the address is fixed. Rendered readOnly so it is visible
+        // and still submitted, but the Server Action ignores the submitted value
+        // and re-derives the recipient from the owner-status RPC — the field
+        // cannot be edited to invite someone else.
+        //
+        // The email STILL carries an error region: a locked-email submission can be
+        // refused (for example, the address already has an Auth account, which the
+        // action returns as an `email` field error). Without this region that safe
+        // message would have nowhere to render and the submit would look like it
+        // did nothing. Mirrors the accessible error pattern in <Field>: role=alert
+        // on appearance, aria-invalid on the input, and aria-describedby pointing at
+        // the error when present and the hint otherwise.
+        <div className="space-y-2">
+          <label
+            htmlFor="email"
+            className="block text-sm font-medium text-zinc-900 dark:text-zinc-100"
+          >
+            Email address
+          </label>
+          <input
+            id="email"
+            name="email"
+            type="email"
+            value={model.lockedEmail ?? ""}
+            readOnly
+            aria-invalid={state.fieldErrors.email ? true : undefined}
+            aria-describedby={state.fieldErrors.email ? "email-error" : "email-hint"}
+            className={`${INPUT_CLASS} cursor-not-allowed opacity-70`}
+          />
+          {state.fieldErrors.email ? (
+            <p id="email-error" role="alert" className="text-sm text-red-600 dark:text-red-400">
+              {state.fieldErrors.email}
+            </p>
+          ) : (
+            <p id="email-hint" className="text-xs text-zinc-500 dark:text-zinc-400">
+              The invitation will be re-sent to this address. To invite a different
+              person, wait for this invitation to expire.
+            </p>
+          )}
+        </div>
+      ) : (
+        <Field
+          name="email"
+          label="Email address"
+          type="email"
+          autoComplete="off"
+          hint="The invitation link will be sent to this address."
+          value={state.values.email}
+          error={state.fieldErrors.email}
+          disabled={pending}
+        />
+      )}
 
       <div className="flex flex-col-reverse gap-3 pt-2 sm:flex-row sm:justify-end">
         {/*
@@ -212,7 +287,7 @@ export function InviteOwnerForm({ relationshipId }: InviteOwnerFormProps) {
               <path d="M12 2a10 10 0 0110 10" stroke="currentColor" strokeWidth={4} strokeLinecap="round" />
             </svg>
           )}
-          {pending ? "Sending invitation…" : "Send invitation"}
+          {pending ? model.pendingLabel : model.submitLabel}
         </button>
       </div>
     </form>

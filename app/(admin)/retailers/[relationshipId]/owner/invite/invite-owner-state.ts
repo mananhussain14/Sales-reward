@@ -24,6 +24,8 @@
  * be a second copy to keep in step for no benefit.
  */
 
+import type { InviteFormModel } from "@/lib/retailers/owner-status-normalization";
+
 /**
  * The form's three inputs. Named as one union so the field errors and the retained
  * values cannot drift apart: adding an input means adding it here, and both
@@ -79,3 +81,25 @@ export const INITIAL_INVITE_OWNER_STATE: InviteOwnerState = {
   formError: null,
   values: EMPTY_INVITE_OWNER_VALUES,
 };
+
+/**
+ * Seeds the form's initial state from the state-aware model, so a retry, resend,
+ * or expiry-replacement opens with the existing recipient prefilled rather than
+ * blank. These are DISPLAY prefills only: the Server Action re-reads the owner
+ * status before dispatch and, for a resend/retry, forces the RPC's own email
+ * regardless of what is submitted — so a tampered prefill cannot change who is
+ * invited.
+ */
+export function buildInitialInviteOwnerState(
+  model: InviteFormModel,
+): InviteOwnerState {
+  return {
+    fieldErrors: {},
+    formError: null,
+    values: {
+      firstName: model.initialFirstName,
+      lastName: model.initialLastName,
+      email: model.initialEmail,
+    },
+  };
+}
