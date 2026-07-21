@@ -6,6 +6,7 @@ import {
   RETAILER_OWNER_INVITATIONS_PAUSED_MESSAGE,
 } from "@/lib/features/retailer-owner-invitations";
 import { getVendorRetailerDetail } from "@/lib/retailers/vendor-retailer-detail";
+import { buildInviteFormModel } from "@/lib/retailers/owner-status-normalization";
 import { InviteOwnerForm } from "@/app/(admin)/retailers/[relationshipId]/owner/invite/invite-owner-form";
 
 /**
@@ -118,7 +119,7 @@ export default async function InviteRetailerOwnerPage({ params }: PageProps) {
     );
   }
 
-  const { organizationName, retailer } = detail;
+  const { organizationName, retailer, ownerStatus } = detail;
 
   // The same gate public.reserve_retailer_owner_invitation() enforces. Rendering
   // the form only when it can succeed means an admin is never sent to a form the
@@ -173,16 +174,50 @@ export default async function InviteRetailerOwnerPage({ params }: PageProps) {
     );
   }
 
+  // The heading and lead-in adapt to the current owner state so a resend does not
+  // read as a first invitation. The state itself comes from the same authorized
+  // loader; the Server Action re-reads it before dispatch, so this is presentation
+  // only. When the Retailer is inactive or the status could not be read, the state
+  // is not consulted — those blocks take over below.
+  const headingByState: Record<string, { title: string; lead: string }> = {
+    NONE: {
+      title: "Invite Retailer Owner",
+      lead: "Invite the first owner. They will receive an email inviting them to set a password and activate their account.",
+    },
+    DELIVERY_FAILED: {
+      title: "Retry owner invitation",
+      lead: "The previous invitation could not be sent. Retry it to the same recipient — the email address cannot be changed here.",
+    },
+    PENDING: {
+      title: "Resend owner invitation",
+      lead: "An invitation is already pending. Resending refreshes the invitation window and re-sends the email to the same recipient.",
+    },
+    EXPIRED: {
+      title: "Send a new owner invitation",
+      lead: "The previous invitation expired. You can send a new one, to the same person or a different email address.",
+    },
+    ACTIVE: {
+      title: "Retailer Owner",
+      lead: "This Retailer already has an active owner.",
+    },
+  };
+
+  // Resolve the copy and, for a live state, the form model. `state` is only read
+  // on the authorized, active, readable path — the guarded branches below never
+  // reach it.
+  const state = ownerStatus.status === "ok" ? ownerStatus.ownerStatus.state : "NONE";
+  const heading = headingByState[state] ?? headingByState.NONE;
+
   return (
     <div className="mx-auto max-w-2xl space-y-6">
       <BackToRetailerLink relationshipId={relationshipId} />
 
       <div>
         <h2 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-          Invite Retailer Owner
+          {heading.title}
         </h2>
         <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-          Invite the first owner of{" "}
+          For{" "}
           <span className="font-medium text-zinc-700 dark:text-zinc-300">
             {retailer.retailerName}
           </span>
@@ -190,16 +225,11 @@ export default async function InviteRetailerOwnerPage({ params }: PageProps) {
           <span className="font-medium text-zinc-700 dark:text-zinc-300">
             {organizationName}
           </span>
-          . They will receive an email inviting them to set a password and activate
-          their account.
+          . {heading.lead}
         </p>
       </div>
 
-      {canInvite ? (
-        <div className="rounded-xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
-          <InviteOwnerForm relationshipId={relationshipId} />
-        </div>
-      ) : (
+      {!canInvite ? (
         // Reachable by typing the URL directly, since the detail page hides the
         // entry point in this state. The message names the rule rather than the
         // database, and is safe to be specific about: ownership has already been
@@ -209,6 +239,28 @@ export default async function InviteRetailerOwnerPage({ params }: PageProps) {
           title="This Retailer is not active"
           body="An owner can only be invited while both the Retailer and its relationship are active."
         />
+      ) : ownerStatus.status === "unavailable" ? (
+        // Fail closed: the owner status could not be read, so no form is rendered
+        // — sending without knowing the current state could produce the wrong
+        // action. Generic and reason-free, matching the detail page.
+        <NoticePanel
+          title="Owner status unavailable"
+          body="The Retailer Owner status is temporarily unavailable. Please try again."
+        />
+      ) : ownerStatus.ownerStatus.state === "ACTIVE" ? (
+        // No form: an active owner is not re-invited in this milestone. The back
+        // link is the only useful action, and it is always present above.
+        <NoticePanel
+          title="Retailer Owner already active"
+          body="This Retailer already has an active owner, so there is no invitation to send."
+        />
+      ) : (
+        <div className="rounded-xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
+          <InviteOwnerForm
+            relationshipId={relationshipId}
+            model={buildInviteFormModel(ownerStatus.ownerStatus)}
+          />
+        </div>
       )}
     </div>
   );

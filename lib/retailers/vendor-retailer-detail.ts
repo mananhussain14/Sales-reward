@@ -6,6 +6,10 @@
 // ever reaches the browser bundle.
 import { createClient } from "@/lib/supabase/server";
 import { getVendorSuperAdminAccess } from "@/lib/auth/vendor-admin-access";
+import {
+  getVendorRetailerOwnerStatus,
+  type VendorRetailerOwnerStatusResult,
+} from "@/lib/retailers/vendor-retailer-owner-status";
 
 /**
  * Read-only detail view of ONE Retailer managed by the authorized Vendor.
@@ -111,6 +115,13 @@ export type VendorRetailerDetailResult =
       status: "authorized";
       organizationName: string;
       retailer: VendorRetailerDetail;
+      /**
+       * The Vendor-authorized owner status for this relationship, from the
+       * SECURITY DEFINER RPC that authorizes independently of the reads above.
+       * `unavailable` here degrades ONLY the owner card — the retailer detail
+       * still renders — and must never be shown as, or coerced to, NONE.
+       */
+      ownerStatus: VendorRetailerOwnerStatusResult;
     }
   | { status: "not-found" }
   | { status: "unavailable"; organizationName: string }
@@ -312,16 +323,30 @@ export async function getVendorRetailerDetail(
     // state the page knows how to render.
     const supabase = await createClient();
 
-    return {
-      status: "authorized",
-      organizationName: access.organizationName,
-      retailer: await loadDetail(
+    // The retailer detail and the owner status are fetched CONCURRENTLY but with
+    // deliberately different failure semantics. loadDetail() throws on any read
+    // failure, which the catch below turns into the whole-page `unavailable`
+    // state — the detail is all-or-nothing. getVendorRetailerOwnerStatus() never
+    // throws: it returns its own { status: "unavailable" } on failure, so an
+    // owner-status problem degrades ONLY the owner card and cannot take the rest
+    // of the Retailer down with it. Both authorize the Vendor independently — the
+    // reads under RLS, the RPC inside the database — so neither trusts the other.
+    const [retailer, ownerStatus] = await Promise.all([
+      loadDetail(
         supabase,
         relationshipId,
         // The ONLY organization id used: from the authorized result, never from
         // a parameter, URL, form field, or browser state.
         access.organizationId,
       ),
+      getVendorRetailerOwnerStatus(relationshipId),
+    ]);
+
+    return {
+      status: "authorized",
+      organizationName: access.organizationName,
+      retailer,
+      ownerStatus,
     };
   } catch (error) {
     // One catch for every failure mode below the authorization boundary. The

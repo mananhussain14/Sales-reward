@@ -8,6 +8,11 @@ import {
   RETAILER_OWNER_INVITATIONS_PAUSED_MESSAGE,
 } from "@/lib/features/retailer-owner-invitations";
 import { inviteRetailerOwner } from "@/lib/invitations/retailer-owner-invitations";
+import { getVendorRetailerOwnerStatus } from "@/lib/retailers/vendor-retailer-owner-status";
+import {
+  planInvitationSubmit,
+  resolveOwnerInvitedCode,
+} from "@/lib/retailers/owner-status-normalization";
 import type {
   InviteOwnerState,
   InviteOwnerValues,
@@ -81,6 +86,15 @@ const ALREADY_REGISTERED_ERROR =
 
 /** Shown when the Retailer already has an owner. */
 const EXISTING_OWNER_ERROR = "This Retailer already has an owner.";
+
+/**
+ * Shown when the owner status changed between the page rendering and this submit,
+ * or could not be re-read. Deliberately generic and actionable: it tells the admin
+ * to refresh and retry without describing which transition occurred or leaking any
+ * internal state.
+ */
+const STATE_CHANGED_ERROR =
+  "The owner status changed. Refresh the page and try again.";
 
 /**
  * Canonical UUID form: 8-4-4-4-12 hexadecimal, matched case-insensitively. The
@@ -185,20 +199,18 @@ export async function inviteRetailerOwnerAction(
   }
 
   // ---------------------------------------------------------------------------
-  // 3. Field validation
+  // 3. Name validation (email is validated later, once the mode is known)
   // ---------------------------------------------------------------------------
-  // These rules are the database's own rules, restated so a mistake is caught with
-  // a clear per-field message instead of a round trip that can only come back as
-  // one generic failure. They do NOT replace the database's checks: the RPC
-  // re-validates everything and the table constraints still have the final say.
+  // The names are required in every mode — a first invite, a resend, a retry, and
+  // an expiry replacement all need them, and a resend/retry is exactly where an
+  // admin may CORRECT a mistyped name (the reservation RPC overwrites them). The
+  // email is deliberately NOT validated here: whether the submitted value even
+  // matters depends on the authoritative owner state resolved in section 5, so its
+  // check lives there.
   //
   // No maximum length is imposed on the names. public.profiles puts none on
   // first_name or last_name — only non-empty checks — and inventing a ceiling here
-  // would reject input the database accepts. The email is the one field with a
-  // real length rule.
-  //
-  // Every field is checked before returning, so one submission reports every
-  // problem at once rather than revealing them one round trip at a time.
+  // would reject input the database accepts.
   const fieldErrors: InviteOwnerState["fieldErrors"] = {};
 
   if (values.firstName.length === 0) {
@@ -207,15 +219,6 @@ export async function inviteRetailerOwnerAction(
 
   if (values.lastName.length === 0) {
     fieldErrors.lastName = "Enter the owner's last name.";
-  }
-
-  if (values.email.length === 0) {
-    fieldErrors.email = "Enter the owner's email address.";
-  } else if (
-    values.email.length > MAX_EMAIL_LENGTH ||
-    !EMAIL_PATTERN.test(values.email)
-  ) {
-    fieldErrors.email = "Enter a valid email address.";
   }
 
   if (Object.keys(fieldErrors).length > 0) {
@@ -255,16 +258,69 @@ export async function inviteRetailerOwnerAction(
   // and NOT sent: the RPC resolves the Vendor itself, from the caller's own
   // verified token, and accepts no organization parameter at all.
 
-  // ---------------------------------------------------------------------------
-  // 5. Relationship id — shape only, and never a disclosure
-  // ---------------------------------------------------------------------------
-  // A malformed value returns the SAME generic message as a nonexistent, foreign,
-  // or inaccessible one. That is the whole point: the browser must not be able to
-  // tell these apart, because the difference between them is information about
-  // rows the caller may not read. A malformed id can only mean a tampered form, so
-  // there is no legitimate submission this costs.
+  // A malformed relationship id returns the SAME generic message as a nonexistent,
+  // foreign, or inaccessible one. The browser must not be able to tell these apart.
+  // A malformed id can only mean a tampered form, so there is no legitimate
+  // submission this costs.
   if (!UUID_PATTERN.test(relationshipId)) {
     return { fieldErrors: {}, formError: GENERIC_INVITE_ERROR, values };
+  }
+
+  // ---------------------------------------------------------------------------
+  // 5. Re-resolve the owner status IMMEDIATELY before dispatch
+  // ---------------------------------------------------------------------------
+  // The page that rendered this form may be stale: the invitation could have been
+  // accepted, expired, revoked, or replaced by another admin since it loaded. The
+  // authoritative state is re-read here, under the caller's own token, and it — not
+  // any hidden form field — decides what happens next. This is what makes the
+  // recipient un-tamperable and the concurrency window safe.
+  const statusResult = await getVendorRetailerOwnerStatus(relationshipId);
+
+  if (statusResult.status === "unavailable") {
+    // Could not confirm the current state, so we refuse to dispatch blindly. Fail
+    // closed with the actionable, generic message.
+    return { fieldErrors: {}, formError: STATE_CHANGED_ERROR, values };
+  }
+
+  const currentState = statusResult.ownerStatus.state;
+  const plan = planInvitationSubmit(currentState, statusResult.ownerStatus.email);
+
+  if (plan.kind === "blocked-active") {
+    // The Retailer gained an active owner while the form was open.
+    return { fieldErrors: {}, formError: EXISTING_OWNER_ERROR, values };
+  }
+
+  if (plan.kind === "state-unavailable") {
+    // A resend/retry state whose recipient email is somehow missing: fail closed
+    // rather than guess a recipient.
+    return { fieldErrors: {}, formError: STATE_CHANGED_ERROR, values };
+  }
+
+  // The email actually dispatched. For a resend/retry it is the RPC's OWN value,
+  // never the submitted one — a browser cannot substitute a different address. For
+  // a new/replacement invite it is the admin's submitted email, which is validated
+  // here (the one place a submitted email is trusted).
+  let dispatchEmail: string;
+
+  if (plan.kind === "resend") {
+    dispatchEmail = plan.email;
+  } else {
+    // plan.kind === "new" (NONE or EXPIRED): validate the submitted email.
+    if (values.email.length === 0) {
+      return {
+        fieldErrors: { email: "Enter the owner's email address." },
+        formError: null,
+        values,
+      };
+    }
+    if (values.email.length > MAX_EMAIL_LENGTH || !EMAIL_PATTERN.test(values.email)) {
+      return {
+        fieldErrors: { email: "Enter a valid email address." },
+        formError: null,
+        values,
+      };
+    }
+    dispatchEmail = values.email;
   }
 
   // ---------------------------------------------------------------------------
@@ -273,10 +329,12 @@ export async function inviteRetailerOwnerAction(
   // The service returns a closed union of plain statuses — no ids, no email, no
   // error object, no Auth code, no SQLSTATE. Everything below maps those statuses
   // to this codebase's own strings; nothing from Supabase or PostgreSQL is
-  // rendered.
+  // rendered. The reservation RPC is the FINAL authority: it independently blocks
+  // an active owner and a different-email pending, so even if the state changed
+  // again between section 5 and here, a wrong action cannot commit.
   const result = await inviteRetailerOwner(
     relationshipId,
-    values.email,
+    dispatchEmail,
     values.firstName,
     values.lastName,
   );
@@ -345,19 +403,24 @@ export async function inviteRetailerOwnerAction(
   // the whole authenticated shell must be dropped. Revalidating before the
   // redirect is what makes the banner and the changed state visible on arrival.
   //
-  // `relationshipId` is the value validated in section 5, so these paths cannot be
+  // `relationshipId` is the value validated above, so these paths cannot be
   // poisoned by the submitted string.
   revalidatePath("/retailers");
   revalidatePath(`/retailers/${relationshipId}`);
 
-  // The destination is built only from the validated relationship id. No
-  // redirectTo/next form field or search parameter is read anywhere in this module
-  // — a caller-supplied redirect target is an open-redirect vector. The
-  // `ownerInvited=1` flag carries no id and no database value; it only tells the
-  // detail page to render a success banner.
+  // The success flag is a short code from a FIXED vocabulary — `sent`, `resent`, or
+  // `new` — chosen from the state observed just before dispatch, never from free
+  // text or a submitted value. The detail page maps it back through
+  // resolveOwnerInvitedMessage(), which renders only known codes, so nothing
+  // arbitrary can be shown. No id, email, or database value travels in the URL.
+  const successCode = resolveOwnerInvitedCode(currentState);
+
+  // The destination is built only from the validated relationship id and the fixed
+  // code. No redirectTo/next form field or search parameter is read anywhere in
+  // this module — a caller-supplied redirect target is an open-redirect vector.
   //
   // Outside any try/catch, and nothing follows it: redirect() throws NEXT_REDIRECT,
   // so no success state is returned or could be. Swallowing that throw would turn a
   // sent invitation into a spurious failure message — and prompt a resend.
-  redirect(`/retailers/${relationshipId}?ownerInvited=1`);
+  redirect(`/retailers/${relationshipId}?ownerInvited=${successCode}`);
 }
