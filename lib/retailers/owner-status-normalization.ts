@@ -47,6 +47,33 @@ const OWNER_STATES: readonly RetailerOwnerState[] = [
 ];
 
 /**
+ * The three approved, display-safe delivery-failure reasons stored by the database
+ * (public.retailer_invitations.failure_code). They classify WHY a DELIVERY_FAILED
+ * invitation did not complete:
+ *
+ *   EXISTING_ACCOUNT     the email already belongs to a Supabase Auth user; the
+ *                        current new-user-only flow cannot invite it (NOT retryable).
+ *   AUTH_DISPATCH_FAILED the Auth/email handoff failed before completing; may be
+ *                        retryable to the same address.
+ *   FINALIZATION_FAILED  Auth dispatch succeeded (or may have) but Retailer setup
+ *                        did not finish; retrying inviteUserByEmail is not offered.
+ *
+ * These carry NO provider error, HTTP status, SMTP response, token, or id — they are
+ * a fixed vocabulary the server maps failures onto, nothing more.
+ */
+export type RetailerOwnerFailureCode =
+  | "EXISTING_ACCOUNT"
+  | "AUTH_DISPATCH_FAILED"
+  | "FINALIZATION_FAILED";
+
+/** The set form, exported so the server-only recorder shares one vocabulary. */
+export const RETAILER_OWNER_FAILURE_CODES: readonly RetailerOwnerFailureCode[] = [
+  "EXISTING_ACCOUNT",
+  "AUTH_DISPATCH_FAILED",
+  "FINALIZATION_FAILED",
+];
+
+/**
  * The normalized owner status. Carries NO identifiers — not the invitation id,
  * Auth user id, membership id, organization id, relationship id, role id, or any
  * token. `email` is display-safe because the RPC returned it only after proving
@@ -61,7 +88,28 @@ export type VendorRetailerOwnerStatus = {
   sentAt: string | null;
   expiresAt: string | null;
   acceptedAt: string | null;
+  /**
+   * The delivery-failure classification, non-null ONLY on DELIVERY_FAILED (and even
+   * there, null for a historical/unclassified failure). The database guarantees this
+   * and the normalizer re-checks it — a code on any other state fails closed.
+   */
+  failureCode: RetailerOwnerFailureCode | null;
 };
+
+/**
+ * Whether a DELIVERY_FAILED classification permits a locked-email retry through the
+ * existing secure dispatch path. A null (historical/unclassified) failure and an
+ * AUTH_DISPATCH_FAILED are retryable; EXISTING_ACCOUNT and FINALIZATION_FAILED are
+ * terminal for this milestone and offer no retry.
+ *
+ * THE single source of truth for retryability, shared by the detail card, the
+ * invite route, and the Server Action so none can disagree.
+ */
+export function isDeliveryFailureRetryable(
+  failureCode: RetailerOwnerFailureCode | null,
+): boolean {
+  return failureCode === null || failureCode === "AUTH_DISPATCH_FAILED";
+}
 
 /**
  * The outcome of normalizing the RPC result. "malformed" carries a short,
@@ -147,6 +195,39 @@ export function normalizeOwnerStatusRow(
   const acceptedAt = readNullableTimestamp(row.accepted_at);
   if (!acceptedAt.ok) return { status: "malformed", reason: "accepted_at present but not a valid timestamp" };
 
+  // failure_code: null, or exactly one of the three approved codes. An unknown
+  // value fails closed rather than reaching a `switch` with no matching branch.
+  const rawFailure = row.failure_code;
+  let failureCode: RetailerOwnerFailureCode | null;
+  if (rawFailure === null || rawFailure === undefined) {
+    failureCode = null;
+  } else if (
+    typeof rawFailure === "string" &&
+    RETAILER_OWNER_FAILURE_CODES.includes(rawFailure as RetailerOwnerFailureCode)
+  ) {
+    failureCode = rawFailure as RetailerOwnerFailureCode;
+  } else {
+    return { status: "malformed", reason: "failure_code present but not an approved value" };
+  }
+
+  // A classification belongs ONLY to DELIVERY_FAILED. On NONE, PENDING, EXPIRED, or
+  // ACTIVE it is a contradiction, so fail closed rather than render an actionable
+  // failure onto a settled or successful state.
+  if (failureCode !== null && state !== "DELIVERY_FAILED") {
+    return { status: "malformed", reason: "failure_code present on a non-DELIVERY_FAILED state" };
+  }
+
+  // An ACTIONABLE (retryable) DELIVERY_FAILED must carry a recipient email, because
+  // the locked-email retry has nothing to send to otherwise. Retryable = null or
+  // AUTH_DISPATCH_FAILED. The terminal codes render no form, so they do not need one.
+  if (
+    state === "DELIVERY_FAILED" &&
+    isDeliveryFailureRetryable(failureCode) &&
+    email.value === null
+  ) {
+    return { status: "malformed", reason: "actionable DELIVERY_FAILED missing owner email" };
+  }
+
   return {
     status: "ok",
     value: {
@@ -157,6 +238,7 @@ export function normalizeOwnerStatusRow(
       sentAt: sentAt.value,
       expiresAt: expiresAt.value,
       acceptedAt: acceptedAt.value,
+      failureCode,
     },
   };
 }
@@ -192,26 +274,82 @@ export function normalizeOwnerStatusResult(rows: unknown): OwnerStatusNormalizat
 /** The primary action a state offers, or null when it offers none. */
 export type OwnerStatusAction = { label: string };
 
-/** The heading and primary action for one owner state. */
+/** The heading, safe description, and primary action for one owner status. */
 export type OwnerStatusView = {
   heading: string;
+  description: string;
   action: OwnerStatusAction | null;
 };
 
 /**
- * The heading and primary-action label for each state. ACTIVE offers NO action in
- * this milestone — no Invite, Retry, Resend, Replace, Revoke, or Delete.
+ * The heading, safe description, and primary-action label for a status. DELIVERY_
+ * FAILED additionally branches on the failure classification: a retryable failure
+ * (AUTH_DISPATCH_FAILED or historical null) offers Retry, while the terminal codes
+ * (EXISTING_ACCOUNT, FINALIZATION_FAILED) are informational and offer NO action.
+ * ACTIVE offers no action in this milestone. Every string here is authored in this
+ * codebase — never a provider error, id, or database term.
  */
-const OWNER_STATUS_VIEWS: Record<RetailerOwnerState, OwnerStatusView> = {
-  NONE: { heading: "No Retailer Owner", action: { label: "Invite Retailer Owner" } },
-  DELIVERY_FAILED: { heading: "Invitation not sent", action: { label: "Retry invitation" } },
-  PENDING: { heading: "Invitation pending", action: { label: "Resend invitation" } },
-  EXPIRED: { heading: "Invitation expired", action: { label: "Send new invitation" } },
-  ACTIVE: { heading: "Retailer Owner active", action: null },
-};
-
-export function buildOwnerStatusView(state: RetailerOwnerState): OwnerStatusView {
-  return OWNER_STATUS_VIEWS[state];
+export function buildOwnerStatusView(status: VendorRetailerOwnerStatus): OwnerStatusView {
+  switch (status.state) {
+    case "NONE":
+      return {
+        heading: "No Retailer Owner",
+        description: "No owner has been invited for this Retailer yet.",
+        action: { label: "Invite Retailer Owner" },
+      };
+    case "PENDING":
+      return {
+        heading: "Invitation pending",
+        description: "An invitation is awaiting acceptance. Resending refreshes the invitation window.",
+        action: { label: "Resend invitation" },
+      };
+    case "EXPIRED":
+      return {
+        heading: "Invitation expired",
+        description: "The last invitation expired before it was accepted. You can send a new one.",
+        action: { label: "Send new invitation" },
+      };
+    case "ACTIVE":
+      return {
+        heading: "Retailer Owner active",
+        description: "This Retailer has an active owner.",
+        action: null,
+      };
+    case "DELIVERY_FAILED":
+    default:
+      switch (status.failureCode) {
+        case "EXISTING_ACCOUNT":
+          return {
+            heading: "Existing account requires a different invitation flow",
+            description:
+              "This address already has an account and cannot be invited through the current development invitation flow.",
+            action: null,
+          };
+        case "FINALIZATION_FAILED":
+          return {
+            heading: "Owner setup incomplete",
+            description:
+              "The account setup did not finish. Retrying the email invitation is not available for this state.",
+            action: null,
+          };
+        case "AUTH_DISPATCH_FAILED":
+          return {
+            heading: "Invitation not sent",
+            description: "The invitation could not be sent. You can retry it to the same email address.",
+            action: { label: "Retry invitation" },
+          };
+        case null:
+        default:
+          // Historical / unclassified incomplete invitation: kept retryable so a
+          // Vendor is not stranded, and the retry records a current classification.
+          return {
+            heading: "Invitation not sent",
+            description:
+              "The invitation was not sent, and the reason is no longer available. You can retry it to the same email address.",
+            action: { label: "Retry invitation" },
+          };
+      }
+  }
 }
 
 // ============================================================================
@@ -370,6 +508,10 @@ export function buildInviteFormModel(
 export type InvitationSubmitPlan =
   /** ACTIVE owner already exists: refuse. */
   | { kind: "blocked-active" }
+  /** DELIVERY_FAILED + EXISTING_ACCOUNT: terminal for this flow, refuse. */
+  | { kind: "blocked-existing-account" }
+  /** DELIVERY_FAILED + FINALIZATION_FAILED: terminal for this flow, refuse. */
+  | { kind: "blocked-finalization" }
   /** A resend/retry state whose recipient email is missing: fail closed. */
   | { kind: "state-unavailable" }
   /** Resend/retry: dispatch to THIS email, ignoring anything the browser sent. */
@@ -378,22 +520,32 @@ export type InvitationSubmitPlan =
   | { kind: "new" };
 
 /**
- * Plans a submit from the current authoritative state.
+ * Plans a submit from the current authoritative state AND failure classification.
  *
- * PENDING and DELIVERY_FAILED force the RPC-provided recipient — the submitted
- * email is discarded, so a browser cannot substitute a different address for a
- * resend. ACTIVE refuses. NONE and EXPIRED accept the submitted email, because
- * those are the states in which a new (possibly different) recipient is valid.
+ * PENDING and a RETRYABLE DELIVERY_FAILED force the RPC-provided recipient — the
+ * submitted email is discarded, so a browser cannot substitute a different address.
+ * ACTIVE and the two terminal DELIVERY_FAILED classifications (EXISTING_ACCOUNT,
+ * FINALIZATION_FAILED) refuse outright — no inviteUserByEmail is attempted for them.
+ * NONE and EXPIRED accept the submitted email, the states where a new (possibly
+ * different) recipient is valid.
  */
 export function planInvitationSubmit(
   state: RetailerOwnerState,
+  failureCode: RetailerOwnerFailureCode | null,
   currentEmail: string | null,
 ): InvitationSubmitPlan {
   switch (state) {
     case "ACTIVE":
       return { kind: "blocked-active" };
-    case "PENDING":
     case "DELIVERY_FAILED":
+      if (failureCode === "EXISTING_ACCOUNT") return { kind: "blocked-existing-account" };
+      if (failureCode === "FINALIZATION_FAILED") return { kind: "blocked-finalization" };
+      // Retryable (null or AUTH_DISPATCH_FAILED): use the RPC's own email only.
+      if (typeof currentEmail === "string" && currentEmail.trim().length > 0) {
+        return { kind: "resend", email: currentEmail.trim().toLowerCase() };
+      }
+      return { kind: "state-unavailable" };
+    case "PENDING":
       if (typeof currentEmail === "string" && currentEmail.trim().length > 0) {
         return { kind: "resend", email: currentEmail.trim().toLowerCase() };
       }

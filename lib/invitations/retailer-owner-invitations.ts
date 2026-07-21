@@ -42,6 +42,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient, SupabaseAdminConfigurationError } from "@/lib/supabase/admin";
+import type { RetailerOwnerFailureCode } from "@/lib/retailers/owner-status-normalization";
 
 /**
  * The path GoTrue sends the invitee to after they click the emailed link.
@@ -201,6 +202,48 @@ function mapReservationFailure(code: string | undefined): InviteRetailerOwnerRes
 }
 
 /**
+ * Persists a safe delivery-failure classification for one invitation, best-effort.
+ *
+ * SERVER-ROLE, SERVER-DERIVED ONLY. The invitation id is the one the trusted
+ * reservation RPC returned in this same call — never a browser value. The code is
+ * one of the three fixed, display-safe strings; NO provider error, HTTP status,
+ * SMTP response, Resend id, or thrown value is passed. The RPC is granted to
+ * service_role only, so this runs on the admin client.
+ *
+ * BEST-EFFORT, AND DELIBERATELY SO. If the recording itself fails (transport or a
+ * reported error), the user-facing result of the surrounding operation is NOT
+ * changed: the delivery failure already happened, and the classification is an
+ * annotation on it, not the outcome. Only a static category is logged — never the
+ * error object, which could name tables, policies, or carry the service-role key.
+ *
+ * OBSERVABILITY LIMITATION: when recording fails, the invitation keeps whatever
+ * classification it already had (for a fresh failure, that is null). The owner-
+ * status UI then treats it as the historical/unclassified DELIVERY_FAILED — a
+ * retryable "Invitation not sent" — rather than the specific reason. That is the
+ * safe fallback: it never blocks a genuinely retryable case, and a subsequent
+ * attempt records a current classification.
+ */
+async function recordInvitationFailure(
+  admin: ReturnType<typeof createAdminClient>,
+  invitationId: string,
+  code: RetailerOwnerFailureCode,
+): Promise<void> {
+  const result = await Promise.resolve(
+    admin.rpc("record_retailer_owner_invitation_failure", {
+      p_invitation_id: invitationId,
+      p_failure_code: code,
+    }),
+  ).catch(() => null);
+
+  if (result === null || result.error) {
+    // Static category only. No error object, no email, no id.
+    console.error(
+      `inviteRetailerOwner: could not record failure classification (${code})`,
+    );
+  }
+}
+
+/**
  * Invites the first Retailer Owner for one Vendor-managed Retailer.
  *
  * @param relationshipId The vendor_retailers row id. An ADDRESS, not
@@ -343,18 +386,29 @@ export async function inviteRetailerOwner(
         // own in 24 hours, and until then it is the record that this Vendor
         // attempted to invite this person — which a Vendor admin will want when
         // they ask why nothing arrived. It also blocks a pointless retry loop.
+        //
+        // Classified EXISTING_ACCOUNT so the UI can stop offering a futile Retry.
+        // The `already-registered` result is deliberately unchanged — this is not
+        // silently converted into a retryable outcome.
         console.error("inviteRetailerOwner: address already has an account; invitation deferred");
+        await recordInvitationFailure(admin, reserved.invitation_id, "EXISTING_ACCOUNT");
         return { status: "already-registered" };
       }
 
+      // Any other reported dispatch error: the handoff failed before completing and
+      // may be retryable. Classified AUTH_DISPATCH_FAILED; the safe result is
+      // unchanged.
       console.error("inviteRetailerOwner: auth dispatch failed");
+      await recordInvitationFailure(admin, reserved.invitation_id, "AUTH_DISPATCH_FAILED");
       return { status: "unavailable" };
     }
 
     const userId = data?.user?.id;
 
     if (typeof userId !== "string" || userId.length === 0) {
+      // Dispatch returned no usable user: treat as a dispatch failure, retryable.
       console.error("inviteRetailerOwner: auth dispatch returned no user");
+      await recordInvitationFailure(admin, reserved.invitation_id, "AUTH_DISPATCH_FAILED");
       return { status: "unavailable" };
     }
 
@@ -362,8 +416,11 @@ export async function inviteRetailerOwner(
   } catch {
     // The thrown value is deliberately not bound, inspected, or logged. A
     // transport-level exception from the Auth client can carry request headers —
-    // which on THIS client include the service-role key.
+    // which on THIS client include the service-role key. Classified as a dispatch
+    // failure using ONLY the id and the fixed code — the thrown value never travels
+    // to the recorder.
     console.error("inviteRetailerOwner: auth dispatch threw");
+    await recordInvitationFailure(admin, reserved.invitation_id, "AUTH_DISPATCH_FAILED");
     return { status: "unavailable" };
   }
 
@@ -395,7 +452,13 @@ export async function inviteRetailerOwner(
     // sent_at, so re-running this whole function resolves the same reservation
     // (is_resend = true) and retries finalization. Nothing is left half-granted —
     // the RPC is one transaction, so it either provisioned everything or nothing.
+    //
+    // Classified FINALIZATION_FAILED — distinct from a dispatch failure because an
+    // Auth user was already created, so a naive retry would now meet that account.
+    // The UI therefore does NOT offer a re-send for this state. No compensation or
+    // Auth-user deletion is performed in this milestone.
     console.error("inviteRetailerOwner: finalization failed after dispatch");
+    await recordInvitationFailure(admin, reserved.invitation_id, "FINALIZATION_FAILED");
     return { status: "unavailable" };
   }
 

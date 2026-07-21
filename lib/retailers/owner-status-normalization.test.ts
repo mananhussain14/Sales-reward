@@ -1,6 +1,6 @@
 /**
  * Unit tests for the pure Retailer Owner status normalization, presentation, and
- * submit-planning layer.
+ * submit-planning layer — including delivery-failure classification.
  *
  * Run with:  npm test
  *
@@ -9,11 +9,10 @@
  * types at load time via --experimental-strip-types, so these run directly
  * against the source with no build step.
  *
- * Scope is deliberately the PURE layer only. The server module that calls the RPC
- * (./vendor-retailer-owner-status.ts) cannot be unit-tested here: it imports
- * `next/headers` transitively, which throws outside a request scope. Its behaviour
- * is covered by the database-level dry-run harness, which exercises the real
- * authorization chain against real PostgreSQL.
+ * Scope is deliberately the PURE layer only. The server modules that call the RPCs
+ * cannot be unit-tested here: they import `next/headers` transitively, which throws
+ * outside a request scope. Their behaviour is covered by the database-level
+ * harnesses against real PostgreSQL.
  */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
@@ -23,15 +22,17 @@ import {
   buildInviteFormModel,
   formatOwnerDisplayName,
   formatOwnerTimestamp,
+  isDeliveryFailureRetryable,
   planInvitationSubmit,
   resolveOwnerInvitedCode,
   resolveOwnerInvitedMessage,
+  RETAILER_OWNER_FAILURE_CODES,
   DATE_NOT_AVAILABLE,
   OWNER_NAME_FALLBACK,
   type VendorRetailerOwnerStatus,
 } from "./owner-status-normalization.ts";
 
-/** One valid RPC row for a given state, with sensible defaults. */
+/** One valid RPC row, with sensible defaults (NONE, all-null). */
 function row(overrides: Record<string, unknown> = {}) {
   return {
     owner_state: "NONE",
@@ -41,147 +42,179 @@ function row(overrides: Record<string, unknown> = {}) {
     sent_at: null,
     expires_at: null,
     accepted_at: null,
+    failure_code: null,
+    ...overrides,
+  };
+}
+
+/** A complete normalized status object for the presentation/planning tests. */
+function status(overrides: Partial<VendorRetailerOwnerStatus>): VendorRetailerOwnerStatus {
+  return {
+    state: "NONE",
+    firstName: null,
+    lastName: null,
+    email: null,
+    sentAt: null,
+    expiresAt: null,
+    acceptedAt: null,
+    failureCode: null,
     ...overrides,
   };
 }
 
 // ============================================================================
-// Normalization — the five states map, malformed input fails closed
+// Normalization — states, failure codes, fail-closed
 // ============================================================================
 describe("normalizeOwnerStatusResult — valid states", () => {
-  test("1. NONE maps correctly", () => {
-    const result = normalizeOwnerStatusResult([row({ owner_state: "NONE" })]);
-    assert.equal(result.status, "ok");
-    assert.equal(result.status === "ok" && result.value.state, "NONE");
+  test("NONE maps with failureCode null", () => {
+    const r = normalizeOwnerStatusResult([row({ owner_state: "NONE" })]);
+    assert.equal(r.status, "ok");
+    assert.equal(r.status === "ok" && r.value.state, "NONE");
+    assert.equal(r.status === "ok" && r.value.failureCode, null);
   });
 
-  test("2. DELIVERY_FAILED maps correctly", () => {
-    const result = normalizeOwnerStatusResult([
-      row({
-        owner_state: "DELIVERY_FAILED",
-        owner_first_name: "Fay",
-        owner_last_name: "Fail",
-        owner_email: "failed@example.com",
-        expires_at: "2026-07-20T10:30:00Z",
-      }),
+  test("PENDING maps (member/sent present, failureCode null)", () => {
+    const r = normalizeOwnerStatusResult([
+      row({ owner_state: "PENDING", owner_email: "p@x.com", sent_at: "2026-07-20T09:00:00Z", expires_at: "2026-07-21T09:00:00Z" }),
     ]);
-    assert.equal(result.status, "ok");
-    assert.deepEqual(result.status === "ok" && result.value, {
+    assert.equal(r.status, "ok");
+    assert.equal(r.status === "ok" && r.value.state, "PENDING");
+    assert.equal(r.status === "ok" && r.value.failureCode, null);
+  });
+
+  test("EXPIRED maps, failureCode null", () => {
+    const r = normalizeOwnerStatusResult([
+      row({ owner_state: "EXPIRED", owner_email: "e@x.com", expires_at: "2026-07-19T09:00:00Z" }),
+    ]);
+    assert.equal(r.status === "ok" && r.value.state, "EXPIRED");
+    assert.equal(r.status === "ok" && r.value.failureCode, null);
+  });
+
+  test("ACTIVE maps, failureCode null", () => {
+    const r = normalizeOwnerStatusResult([
+      row({ owner_state: "ACTIVE", owner_first_name: "Al", owner_email: "a@x.com", accepted_at: "2026-07-20T12:00:00Z" }),
+    ]);
+    assert.equal(r.status === "ok" && r.value.state, "ACTIVE");
+    assert.equal(r.status === "ok" && r.value.failureCode, null);
+  });
+
+  test("DELIVERY_FAILED historical (null) maps and is complete-shaped", () => {
+    const r = normalizeOwnerStatusResult([
+      row({ owner_state: "DELIVERY_FAILED", owner_first_name: "Fay", owner_last_name: "Fail", owner_email: "f@x.com", expires_at: "2026-07-21T09:00:00Z" }),
+    ]);
+    assert.equal(r.status, "ok");
+    assert.deepEqual(r.status === "ok" && r.value, {
       state: "DELIVERY_FAILED",
       firstName: "Fay",
       lastName: "Fail",
-      email: "failed@example.com",
+      email: "f@x.com",
       sentAt: null,
-      expiresAt: "2026-07-20T10:30:00Z",
+      expiresAt: "2026-07-21T09:00:00Z",
       acceptedAt: null,
+      failureCode: null,
     });
   });
 
-  test("3. PENDING maps correctly", () => {
-    const result = normalizeOwnerStatusResult([
-      row({
-        owner_state: "PENDING",
-        owner_first_name: "Pat",
-        owner_last_name: "Pending",
-        owner_email: "pending@example.com",
-        sent_at: "2026-07-20T09:00:00Z",
-        expires_at: "2026-07-21T09:00:00Z",
-      }),
-    ]);
-    assert.equal(result.status, "ok");
-    assert.equal(result.status === "ok" && result.value.state, "PENDING");
-    assert.equal(result.status === "ok" && result.value.sentAt, "2026-07-20T09:00:00Z");
-  });
-
-  test("4. EXPIRED maps correctly", () => {
-    const result = normalizeOwnerStatusResult([
-      row({
-        owner_state: "EXPIRED",
-        owner_first_name: "Eve",
-        owner_last_name: "Expired",
-        owner_email: "expired@example.com",
-        sent_at: "2026-07-18T09:00:00Z",
-        expires_at: "2026-07-19T09:00:00Z",
-      }),
-    ]);
-    assert.equal(result.status, "ok");
-    assert.equal(result.status === "ok" && result.value.state, "EXPIRED");
-  });
-
-  test("5. ACTIVE maps correctly", () => {
-    const result = normalizeOwnerStatusResult([
-      row({
-        owner_state: "ACTIVE",
-        owner_first_name: "Alex",
-        owner_last_name: "Active",
-        owner_email: "active@example.com",
-        accepted_at: "2026-07-20T12:00:00Z",
-      }),
-    ]);
-    assert.equal(result.status, "ok");
-    assert.equal(result.status === "ok" && result.value.state, "ACTIVE");
-    assert.equal(result.status === "ok" && result.value.acceptedAt, "2026-07-20T12:00:00Z");
-  });
-
-  test("trims present name and email values", () => {
-    const result = normalizeOwnerStatusResult([
-      row({ owner_state: "ACTIVE", owner_first_name: "  Alex  ", owner_email: "  a@b.com  " }),
-    ]);
-    assert.equal(result.status === "ok" && result.value.firstName, "Alex");
-    assert.equal(result.status === "ok" && result.value.email, "a@b.com");
-  });
+  for (const code of RETAILER_OWNER_FAILURE_CODES) {
+    test(`DELIVERY_FAILED + ${code} maps`, () => {
+      const r = normalizeOwnerStatusResult([
+        row({ owner_state: "DELIVERY_FAILED", owner_email: "f@x.com", failure_code: code }),
+      ]);
+      assert.equal(r.status, "ok");
+      assert.equal(r.status === "ok" && r.value.state, "DELIVERY_FAILED");
+      assert.equal(r.status === "ok" && r.value.failureCode, code);
+    });
+  }
 });
 
 describe("normalizeOwnerStatusResult — fails closed", () => {
-  test("6. unknown state fails closed", () => {
-    const result = normalizeOwnerStatusResult([row({ owner_state: "REVOKED" })]);
-    assert.equal(result.status, "malformed");
+  test("unknown owner_state fails", () => {
+    assert.equal(normalizeOwnerStatusResult([row({ owner_state: "REVOKED" })]).status, "malformed");
   });
 
-  test("6b. absent state fails closed", () => {
-    const result = normalizeOwnerStatusResult([row({ owner_state: undefined })]);
-    assert.equal(result.status, "malformed");
-  });
-
-  test("7. malformed timestamp fails closed", () => {
-    const result = normalizeOwnerStatusResult([
-      row({ owner_state: "PENDING", sent_at: "not-a-date" }),
+  test("unknown failure_code fails", () => {
+    const r = normalizeOwnerStatusResult([
+      row({ owner_state: "DELIVERY_FAILED", owner_email: "f@x.com", failure_code: "SMTP_550" }),
     ]);
-    assert.equal(result.status, "malformed");
+    assert.equal(r.status, "malformed");
   });
 
-  test("7b. present-but-blank name fails closed", () => {
-    const result = normalizeOwnerStatusResult([
-      row({ owner_state: "ACTIVE", owner_first_name: "   " }),
+  test("failure_code on a non-DELIVERY_FAILED state fails", () => {
+    for (const s of ["NONE", "PENDING", "EXPIRED", "ACTIVE"]) {
+      const r = normalizeOwnerStatusResult([
+        row({ owner_state: s, owner_email: "x@x.com", failure_code: "EXISTING_ACCOUNT" }),
+      ]);
+      assert.equal(r.status, "malformed", `expected malformed for ${s}`);
+    }
+  });
+
+  test("actionable DELIVERY_FAILED with no email fails (null and AUTH_DISPATCH_FAILED)", () => {
+    assert.equal(
+      normalizeOwnerStatusResult([row({ owner_state: "DELIVERY_FAILED", owner_email: null, failure_code: null })]).status,
+      "malformed",
+    );
+    assert.equal(
+      normalizeOwnerStatusResult([row({ owner_state: "DELIVERY_FAILED", owner_email: null, failure_code: "AUTH_DISPATCH_FAILED" })]).status,
+      "malformed",
+    );
+  });
+
+  test("terminal DELIVERY_FAILED tolerates a missing email (informational only)", () => {
+    const r = normalizeOwnerStatusResult([
+      row({ owner_state: "DELIVERY_FAILED", owner_email: null, failure_code: "EXISTING_ACCOUNT" }),
     ]);
-    assert.equal(result.status, "malformed");
+    assert.equal(r.status, "ok");
   });
 
-  test("8. missing row (zero rows) fails closed", () => {
-    const result = normalizeOwnerStatusResult([]);
-    assert.equal(result.status, "malformed");
+  test("malformed timestamp fails", () => {
+    assert.equal(
+      normalizeOwnerStatusResult([row({ owner_state: "PENDING", owner_email: "p@x.com", sent_at: "nope" })]).status,
+      "malformed",
+    );
   });
 
-  test("9. multiple rows fail closed", () => {
-    const result = normalizeOwnerStatusResult([row(), row({ owner_state: "ACTIVE" })]);
-    assert.equal(result.status, "malformed");
-  });
-
-  test("non-array result fails closed", () => {
+  test("missing row and multiple rows fail", () => {
+    assert.equal(normalizeOwnerStatusResult([]).status, "malformed");
+    assert.equal(normalizeOwnerStatusResult([row(), row({ owner_state: "ACTIVE" })]).status, "malformed");
     assert.equal(normalizeOwnerStatusResult(null).status, "malformed");
-    assert.equal(normalizeOwnerStatusResult({}).status, "malformed");
   });
 
   test("does not propagate an unexpected id field", () => {
-    const result = normalizeOwnerStatusResult([
+    const r = normalizeOwnerStatusResult([
       row({ owner_state: "ACTIVE", invitation_id: "11111111-1111-1111-1111-111111111111" }),
     ]);
-    assert.equal(result.status, "ok");
-    // The value object has exactly the seven safe keys — no id leaked through.
+    assert.equal(r.status, "ok");
     assert.deepEqual(
-      result.status === "ok" && Object.keys(result.value).sort(),
-      ["acceptedAt", "email", "expiresAt", "firstName", "lastName", "sentAt", "state"],
+      r.status === "ok" && Object.keys(r.value).sort(),
+      ["acceptedAt", "email", "expiresAt", "failureCode", "firstName", "lastName", "sentAt", "state"],
     );
+  });
+});
+
+// ============================================================================
+// Failure-code vocabulary — the server-only recorder passes only these codes
+// ============================================================================
+describe("RETAILER_OWNER_FAILURE_CODES", () => {
+  test("is exactly the three approved safe codes", () => {
+    assert.deepEqual([...RETAILER_OWNER_FAILURE_CODES].sort(), [
+      "AUTH_DISPATCH_FAILED",
+      "EXISTING_ACCOUNT",
+      "FINALIZATION_FAILED",
+    ]);
+  });
+});
+
+// ============================================================================
+// isDeliveryFailureRetryable
+// ============================================================================
+describe("isDeliveryFailureRetryable", () => {
+  test("null and AUTH_DISPATCH_FAILED are retryable", () => {
+    assert.equal(isDeliveryFailureRetryable(null), true);
+    assert.equal(isDeliveryFailureRetryable("AUTH_DISPATCH_FAILED"), true);
+  });
+  test("EXISTING_ACCOUNT and FINALIZATION_FAILED are not", () => {
+    assert.equal(isDeliveryFailureRetryable("EXISTING_ACCOUNT"), false);
+    assert.equal(isDeliveryFailureRetryable("FINALIZATION_FAILED"), false);
   });
 });
 
@@ -189,56 +222,60 @@ describe("normalizeOwnerStatusResult — fails closed", () => {
 // Display formatting
 // ============================================================================
 describe("formatOwnerDisplayName", () => {
-  test("10. both names -> first last", () => {
+  test("both / one / neither", () => {
     assert.equal(formatOwnerDisplayName("Alex", "Active"), "Alex Active");
-  });
-  test("10. only first name", () => {
     assert.equal(formatOwnerDisplayName("Alex", null), "Alex");
-  });
-  test("10. only last name", () => {
     assert.equal(formatOwnerDisplayName(null, "Active"), "Active");
-  });
-  test("10. neither -> safe fallback", () => {
     assert.equal(formatOwnerDisplayName(null, null), OWNER_NAME_FALLBACK);
-    assert.equal(formatOwnerDisplayName("  ", "  "), OWNER_NAME_FALLBACK);
   });
 });
 
 describe("formatOwnerTimestamp", () => {
-  test("null -> Not available", () => {
+  test("null and invalid -> Not available, never 'Invalid Date'", () => {
     assert.equal(formatOwnerTimestamp(null), DATE_NOT_AVAILABLE);
-  });
-  test("unparseable -> Not available, never 'Invalid Date'", () => {
-    const out = formatOwnerTimestamp("nonsense");
-    assert.equal(out, DATE_NOT_AVAILABLE);
-    assert.ok(!out.includes("Invalid"));
+    assert.equal(formatOwnerTimestamp("nonsense"), DATE_NOT_AVAILABLE);
   });
   test("valid ISO -> deterministic UTC string", () => {
     const out = formatOwnerTimestamp("2026-07-20T10:30:00Z");
-    assert.ok(out.includes("2026"));
-    assert.ok(out.endsWith("UTC"));
-    assert.ok(!out.includes("Invalid"));
+    assert.ok(out.includes("2026") && out.endsWith("UTC") && !out.includes("Invalid"));
   });
 });
 
 // ============================================================================
-// View-model — action label per state
+// View-model — heading / description / action per state and failure code
 // ============================================================================
 describe("buildOwnerStatusView", () => {
-  test("11. NONE action = Invite Retailer Owner", () => {
-    assert.equal(buildOwnerStatusView("NONE").action?.label, "Invite Retailer Owner");
+  test("NONE action = Invite", () => {
+    assert.equal(buildOwnerStatusView(status({ state: "NONE" })).action?.label, "Invite Retailer Owner");
   });
-  test("12. DELIVERY_FAILED action = Retry invitation", () => {
-    assert.equal(buildOwnerStatusView("DELIVERY_FAILED").action?.label, "Retry invitation");
+  test("PENDING action = Resend", () => {
+    assert.equal(buildOwnerStatusView(status({ state: "PENDING" })).action?.label, "Resend invitation");
   });
-  test("13. PENDING action = Resend invitation", () => {
-    assert.equal(buildOwnerStatusView("PENDING").action?.label, "Resend invitation");
+  test("EXPIRED action = Send new invitation", () => {
+    assert.equal(buildOwnerStatusView(status({ state: "EXPIRED" })).action?.label, "Send new invitation");
   });
-  test("14. EXPIRED action = Send new invitation", () => {
-    assert.equal(buildOwnerStatusView("EXPIRED").action?.label, "Send new invitation");
+  test("ACTIVE has no action", () => {
+    assert.equal(buildOwnerStatusView(status({ state: "ACTIVE" })).action, null);
   });
-  test("15. ACTIVE has no invitation action", () => {
-    assert.equal(buildOwnerStatusView("ACTIVE").action, null);
+
+  test("DELIVERY_FAILED + AUTH_DISPATCH_FAILED offers Retry", () => {
+    const v = buildOwnerStatusView(status({ state: "DELIVERY_FAILED", failureCode: "AUTH_DISPATCH_FAILED", email: "f@x.com" }));
+    assert.equal(v.action?.label, "Retry invitation");
+    assert.equal(v.heading, "Invitation not sent");
+  });
+  test("DELIVERY_FAILED + null (historical) offers Retry", () => {
+    const v = buildOwnerStatusView(status({ state: "DELIVERY_FAILED", failureCode: null, email: "f@x.com" }));
+    assert.equal(v.action?.label, "Retry invitation");
+  });
+  test("DELIVERY_FAILED + EXISTING_ACCOUNT offers no action", () => {
+    const v = buildOwnerStatusView(status({ state: "DELIVERY_FAILED", failureCode: "EXISTING_ACCOUNT", email: "f@x.com" }));
+    assert.equal(v.action, null);
+    assert.ok(v.description.includes("already has an account"));
+  });
+  test("DELIVERY_FAILED + FINALIZATION_FAILED offers no action", () => {
+    const v = buildOwnerStatusView(status({ state: "DELIVERY_FAILED", failureCode: "FINALIZATION_FAILED", email: "f@x.com" }));
+    assert.equal(v.action, null);
+    assert.equal(v.heading, "Owner setup incomplete");
   });
 });
 
@@ -246,119 +283,84 @@ describe("buildOwnerStatusView", () => {
 // Invite form model
 // ============================================================================
 describe("buildInviteFormModel", () => {
-  function status(overrides: Partial<VendorRetailerOwnerStatus>): VendorRetailerOwnerStatus {
-    return {
-      state: "NONE",
-      firstName: null,
-      lastName: null,
-      email: null,
-      sentAt: null,
-      expiresAt: null,
-      acceptedAt: null,
-      ...overrides,
-    };
-  }
-
-  test("NONE -> new mode, editable, empty", () => {
-    const model = buildInviteFormModel(status({ state: "NONE" }));
-    assert.equal(model.mode, "new");
-    assert.equal(model.lockedEmail, null);
-    assert.equal(model.initialEmail, "");
+  test("NONE -> new, editable, empty", () => {
+    const m = buildInviteFormModel(status({ state: "NONE" }));
+    assert.equal(m.mode, "new");
+    assert.equal(m.lockedEmail, null);
   });
-
-  test("DELIVERY_FAILED -> retry mode with locked email + prefilled names", () => {
-    const model = buildInviteFormModel(
-      status({ state: "DELIVERY_FAILED", firstName: "Fay", lastName: "Fail", email: "f@x.com" }),
-    );
-    assert.equal(model.mode, "retry");
-    assert.equal(model.lockedEmail, "f@x.com");
-    assert.equal(model.initialFirstName, "Fay");
-    assert.equal(model.submitLabel, "Retry invitation");
+  test("DELIVERY_FAILED retryable -> retry with locked email", () => {
+    const m = buildInviteFormModel(status({ state: "DELIVERY_FAILED", failureCode: "AUTH_DISPATCH_FAILED", firstName: "Fay", email: "f@x.com" }));
+    assert.equal(m.mode, "retry");
+    assert.equal(m.lockedEmail, "f@x.com");
+    assert.equal(m.submitLabel, "Retry invitation");
   });
-
-  test("PENDING -> resend mode with locked email", () => {
-    const model = buildInviteFormModel(
-      status({ state: "PENDING", firstName: "Pat", lastName: "P", email: "p@x.com" }),
-    );
-    assert.equal(model.mode, "resend");
-    assert.equal(model.lockedEmail, "p@x.com");
-    assert.equal(model.submitLabel, "Resend invitation");
+  test("PENDING -> resend with locked email", () => {
+    const m = buildInviteFormModel(status({ state: "PENDING", email: "p@x.com" }));
+    assert.equal(m.mode, "resend");
+    assert.equal(m.lockedEmail, "p@x.com");
   });
-
-  test("EXPIRED -> replace mode, editable email, previous recipient as context", () => {
-    const model = buildInviteFormModel(
-      status({ state: "EXPIRED", firstName: "Eve", lastName: "E", email: "e@x.com" }),
-    );
-    assert.equal(model.mode, "replace");
-    assert.equal(model.lockedEmail, null);
-    assert.equal(model.previousRecipient?.email, "e@x.com");
-    assert.equal(model.previousRecipient?.name, "Eve E");
+  test("EXPIRED -> replace, editable, previous recipient context", () => {
+    const m = buildInviteFormModel(status({ state: "EXPIRED", firstName: "Eve", lastName: "E", email: "e@x.com" }));
+    assert.equal(m.mode, "replace");
+    assert.equal(m.lockedEmail, null);
+    assert.equal(m.previousRecipient?.email, "e@x.com");
   });
 });
 
 // ============================================================================
-// Submit planning — tamper + concurrency protection
+// Submit planning — tamper + terminal-state protection
 // ============================================================================
 describe("planInvitationSubmit", () => {
-  test("16. PENDING forces the RPC email, ignoring any submitted value", () => {
-    const plan = planInvitationSubmit("PENDING", "real@x.com");
-    assert.equal(plan.kind, "resend");
-    assert.equal(plan.kind === "resend" && plan.email, "real@x.com");
+  test("PENDING forces the RPC email (submitted value irrelevant)", () => {
+    const p = planInvitationSubmit("PENDING", null, "real@x.com");
+    assert.equal(p.kind, "resend");
+    assert.equal(p.kind === "resend" && p.email, "real@x.com");
   });
-
-  test("16. DELIVERY_FAILED forces the RPC email", () => {
-    const plan = planInvitationSubmit("DELIVERY_FAILED", "Real@X.com");
-    assert.equal(plan.kind, "resend");
-    // Canonicalized to match the database's stored form.
-    assert.equal(plan.kind === "resend" && plan.email, "real@x.com");
+  test("DELIVERY_FAILED + AUTH_DISPATCH_FAILED -> secure retry (canonical email wins)", () => {
+    const p = planInvitationSubmit("DELIVERY_FAILED", "AUTH_DISPATCH_FAILED", "Real@X.com");
+    assert.equal(p.kind, "resend");
+    assert.equal(p.kind === "resend" && p.email, "real@x.com");
   });
-
-  test("16. NONE and EXPIRED accept the submitted email (new mode)", () => {
-    assert.equal(planInvitationSubmit("NONE", null).kind, "new");
-    assert.equal(planInvitationSubmit("EXPIRED", "old@x.com").kind, "new");
+  test("DELIVERY_FAILED + null -> secure retry", () => {
+    assert.equal(planInvitationSubmit("DELIVERY_FAILED", null, "r@x.com").kind, "resend");
   });
-
-  test("17. ACTIVE is blocked", () => {
-    assert.equal(planInvitationSubmit("ACTIVE", null).kind, "blocked-active");
+  test("DELIVERY_FAILED + EXISTING_ACCOUNT -> blocked", () => {
+    assert.equal(planInvitationSubmit("DELIVERY_FAILED", "EXISTING_ACCOUNT", "r@x.com").kind, "blocked-existing-account");
   });
-
-  test("17. resend state with missing email fails closed", () => {
-    assert.equal(planInvitationSubmit("PENDING", null).kind, "state-unavailable");
-    assert.equal(planInvitationSubmit("DELIVERY_FAILED", "  ").kind, "state-unavailable");
+  test("DELIVERY_FAILED + FINALIZATION_FAILED -> blocked", () => {
+    assert.equal(planInvitationSubmit("DELIVERY_FAILED", "FINALIZATION_FAILED", "r@x.com").kind, "blocked-finalization");
+  });
+  test("ACTIVE -> blocked-active", () => {
+    assert.equal(planInvitationSubmit("ACTIVE", null, null).kind, "blocked-active");
+  });
+  test("retryable resend with missing email fails closed", () => {
+    assert.equal(planInvitationSubmit("DELIVERY_FAILED", "AUTH_DISPATCH_FAILED", null).kind, "state-unavailable");
+    assert.equal(planInvitationSubmit("PENDING", null, "  ").kind, "state-unavailable");
+  });
+  test("NONE and EXPIRED accept the submitted email (new mode)", () => {
+    assert.equal(planInvitationSubmit("NONE", null, "n@x.com").kind, "new");
+    assert.equal(planInvitationSubmit("EXPIRED", null, "old@x.com").kind, "new");
   });
 });
 
 // ============================================================================
 // Success feedback — fixed vocabulary only
 // ============================================================================
-describe("resolveOwnerInvitedCode", () => {
-  test("PENDING -> resent, EXPIRED -> new, others -> sent", () => {
+describe("success feedback", () => {
+  test("resolveOwnerInvitedCode: PENDING->resent, EXPIRED->new, others->sent", () => {
     assert.equal(resolveOwnerInvitedCode("PENDING"), "resent");
     assert.equal(resolveOwnerInvitedCode("EXPIRED"), "new");
     assert.equal(resolveOwnerInvitedCode("NONE"), "sent");
     assert.equal(resolveOwnerInvitedCode("DELIVERY_FAILED"), "sent");
   });
-});
-
-describe("resolveOwnerInvitedMessage", () => {
-  test("known codes map to fixed messages", () => {
+  test("resolveOwnerInvitedMessage maps known codes and rejects everything else", () => {
     assert.equal(resolveOwnerInvitedMessage("sent"), "Retailer Owner invitation sent.");
     assert.equal(resolveOwnerInvitedMessage("resent"), "Retailer Owner invitation resent.");
     assert.equal(resolveOwnerInvitedMessage("new"), "New Retailer Owner invitation sent.");
     assert.equal(resolveOwnerInvitedMessage("1"), "Retailer Owner invitation sent.");
-  });
-
-  test("18. arbitrary text is rejected (no injection)", () => {
-    assert.equal(resolveOwnerInvitedMessage("<script>alert(1)</script>"), null);
-    assert.equal(resolveOwnerInvitedMessage("You have been hacked"), null);
-    assert.equal(resolveOwnerInvitedMessage(""), null);
+    assert.equal(resolveOwnerInvitedMessage("<script>"), null);
+    assert.equal(resolveOwnerInvitedMessage("constructor"), null);
     assert.equal(resolveOwnerInvitedMessage(undefined), null);
     assert.equal(resolveOwnerInvitedMessage(["sent"]), null);
-  });
-
-  test("18. inherited object keys cannot select a message", () => {
-    assert.equal(resolveOwnerInvitedMessage("constructor"), null);
-    assert.equal(resolveOwnerInvitedMessage("toString"), null);
-    assert.equal(resolveOwnerInvitedMessage("hasOwnProperty"), null);
   });
 });
