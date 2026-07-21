@@ -6,7 +6,11 @@ import {
   RETAILER_OWNER_INVITATIONS_PAUSED_MESSAGE,
 } from "@/lib/features/retailer-owner-invitations";
 import { getVendorRetailerDetail } from "@/lib/retailers/vendor-retailer-detail";
-import { buildInviteFormModel } from "@/lib/retailers/owner-status-normalization";
+import {
+  buildInviteFormModel,
+  buildOwnerStatusView,
+  isDeliveryFailureRetryable,
+} from "@/lib/retailers/owner-status-normalization";
 import { InviteOwnerForm } from "@/app/(admin)/retailers/[relationshipId]/owner/invite/invite-owner-form";
 
 /**
@@ -174,39 +178,44 @@ export default async function InviteRetailerOwnerPage({ params }: PageProps) {
     );
   }
 
-  // The heading and lead-in adapt to the current owner state so a resend does not
-  // read as a first invitation. The state itself comes from the same authorized
-  // loader; the Server Action re-reads it before dispatch, so this is presentation
-  // only. When the Retailer is inactive or the status could not be read, the state
-  // is not consulted — those blocks take over below.
-  const headingByState: Record<string, { title: string; lead: string }> = {
-    NONE: {
-      title: "Invite Retailer Owner",
-      lead: "Invite the first owner. They will receive an email inviting them to set a password and activate their account.",
-    },
-    DELIVERY_FAILED: {
-      title: "Retry owner invitation",
-      lead: "The previous invitation could not be sent. Retry it to the same recipient — the email address cannot be changed here.",
-    },
-    PENDING: {
-      title: "Resend owner invitation",
-      lead: "An invitation is already pending. Resending refreshes the invitation window and re-sends the email to the same recipient.",
-    },
-    EXPIRED: {
-      title: "Send a new owner invitation",
-      lead: "The previous invitation expired. You can send a new one, to the same person or a different email address.",
-    },
-    ACTIVE: {
-      title: "Retailer Owner",
-      lead: "This Retailer already has an active owner.",
-    },
-  };
+  // The authorized, readable status (null on the guarded unavailable path).
+  const okStatus = ownerStatus.status === "ok" ? ownerStatus.ownerStatus : null;
 
-  // Resolve the copy and, for a live state, the form model. `state` is only read
-  // on the authorized, active, readable path — the guarded branches below never
-  // reach it.
-  const state = ownerStatus.status === "ok" ? ownerStatus.ownerStatus.state : "NONE";
-  const heading = headingByState[state] ?? headingByState.NONE;
+  // A DELIVERY_FAILED whose classification is terminal for this flow
+  // (EXISTING_ACCOUNT or FINALIZATION_FAILED): no form, informational only. Direct
+  // URL entry lands here too — the guard is server-side, not a hidden control.
+  const terminalDeliveryFailure =
+    okStatus?.state === "DELIVERY_FAILED" &&
+    !isDeliveryFailureRetryable(okStatus.failureCode);
+
+  // Copy for the top heading. For a terminal failure or an active owner the
+  // heading and lead come from the shared view-model; for the form states a
+  // purpose-specific title makes clear this is a first invite, resend, retry, or
+  // replacement rather than a generic form.
+  const view = okStatus ? buildOwnerStatusView(okStatus) : null;
+
+  const heading: { title: string; lead: string } =
+    okStatus && (terminalDeliveryFailure || okStatus.state === "ACTIVE")
+      ? { title: view!.heading, lead: view!.description }
+      : okStatus?.state === "PENDING"
+        ? {
+            title: "Resend owner invitation",
+            lead: "An invitation is already pending. Resending refreshes the invitation window and re-sends the email to the same recipient.",
+          }
+        : okStatus?.state === "DELIVERY_FAILED"
+          ? {
+              title: "Retry owner invitation",
+              lead: "The previous invitation could not be sent. Retry it to the same recipient — the email address cannot be changed here.",
+            }
+          : okStatus?.state === "EXPIRED"
+            ? {
+                title: "Send a new owner invitation",
+                lead: "The previous invitation expired. You can send a new one, to the same person or a different email address.",
+              }
+            : {
+                title: "Invite Retailer Owner",
+                lead: "Invite the first owner. They will receive an email inviting them to set a password and activate their account.",
+              };
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
@@ -239,7 +248,7 @@ export default async function InviteRetailerOwnerPage({ params }: PageProps) {
           title="This Retailer is not active"
           body="An owner can only be invited while both the Retailer and its relationship are active."
         />
-      ) : ownerStatus.status === "unavailable" ? (
+      ) : okStatus === null ? (
         // Fail closed: the owner status could not be read, so no form is rendered
         // — sending without knowing the current state could produce the wrong
         // action. Generic and reason-free, matching the detail page.
@@ -247,18 +256,24 @@ export default async function InviteRetailerOwnerPage({ params }: PageProps) {
           title="Owner status unavailable"
           body="The Retailer Owner status is temporarily unavailable. Please try again."
         />
-      ) : ownerStatus.ownerStatus.state === "ACTIVE" ? (
+      ) : okStatus.state === "ACTIVE" ? (
         // No form: an active owner is not re-invited in this milestone. The back
         // link is the only useful action, and it is always present above.
         <NoticePanel
           title="Retailer Owner already active"
           body="This Retailer already has an active owner, so there is no invitation to send."
         />
+      ) : terminalDeliveryFailure ? (
+        // Terminal DELIVERY_FAILED (EXISTING_ACCOUNT / FINALIZATION_FAILED): no
+        // form, no Retry. The view-model supplies the safe, code-specific
+        // explanation. The Server Action independently refuses these states, so a
+        // hand-crafted POST is rejected too.
+        <NoticePanel title={view!.heading} body={view!.description} />
       ) : (
         <div className="rounded-xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
           <InviteOwnerForm
             relationshipId={relationshipId}
-            model={buildInviteFormModel(ownerStatus.ownerStatus)}
+            model={buildInviteFormModel(okStatus)}
           />
         </div>
       )}

@@ -88,6 +88,24 @@ const ALREADY_REGISTERED_ERROR =
 const EXISTING_OWNER_ERROR = "This Retailer already has an owner.";
 
 /**
+ * Shown when the current owner status is DELIVERY_FAILED classified EXISTING_ACCOUNT.
+ * The address already has an Auth account and the current new-user flow cannot
+ * invite it, so no dispatch is attempted. Same approved wording as the field-level
+ * already-registered message; exposes no Auth code, status, or account existence
+ * beyond the address the Vendor already submitted.
+ */
+const EXISTING_ACCOUNT_ERROR =
+  "This address cannot be invited through the current development invitation flow.";
+
+/**
+ * Shown when the current owner status is DELIVERY_FAILED classified
+ * FINALIZATION_FAILED. Auth setup may have partly completed, so re-sending the
+ * email invitation is not offered for this state.
+ */
+const FINALIZATION_INCOMPLETE_ERROR =
+  "The account setup did not finish. Retrying the email invitation is not available for this state.";
+
+/**
  * Shown when the owner status changed between the page rendering and this submit,
  * or could not be re-read. Deliberately generic and actionable: it tells the admin
  * to refresh and retry without describing which transition occurred or leaking any
@@ -283,11 +301,27 @@ export async function inviteRetailerOwnerAction(
   }
 
   const currentState = statusResult.ownerStatus.state;
-  const plan = planInvitationSubmit(currentState, statusResult.ownerStatus.email);
+  const plan = planInvitationSubmit(
+    currentState,
+    statusResult.ownerStatus.failureCode,
+    statusResult.ownerStatus.email,
+  );
 
   if (plan.kind === "blocked-active") {
     // The Retailer gained an active owner while the form was open.
     return { fieldErrors: {}, formError: EXISTING_OWNER_ERROR, values };
+  }
+
+  if (plan.kind === "blocked-existing-account") {
+    // The address already has an Auth account (classified EXISTING_ACCOUNT). No
+    // dispatch is attempted; the safe approved message explains the limitation.
+    return { fieldErrors: {}, formError: EXISTING_ACCOUNT_ERROR, values };
+  }
+
+  if (plan.kind === "blocked-finalization") {
+    // Auth setup may have partly completed (classified FINALIZATION_FAILED). A
+    // re-send is not offered, so no inviteUserByEmail is attempted here.
+    return { fieldErrors: {}, formError: FINALIZATION_INCOMPLETE_ERROR, values };
   }
 
   if (plan.kind === "state-unavailable") {

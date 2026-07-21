@@ -426,25 +426,6 @@ function OwnerDetail({ label, value }: { label: string; value: string | null }) 
 }
 
 /**
- * Human-readable body text per state. Names the human-readable state only — never
- * a role code, permission code, membership status, invitation status database
- * term, or identifier.
- */
-const OWNER_STATE_DESCRIPTIONS: Record<
-  VendorRetailerOwnerStatus["state"],
-  string
-> = {
-  NONE: "No owner has been invited for this Retailer yet.",
-  DELIVERY_FAILED:
-    "The last invitation could not be sent. You can retry sending it to the same person.",
-  PENDING:
-    "An invitation is awaiting acceptance. Resending refreshes the invitation window.",
-  EXPIRED:
-    "The last invitation expired before it was accepted. You can send a new one.",
-  ACTIVE: "This Retailer has an active owner.",
-};
-
-/**
  * The owner-management card — the single, state-aware home for everything about
  * this Retailer's owner. It replaces the previous generic "Invite Retailer Owner"
  * button.
@@ -514,7 +495,7 @@ function OwnerManagementBody({
   canInvite: boolean;
   invitationsEnabled: boolean;
 }) {
-  const view = buildOwnerStatusView(ownerStatus.state);
+  const view = buildOwnerStatusView(ownerStatus);
   const displayName = formatOwnerDisplayName(
     ownerStatus.firstName,
     ownerStatus.lastName,
@@ -540,7 +521,7 @@ function OwnerManagementBody({
             {view.heading}
           </p>
           <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-            {OWNER_STATE_DESCRIPTIONS[ownerStatus.state]}
+            {view.description}
           </p>
         </div>
 
