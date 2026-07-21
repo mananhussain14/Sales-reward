@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { resolveAuthenticatedLanding } from "@/lib/auth/authenticated-landing";
 import type { LoginState } from "@/app/login/login-state";
 
 /**
@@ -30,6 +31,17 @@ import type { LoginState } from "@/app/login/login-state";
  * unauthenticated caller enumerate which email addresses have accounts.
  */
 const GENERIC_AUTH_ERROR = "Unable to sign in with those credentials.";
+
+/**
+ * Shown ONLY after authentication has already succeeded, when the landing
+ * resolver cannot be reached (a transient database or network fault). It is safe
+ * to be distinct from GENERIC_AUTH_ERROR: by this point the caller has proven
+ * valid credentials, so there is no account-enumeration signal left to protect —
+ * and the retry-safe wording invites the one action that fixes it. The session
+ * is NOT torn down; re-submitting simply re-runs the resolver.
+ */
+const LANDING_UNAVAILABLE_ERROR =
+  "You're signed in, but we couldn't load your workspace just now. Please try again.";
 
 /**
  * Pragmatic email shape check: something, an @, something, a dot, something —
@@ -94,15 +106,45 @@ export async function signIn(
   }
 
   // Reaching here means sign-in succeeded. Everything below is intentionally
-  // OUTSIDE the try/catch.
+  // OUTSIDE the credential try/catch above.
 
-  // signInWithPassword() wrote the session cookies through the server client's
-  // setAll adapter. Drop any cached render produced while logged out so the
-  // authenticated shell renders fresh.
+  // Where the user lands is no longer hardcoded to the Vendor route. The
+  // server-only resolver reads the just-established session and decides:
+  //   * Vendor Super Admin      -> "/"          (existing Vendor landing, first
+  //                                              priority — dual-role users keep it)
+  //   * Retailer Owner only     -> "/retailer"
+  //   * authenticated, neither  -> "/access-denied" (the generic denial route;
+  //                                              NOT /retailer-access-denied)
+  //   * operationally unavailable -> a retry-safe message, session preserved
+  //
+  // The resolver derives everything from auth.uid() via the two existing secure
+  // access functions; nothing the form submitted influences the destination, and
+  // every returned route is a fixed internal literal, so there is no open-redirect
+  // surface. This call is INSIDE a try/catch because it is not a redirect: an
+  // unexpected throw must become a safe message, not a 500 or a lost session.
+  let landing;
+  try {
+    landing = await resolveAuthenticatedLanding();
+  } catch {
+    // The thrown value is deliberately not bound or logged — it could carry
+    // request or session detail. The user keeps their session and can retry.
+    return { error: LANDING_UNAVAILABLE_ERROR };
+  }
+
+  // An operational failure inside the resolver (e.g. the Retailer RPC was
+  // unreachable) is NOT an authorization denial. Surface a retry message rather
+  // than redirecting the authenticated user anywhere.
+  if (landing.kind === "unavailable") {
+    return { error: LANDING_UNAVAILABLE_ERROR };
+  }
+
+  // Drop any cached render produced while logged out so the authenticated shell
+  // renders fresh.
   revalidatePath("/", "layout");
 
   // Must stay outside any try/catch: redirect() signals by throwing a special
   // NEXT_REDIRECT error, and catching it would silently swallow the navigation —
   // turning a successful login into a spurious "unable to sign in" message.
-  redirect("/");
+  // `landing.destination` is one of the fixed LANDING_ROUTES literals.
+  redirect(landing.destination);
 }

@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { LANDING_ROUTES } from "@/lib/auth/landing-decision";
 import type { CompleteInvitationState } from "@/app/invitations/complete/complete-state";
 
 /**
@@ -277,16 +278,29 @@ export async function completeInvitation(
   // Committed: the membership is ACTIVE, the invitation is ACCEPTED, and the audit
   // record was written in the same transaction as both.
 
-  // The session's authorization state changed, so any render produced before this
+  // The session's authorization state changed — profile, membership, and
+  // invitation are now all ACTIVE/ACCEPTED — so any render produced before this
   // point is stale.
   revalidatePath("/", "layout");
 
-  // A fixed internal path. No redirectTo/next form field or search parameter is
-  // read anywhere in this module — a caller-supplied redirect target is an
-  // open-redirect vector.
+  // Straight into the portal. The acceptance the RPC just committed makes this
+  // caller satisfy the Retailer Owner authorization chain
+  // (profiles.status = ACTIVE, membership ACTIVE, RETAILER_OWNER role, read
+  // permission), so /retailer will render rather than deny — completing the
+  // journey immediately instead of parking the new owner on a confirmation page.
   //
-  // Outside any try/catch, and nothing follows it: redirect() throws NEXT_REDIRECT,
-  // so no success state is returned or could be. Swallowing that throw would turn a
-  // committed acceptance into a spurious failure message.
-  redirect("/invitations/success");
+  // A FIXED internal literal (LANDING_ROUTES.retailer, the same constant the
+  // login resolver uses). No redirectTo/next form field or search parameter is
+  // read anywhere in this module, so there is no open-redirect vector, and no
+  // invitation id, organization id, email, token, or membership detail appears in
+  // the destination. It is NOT "/" or any Vendor route.
+  //
+  // /invitations/success is retained as a safe fallback for refreshes, old
+  // bookmarks, and replay — see app/invitations/success/page.tsx — but the
+  // primary completion path no longer stops there.
+  //
+  // Outside any try/catch, and nothing follows it: redirect() throws
+  // NEXT_REDIRECT, so no success state is returned or could be. Swallowing that
+  // throw would turn a committed acceptance into a spurious failure message.
+  redirect(LANDING_ROUTES.retailer);
 }
