@@ -12,11 +12,18 @@ import { INITIAL_LOGIN_STATE } from "@/app/login/login-state";
  * Server Action — the browser Supabase client is never involved, and nothing is
  * persisted client-side.
  */
-export function LoginForm() {
+export function LoginForm({ next }: { next?: string | null }) {
   const [state, formAction, pending] = useActionState(signIn, INITIAL_LOGIN_STATE);
 
   return (
     <form action={formAction} className="space-y-5" noValidate>
+      {/*
+        The post-login destination, already validated to a safe same-origin path
+        on the server before it reached this prop. The action re-validates it
+        again on receipt — this hidden field is a convenience carrier, never a
+        trust boundary. Omitted entirely when there is no safe `next`.
+      */}
+      {next ? <input type="hidden" name="next" value={next} /> : null}
       {/*
         Errors are rendered in a live region so screen readers announce them on
         submit. The container is only mounted when there is a message, which is

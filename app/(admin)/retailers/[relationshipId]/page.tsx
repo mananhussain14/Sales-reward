@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { StatusBadge } from "@/components/admin/status-badge";
 import { isRetailerOwnerInvitationsEnabled } from "@/lib/features/retailer-owner-invitations";
+import { isExistingUserInvitationsEnabled } from "@/lib/features/existing-user-invitations";
 import {
   getVendorRetailerDetail,
   type VendorRetailerDetail,
@@ -11,8 +12,10 @@ import {
 import type { VendorRetailerOwnerStatusResult } from "@/lib/retailers/vendor-retailer-owner-status";
 import {
   buildOwnerStatusView,
+  classifyOwnerAction,
   formatOwnerDisplayName,
   formatOwnerTimestamp,
+  isExistingUserActionKind,
   resolveOwnerInvitedMessage,
   type VendorRetailerOwnerStatus,
 } from "@/lib/retailers/owner-status-normalization";
@@ -444,11 +447,13 @@ function OwnerManagementCard({
   relationshipId,
   canInvite,
   invitationsEnabled,
+  existingUserInvitationsEnabled,
 }: {
   ownerStatusResult: VendorRetailerOwnerStatusResult;
   relationshipId: string;
   canInvite: boolean;
   invitationsEnabled: boolean;
+  existingUserInvitationsEnabled: boolean;
 }) {
   return (
     <section aria-labelledby="owner-heading" className="space-y-3">
@@ -477,6 +482,7 @@ function OwnerManagementCard({
           relationshipId={relationshipId}
           canInvite={canInvite}
           invitationsEnabled={invitationsEnabled}
+          existingUserInvitationsEnabled={existingUserInvitationsEnabled}
         />
       )}
     </section>
@@ -489,13 +495,25 @@ function OwnerManagementBody({
   relationshipId,
   canInvite,
   invitationsEnabled,
+  existingUserInvitationsEnabled,
 }: {
   ownerStatus: VendorRetailerOwnerStatus;
   relationshipId: string;
   canInvite: boolean;
   invitationsEnabled: boolean;
+  existingUserInvitationsEnabled: boolean;
 }) {
   const view = buildOwnerStatusView(ownerStatus);
+
+  // Which rollout flag gates THIS state's action. An existing-user action (the
+  // token + Resend flow) is gated on its own switch; every other action is gated on
+  // the new-user invitation switch. The action label and route are identical either
+  // way — the invite page renders the correct confirm/form — only the pause gate
+  // differs.
+  const plan = classifyOwnerAction(ownerStatus);
+  const featureEnabled = isExistingUserActionKind(plan.kind)
+    ? existingUserInvitationsEnabled
+    : invitationsEnabled;
   const displayName = formatOwnerDisplayName(
     ownerStatus.firstName,
     ownerStatus.lastName,
@@ -534,7 +552,7 @@ function OwnerManagementBody({
         */}
         {view.action &&
           canInvite &&
-          (invitationsEnabled ? (
+          (featureEnabled ? (
             <OwnerActionLink relationshipId={relationshipId} label={view.action.label} />
           ) : (
             <OwnerActionPaused />
@@ -721,6 +739,12 @@ export default async function RetailerDetailPage({
   // forged POST is refused whether or not this page ever rendered.
   const invitationsEnabled = isRetailerOwnerInvitationsEnabled();
 
+  // The existing-user (token + Resend) flow's own rollout flag, read here in the
+  // Server Component and used only to choose which markup to emit for an
+  // existing-user action. Never passed to a Client Component; the browser receives
+  // finished HTML. The Server Action gates itself independently.
+  const existingUserInvitationsEnabled = isExistingUserInvitationsEnabled();
+
   return (
     <div className="mx-auto max-w-6xl space-y-6">
       <BackToRetailersLink />
@@ -756,6 +780,7 @@ export default async function RetailerDetailPage({
         relationshipId={relationshipId}
         canInvite={canInviteOwner}
         invitationsEnabled={invitationsEnabled}
+        existingUserInvitationsEnabled={existingUserInvitationsEnabled}
       />
 
       <section aria-labelledby="shops-heading" className="space-y-3">

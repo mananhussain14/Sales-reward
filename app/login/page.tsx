@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { resolveSafeNextPath } from "@/lib/auth/safe-next-path";
 import { LoginForm } from "@/app/login/login-form";
 
 export const metadata: Metadata = {
@@ -14,8 +15,21 @@ export const metadata: Metadata = {
  * Deliberately absent, per the current milestone: sign-up, invitations,
  * forgot-password, social login, and any demo/default credentials.
  */
-export default async function LoginPage() {
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const supabase = await createClient();
+
+  // A post-login destination, validated to a same-origin internal path. Anything
+  // unsafe (external URL, scheme, control chars) collapses to null. Used both to
+  // route an already-authenticated visitor and, via a hidden field, to tell the
+  // sign-in action where to return an authenticating one.
+  const { next: rawNext } = await searchParams;
+  const nextParam = Array.isArray(rawNext) ? rawNext[0] : rawNext;
+  const safeNext =
+    typeof nextParam === "string" ? resolveSafeNextPath(nextParam) : null;
 
   // Same verified check the admin layout performs, in the opposite direction:
   // an already-authenticated user has no business seeing the login form.
@@ -24,7 +38,9 @@ export default async function LoginPage() {
   const { data } = await supabase.auth.getClaims();
 
   if (data?.claims) {
-    redirect("/");
+    // Honor a safe `next` so an authenticated visitor who followed an invitation
+    // link lands on that page (which enforces its own access), not the default.
+    redirect(safeNext ?? "/");
   }
 
   return (
@@ -50,7 +66,7 @@ export default async function LoginPage() {
             </p>
           </div>
 
-          <LoginForm />
+          <LoginForm next={safeNext} />
         </div>
 
         <p className="mt-6 text-center text-xs text-zinc-400 dark:text-zinc-600">

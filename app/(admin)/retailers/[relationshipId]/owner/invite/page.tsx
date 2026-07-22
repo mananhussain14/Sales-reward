@@ -5,13 +5,19 @@ import {
   isRetailerOwnerInvitationsEnabled,
   RETAILER_OWNER_INVITATIONS_PAUSED_MESSAGE,
 } from "@/lib/features/retailer-owner-invitations";
+import {
+  isExistingUserInvitationsEnabled,
+  EXISTING_USER_INVITATIONS_PAUSED_MESSAGE,
+} from "@/lib/features/existing-user-invitations";
 import { getVendorRetailerDetail } from "@/lib/retailers/vendor-retailer-detail";
 import {
   buildInviteFormModel,
   buildOwnerStatusView,
-  isDeliveryFailureRetryable,
+  classifyOwnerAction,
+  isExistingUserActionPlan,
 } from "@/lib/retailers/owner-status-normalization";
 import { InviteOwnerForm } from "@/app/(admin)/retailers/[relationshipId]/owner/invite/invite-owner-form";
+import { SendExistingUserForm } from "@/app/(admin)/retailers/[relationshipId]/owner/invite/send-existing-user-form";
 
 /**
  * Static, and deliberately generic — the same reasoning as the Retailer detail
@@ -181,41 +187,72 @@ export default async function InviteRetailerOwnerPage({ params }: PageProps) {
   // The authorized, readable status (null on the guarded unavailable path).
   const okStatus = ownerStatus.status === "ok" ? ownerStatus.ownerStatus : null;
 
-  // A DELIVERY_FAILED whose classification is terminal for this flow
-  // (EXISTING_ACCOUNT or FINALIZATION_FAILED): no form, informational only. Direct
-  // URL entry lands here too — the guard is server-side, not a hidden control.
-  const terminalDeliveryFailure =
-    okStatus?.state === "DELIVERY_FAILED" &&
-    !isDeliveryFailureRetryable(okStatus.failureCode);
+  // The single dispatcher: what action this state offers, and which flow carries it
+  // out. Replaces the old terminal-vs-form branching — the classifier already knows
+  // that EXISTING_ACCOUNT now offers an existing-user send, that EXISTING_USER
+  // PENDING/DELIVERY_FAILED are resend/retry states, and that FINALIZATION_FAILED and
+  // ACTIVE offer nothing.
+  const plan = okStatus ? classifyOwnerAction(okStatus) : null;
 
-  // Copy for the top heading. For a terminal failure or an active owner the
-  // heading and lead come from the shared view-model; for the form states a
-  // purpose-specific title makes clear this is a first invite, resend, retry, or
-  // replacement rather than a generic form.
+  // Whether the state's action is carried out by the existing-user (token + Resend)
+  // flow. Gated on ITS OWN rollout flag, independently of the new-user pause above.
+  // Narrowing the PLAN (not just its kind) exposes the canonical `email` below.
+  const existingPlan = plan && isExistingUserActionPlan(plan) ? plan : null;
+  const isExistingAction = existingPlan !== null;
+  const existingUserEnabled = isExistingUserInvitationsEnabled();
+  const existingActionAvailable = isExistingAction && existingUserEnabled;
+
+  // A state that offers no action at all (FINALIZATION_FAILED, ACTIVE): informational
+  // only, no form. Direct URL entry lands here too — the guard is server-side.
+  const noAction = plan?.kind === "none";
+
+  // Labels for the one-click existing-user confirm, by kind. Behaviour is identical
+  // across them (rotate a fresh token, re-send the link); only the verb differs.
+  const existingLabels =
+    plan?.kind === "resend-existing"
+      ? { submit: "Resend invitation", pending: "Resending invitation…" }
+      : plan?.kind === "retry-existing"
+        ? { submit: "Retry invitation", pending: "Retrying invitation…" }
+        : { submit: "Send existing-user invitation", pending: "Sending invitation…" };
+
+  // Copy for the top heading. The shared view-model supplies the heading/description
+  // for the existing-user, no-action, and active states; the new-user FORM states
+  // get a purpose-specific title. When an existing-user action exists but its flow is
+  // paused, the heading says so plainly rather than inviting an action that is off.
   const view = okStatus ? buildOwnerStatusView(okStatus) : null;
 
   const heading: { title: string; lead: string } =
-    okStatus && (terminalDeliveryFailure || okStatus.state === "ACTIVE")
-      ? { title: view!.heading, lead: view!.description }
-      : okStatus?.state === "PENDING"
+    !okStatus
+      ? {
+          title: "Invite Retailer Owner",
+          lead: "Invite the first owner. They will receive an email inviting them to set a password and activate their account.",
+        }
+      : isExistingAction && !existingUserEnabled
         ? {
-            title: "Resend owner invitation",
-            lead: "An invitation is already pending. Resending refreshes the invitation window and re-sends the email to the same recipient.",
+            title: "Existing-account invitations paused",
+            lead: EXISTING_USER_INVITATIONS_PAUSED_MESSAGE,
           }
-        : okStatus?.state === "DELIVERY_FAILED"
-          ? {
-              title: "Retry owner invitation",
-              lead: "The previous invitation could not be sent. Retry it to the same recipient — the email address cannot be changed here.",
-            }
-          : okStatus?.state === "EXPIRED"
+        : isExistingAction || noAction || okStatus.state === "ACTIVE"
+          ? { title: view!.heading, lead: view!.description }
+          : okStatus.state === "PENDING"
             ? {
-                title: "Send a new owner invitation",
-                lead: "The previous invitation expired. You can send a new one, to the same person or a different email address.",
+                title: "Resend owner invitation",
+                lead: "An invitation is already pending. Resending refreshes the invitation window and re-sends the email to the same recipient.",
               }
-            : {
-                title: "Invite Retailer Owner",
-                lead: "Invite the first owner. They will receive an email inviting them to set a password and activate their account.",
-              };
+            : okStatus.state === "DELIVERY_FAILED"
+              ? {
+                  title: "Retry owner invitation",
+                  lead: "The previous invitation could not be sent. Retry it to the same recipient — the email address cannot be changed here.",
+                }
+              : okStatus.state === "EXPIRED"
+                ? {
+                    title: "Send a new owner invitation",
+                    lead: "The previous invitation expired. You can send a new one, to the same person or a different email address.",
+                  }
+                : {
+                    title: "Invite Retailer Owner",
+                    lead: "Invite the first owner. They will receive an email inviting them to set a password and activate their account.",
+                  };
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
@@ -263,13 +300,34 @@ export default async function InviteRetailerOwnerPage({ params }: PageProps) {
           title="Retailer Owner already active"
           body="This Retailer already has an active owner, so there is no invitation to send."
         />
-      ) : terminalDeliveryFailure ? (
-        // Terminal DELIVERY_FAILED (EXISTING_ACCOUNT / FINALIZATION_FAILED): no
-        // form, no Retry. The view-model supplies the safe, code-specific
-        // explanation. The Server Action independently refuses these states, so a
-        // hand-crafted POST is rejected too.
+      ) : existingActionAvailable ? (
+        // EXISTING-USER flow: the address already has a SalesReward account. A
+        // one-click confirm — no editable fields. The recipient is the RPC's own
+        // canonical email (plan.email), shown read-only; the Server Action re-derives
+        // it and refuses any drifted state, so a hand-crafted POST cannot substitute
+        // a recipient or act on the wrong state.
+        <div className="rounded-xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
+          <SendExistingUserForm
+            relationshipId={relationshipId}
+            lockedEmail={existingPlan!.email}
+            submitLabel={existingLabels.submit}
+            pendingLabel={existingLabels.pending}
+          />
+        </div>
+      ) : isExistingAction ? (
+        // An existing-user action exists but the flow is paused by its own flag. No
+        // confirm form is rendered; the Server Action refuses independently, so a
+        // POST crafted without this page is refused too.
+        <NoticePanel
+          title="Existing-account invitations paused"
+          body={EXISTING_USER_INVITATIONS_PAUSED_MESSAGE}
+        />
+      ) : noAction ? (
+        // A state that offers no action (FINALIZATION_FAILED): no form, no retry. The
+        // view-model supplies the safe, code-specific explanation.
         <NoticePanel title={view!.heading} body={view!.description} />
       ) : (
+        // NEW-USER flow: invite-new / resend-new / retry-new.
         <div className="rounded-xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
           <InviteOwnerForm
             relationshipId={relationshipId}

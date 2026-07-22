@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { resolveAuthenticatedLanding } from "@/lib/auth/authenticated-landing";
+import { resolveSafeNextPath } from "@/lib/auth/safe-next-path";
 import type { LoginState } from "@/app/login/login-state";
 
 /**
@@ -59,10 +60,19 @@ export async function signIn(
 ): Promise<LoginState> {
   const rawEmail = formData.get("email");
   const rawPassword = formData.get("password");
+  const rawNext = formData.get("next");
 
   // FormData entries are `string | File`; a File here means a malformed request.
   const email = typeof rawEmail === "string" ? rawEmail.trim() : "";
   const password = typeof rawPassword === "string" ? rawPassword : "";
+
+  // A caller-supplied post-login destination, accepted ONLY if it survives the
+  // open-redirect filter (same-origin absolute path, no scheme, no host, no
+  // control/whitespace). Anything else collapses to null and the default
+  // role-based landing is used instead. Re-validated here rather than trusting the
+  // page: this action is a public endpoint reachable by a hand-crafted POST.
+  const safeNext =
+    typeof rawNext === "string" ? resolveSafeNextPath(rawNext) : null;
 
   // Shape validation describes the INPUT, never the account, so specific
   // messages here carry no enumeration risk and are far kinder than a blanket
@@ -107,6 +117,19 @@ export async function signIn(
 
   // Reaching here means sign-in succeeded. Everything below is intentionally
   // OUTSIDE the credential try/catch above.
+
+  // A validated `next` wins over the default landing: the user was sent to
+  // sign-in mid-flow (e.g. accepting an existing-user invitation) and must return
+  // to exactly that page. `safeNext` is a same-origin internal path proven safe by
+  // resolveSafeNextPath, so this is not an open redirect, and the destination page
+  // performs its own authorization — a role-less account simply sees that page's
+  // own "not for you" state rather than being leaked anywhere. The landing
+  // resolver is skipped entirely in this case.
+  if (safeNext) {
+    revalidatePath("/", "layout");
+    // Outside any try/catch: redirect() signals via a thrown NEXT_REDIRECT.
+    redirect(safeNext);
+  }
 
   // Where the user lands is no longer hardcoded to the Vendor route. The
   // server-only resolver reads the just-established session and decides:

@@ -66,6 +66,15 @@ export const PUBLIC_PATHS = new Set<string>([
   LOGIN_PATH,
   "/invitations/accept",
   "/invitations/error",
+  // The existing-user invitation intake and acceptance page. The intake carries a
+  // one-time token and NO session (it exchanges the token for an HttpOnly hash
+  // cookie, then redirects); the acceptance page renders a "please sign in" prompt
+  // for a signed-out visitor rather than being bounced to /login by the Proxy,
+  // which would drop the hash cookie's page context. Both perform their own
+  // verification: the acceptance RPCs resolve auth.uid() and require a verified
+  // matching email, and the accept action fails closed without a session.
+  "/invitations/existing",
+  "/invitations/existing/enter",
 ]);
 
 /**

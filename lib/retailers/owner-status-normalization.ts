@@ -64,13 +64,32 @@ const OWNER_STATES: readonly RetailerOwnerState[] = [
 export type RetailerOwnerFailureCode =
   | "EXISTING_ACCOUNT"
   | "AUTH_DISPATCH_FAILED"
-  | "FINALIZATION_FAILED";
+  | "FINALIZATION_FAILED"
+  /**
+   * EXISTING-USER flow only: the application-owned invitation email (Resend) could
+   * not be sent. Retryable — a resend rotates the token and tries again.
+   */
+  | "EXISTING_USER_EMAIL_FAILED";
 
 /** The set form, exported so the server-only recorder shares one vocabulary. */
 export const RETAILER_OWNER_FAILURE_CODES: readonly RetailerOwnerFailureCode[] = [
   "EXISTING_ACCOUNT",
   "AUTH_DISPATCH_FAILED",
   "FINALIZATION_FAILED",
+  "EXISTING_USER_EMAIL_FAILED",
+];
+
+/**
+ * Which invitation flow a row belongs to, from public.retailer_invitations
+ * .invitation_kind. NEW_USER: the original inviteUserByEmail flow. EXISTING_USER:
+ * the application-owned-token flow for an address that already has an Auth account.
+ * Null for NONE and the profile-only ACTIVE fallback (no invitation row).
+ */
+export type RetailerOwnerInvitationKind = "NEW_USER" | "EXISTING_USER";
+
+const OWNER_INVITATION_KINDS: readonly RetailerOwnerInvitationKind[] = [
+  "NEW_USER",
+  "EXISTING_USER",
 ];
 
 /**
@@ -94,6 +113,11 @@ export type VendorRetailerOwnerStatus = {
    * and the normalizer re-checks it — a code on any other state fails closed.
    */
   failureCode: RetailerOwnerFailureCode | null;
+  /**
+   * Which flow this invitation belongs to. Null for NONE and the profile-only
+   * ACTIVE fallback (no invitation row backs the state).
+   */
+  invitationKind: RetailerOwnerInvitationKind | null;
 };
 
 /**
@@ -217,12 +241,39 @@ export function normalizeOwnerStatusRow(
     return { status: "malformed", reason: "failure_code present on a non-DELIVERY_FAILED state" };
   }
 
-  // An ACTIONABLE (retryable) DELIVERY_FAILED must carry a recipient email, because
-  // the locked-email retry has nothing to send to otherwise. Retryable = null or
-  // AUTH_DISPATCH_FAILED. The terminal codes render no form, so they do not need one.
+  // invitation_kind: null, or exactly one of the two approved kinds. Unknown fails
+  // closed. Null is only valid where no invitation row backs the state — NONE, and
+  // the profile-only ACTIVE fallback — so a null kind on any other state is drift.
+  const rawKind = row.invitation_kind;
+  let invitationKind: RetailerOwnerInvitationKind | null;
+  if (rawKind === null || rawKind === undefined) {
+    invitationKind = null;
+  } else if (
+    typeof rawKind === "string" &&
+    OWNER_INVITATION_KINDS.includes(rawKind as RetailerOwnerInvitationKind)
+  ) {
+    invitationKind = rawKind as RetailerOwnerInvitationKind;
+  } else {
+    return { status: "malformed", reason: "invitation_kind present but not an approved value" };
+  }
+
+  // NONE never has an invitation, so it must not carry a kind.
+  if (invitationKind !== null && state === "NONE") {
+    return { status: "malformed", reason: "invitation_kind present on the NONE state" };
+  }
+
+  // EXISTING_USER_EMAIL_FAILED is an existing-user-flow code: it may appear ONLY on
+  // a DELIVERY_FAILED row whose kind is EXISTING_USER. Any other pairing is drift.
+  if (failureCode === "EXISTING_USER_EMAIL_FAILED" && invitationKind !== "EXISTING_USER") {
+    return { status: "malformed", reason: "EXISTING_USER_EMAIL_FAILED on a non-EXISTING_USER invitation" };
+  }
+
+  // An ACTIONABLE DELIVERY_FAILED must carry a recipient email — every action
+  // (new-user retry, existing-user conversion, existing-user resend) needs one.
+  // Only FINALIZATION_FAILED is informational and needs no email.
   if (
     state === "DELIVERY_FAILED" &&
-    isDeliveryFailureRetryable(failureCode) &&
+    failureCode !== "FINALIZATION_FAILED" &&
     email.value === null
   ) {
     return { status: "malformed", reason: "actionable DELIVERY_FAILED missing owner email" };
@@ -239,6 +290,7 @@ export function normalizeOwnerStatusRow(
       expiresAt: expiresAt.value,
       acceptedAt: acceptedAt.value,
       failureCode,
+      invitationKind,
     },
   };
 }
@@ -271,6 +323,101 @@ export function normalizeOwnerStatusResult(rows: unknown): OwnerStatusNormalizat
 // Presentation — pure view-model for the Retailer detail owner card
 // ============================================================================
 
+// ============================================================================
+// Action classification — THE single source of truth for what a status offers
+// ============================================================================
+
+/**
+ * The concrete action a status offers, and which flow carries it out. Derived only
+ * from the authoritative status (state + kind + failure code + canonical email), so
+ * the detail card, the invite route, and both Server Actions agree. Every `email`
+ * is the RPC's own canonical value (lower/trimmed) — never a browser value.
+ */
+export type OwnerActionPlan =
+  /** NONE / EXPIRED: an editable new-user invitation form. */
+  | { kind: "invite-new" }
+  /** NEW_USER PENDING: locked-email new-user resend. */
+  | { kind: "resend-new"; email: string }
+  /** NEW_USER DELIVERY_FAILED (null / AUTH_DISPATCH_FAILED): locked-email new-user retry. */
+  | { kind: "retry-new"; email: string }
+  /** NEW_USER DELIVERY_FAILED EXISTING_ACCOUNT: convert to and send an existing-user invitation. */
+  | { kind: "send-existing"; email: string }
+  /** EXISTING_USER PENDING: existing-user resend (rotates the token). */
+  | { kind: "resend-existing"; email: string }
+  /** EXISTING_USER DELIVERY_FAILED (null / EXISTING_USER_EMAIL_FAILED): existing-user retry. */
+  | { kind: "retry-existing"; email: string }
+  /** ACTIVE, FINALIZATION_FAILED, or any state offering no action. */
+  | { kind: "none" };
+
+function canonicalEmail(email: string | null): string | null {
+  if (typeof email !== "string") return null;
+  const trimmed = email.trim().toLowerCase();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+/**
+ * Classifies the action a status offers. This is the ONLY place the (state, kind,
+ * failureCode) combination is turned into an actionable decision.
+ */
+export function classifyOwnerAction(status: VendorRetailerOwnerStatus): OwnerActionPlan {
+  const email = canonicalEmail(status.email);
+
+  switch (status.state) {
+    case "ACTIVE":
+      return { kind: "none" };
+    case "NONE":
+    case "EXPIRED":
+      return { kind: "invite-new" };
+    case "PENDING":
+      if (email === null) return { kind: "none" };
+      return status.invitationKind === "EXISTING_USER"
+        ? { kind: "resend-existing", email }
+        : { kind: "resend-new", email };
+    case "DELIVERY_FAILED":
+    default:
+      // FINALIZATION_FAILED is informational; anything without an email cannot act.
+      if (status.failureCode === "FINALIZATION_FAILED" || email === null) {
+        return { kind: "none" };
+      }
+      if (status.invitationKind === "EXISTING_USER") {
+        // null or EXISTING_USER_EMAIL_FAILED -> retry the existing-user send.
+        return { kind: "retry-existing", email };
+      }
+      // NEW_USER (or null kind, treated as new-user).
+      if (status.failureCode === "EXISTING_ACCOUNT") {
+        return { kind: "send-existing", email };
+      }
+      // null or AUTH_DISPATCH_FAILED.
+      return { kind: "retry-new", email };
+  }
+}
+
+/** Whether a plan KIND is carried out by the existing-user (token + Resend) flow. */
+export function isExistingUserActionKind(
+  kind: OwnerActionPlan["kind"],
+): kind is "send-existing" | "resend-existing" | "retry-existing" {
+  return (
+    kind === "send-existing" || kind === "resend-existing" || kind === "retry-existing"
+  );
+}
+
+/** The three existing-user plan variants — each carries a canonical `email`. */
+export type ExistingUserActionPlan = Extract<
+  OwnerActionPlan,
+  { kind: "send-existing" | "resend-existing" | "retry-existing" }
+>;
+
+/**
+ * Whether a PLAN is an existing-user action. Unlike isExistingUserActionKind (which
+ * narrows only the kind string), this narrows the plan OBJECT, so callers can then
+ * read `plan.email` — present on every existing-user variant — without a cast.
+ */
+export function isExistingUserActionPlan(
+  plan: OwnerActionPlan,
+): plan is ExistingUserActionPlan {
+  return isExistingUserActionKind(plan.kind);
+}
+
 /** The primary action a state offers, or null when it offers none. */
 export type OwnerStatusAction = { label: string };
 
@@ -281,33 +428,40 @@ export type OwnerStatusView = {
   action: OwnerStatusAction | null;
 };
 
+/** The action-label for each plan kind. `none` carries a null action. */
+const OWNER_ACTION_LABELS: Record<Exclude<OwnerActionPlan["kind"], "none">, string> = {
+  "invite-new": "Invite Retailer Owner",
+  "resend-new": "Resend invitation",
+  "retry-new": "Retry invitation",
+  "send-existing": "Send existing-user invitation",
+  "resend-existing": "Resend invitation",
+  "retry-existing": "Retry invitation",
+};
+
 /**
- * The heading, safe description, and primary-action label for a status. DELIVERY_
- * FAILED additionally branches on the failure classification: a retryable failure
- * (AUTH_DISPATCH_FAILED or historical null) offers Retry, while the terminal codes
- * (EXISTING_ACCOUNT, FINALIZATION_FAILED) are informational and offer NO action.
- * ACTIVE offers no action in this milestone. Every string here is authored in this
- * codebase — never a provider error, id, or database term.
+ * The heading, safe description, and primary-action label for a status. Branches on
+ * state, invitation kind, and failure classification. EXISTING_ACCOUNT is no longer
+ * a dead end — it offers the existing-user invitation. FINALIZATION_FAILED and
+ * ACTIVE offer no action. Every string here is authored in this codebase — never a
+ * provider error, id, or database term.
  */
 export function buildOwnerStatusView(status: VendorRetailerOwnerStatus): OwnerStatusView {
+  const plan = classifyOwnerAction(status);
+  const action =
+    plan.kind === "none" ? null : { label: OWNER_ACTION_LABELS[plan.kind] };
+
   switch (status.state) {
     case "NONE":
       return {
         heading: "No Retailer Owner",
         description: "No owner has been invited for this Retailer yet.",
-        action: { label: "Invite Retailer Owner" },
-      };
-    case "PENDING":
-      return {
-        heading: "Invitation pending",
-        description: "An invitation is awaiting acceptance. Resending refreshes the invitation window.",
-        action: { label: "Resend invitation" },
+        action,
       };
     case "EXPIRED":
       return {
         heading: "Invitation expired",
         description: "The last invitation expired before it was accepted. You can send a new one.",
-        action: { label: "Send new invitation" },
+        action,
       };
     case "ACTIVE":
       return {
@@ -315,40 +469,53 @@ export function buildOwnerStatusView(status: VendorRetailerOwnerStatus): OwnerSt
         description: "This Retailer has an active owner.",
         action: null,
       };
+    case "PENDING":
+      if (status.invitationKind === "EXISTING_USER") {
+        return {
+          heading: "Existing-user invitation sent",
+          description:
+            "An invitation was sent to an address that already has a SalesReward account. Resending sends a new link and refreshes the window; the previous link will no longer work.",
+          action,
+        };
+      }
+      return {
+        heading: "Invitation pending",
+        description: "An invitation is awaiting acceptance. Resending refreshes the invitation window.",
+        action,
+      };
     case "DELIVERY_FAILED":
     default:
-      switch (status.failureCode) {
-        case "EXISTING_ACCOUNT":
-          return {
-            heading: "Existing account requires a different invitation flow",
-            description:
-              "This address already has an account and cannot be invited through the current development invitation flow.",
-            action: null,
-          };
-        case "FINALIZATION_FAILED":
-          return {
-            heading: "Owner setup incomplete",
-            description:
-              "The account setup did not finish. Retrying the email invitation is not available for this state.",
-            action: null,
-          };
-        case "AUTH_DISPATCH_FAILED":
-          return {
-            heading: "Invitation not sent",
-            description: "The invitation could not be sent. You can retry it to the same email address.",
-            action: { label: "Retry invitation" },
-          };
-        case null:
-        default:
-          // Historical / unclassified incomplete invitation: kept retryable so a
-          // Vendor is not stranded, and the retry records a current classification.
-          return {
-            heading: "Invitation not sent",
-            description:
-              "The invitation was not sent, and the reason is no longer available. You can retry it to the same email address.",
-            action: { label: "Retry invitation" },
-          };
+      if (status.failureCode === "FINALIZATION_FAILED") {
+        return {
+          heading: "Owner setup incomplete",
+          description:
+            "The account setup did not finish. Retrying the email invitation is not available for this state.",
+          action: null,
+        };
       }
+      if (status.invitationKind === "EXISTING_USER") {
+        // null or EXISTING_USER_EMAIL_FAILED — the Resend email did not go out.
+        return {
+          heading: "Invitation email was not sent",
+          description:
+            "The existing-user invitation email could not be sent. You can retry — a new secure link is generated each time.",
+          action,
+        };
+      }
+      if (status.failureCode === "EXISTING_ACCOUNT") {
+        return {
+          heading: "This address already has a SalesReward account",
+          description:
+            "The new-user invitation can't be used for an address that already has an account. Send an existing-user invitation instead — they sign in and accept.",
+          action,
+        };
+      }
+      // NEW_USER, null or AUTH_DISPATCH_FAILED.
+      return {
+        heading: "Invitation not sent",
+        description: "The invitation could not be sent. You can retry it to the same email address.",
+        action,
+      };
   }
 }
 

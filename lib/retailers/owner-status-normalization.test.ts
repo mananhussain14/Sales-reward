@@ -20,9 +20,12 @@ import {
   normalizeOwnerStatusResult,
   buildOwnerStatusView,
   buildInviteFormModel,
+  classifyOwnerAction,
   formatOwnerDisplayName,
   formatOwnerTimestamp,
   isDeliveryFailureRetryable,
+  isExistingUserActionKind,
+  isExistingUserActionPlan,
   planInvitationSubmit,
   resolveOwnerInvitedCode,
   resolveOwnerInvitedMessage,
@@ -43,6 +46,7 @@ function row(overrides: Record<string, unknown> = {}) {
     expires_at: null,
     accepted_at: null,
     failure_code: null,
+    invitation_kind: null,
     ...overrides,
   };
 }
@@ -58,6 +62,7 @@ function status(overrides: Partial<VendorRetailerOwnerStatus>): VendorRetailerOw
     expiresAt: null,
     acceptedAt: null,
     failureCode: null,
+    invitationKind: null,
     ...overrides,
   };
 }
@@ -112,13 +117,18 @@ describe("normalizeOwnerStatusResult — valid states", () => {
       expiresAt: "2026-07-21T09:00:00Z",
       acceptedAt: null,
       failureCode: null,
+      invitationKind: null,
     });
   });
 
   for (const code of RETAILER_OWNER_FAILURE_CODES) {
     test(`DELIVERY_FAILED + ${code} maps`, () => {
+      // EXISTING_USER_EMAIL_FAILED is an existing-user-flow code and is valid ONLY on
+      // an EXISTING_USER invitation; the new-user codes carry a null/NEW_USER kind.
+      const invitation_kind =
+        code === "EXISTING_USER_EMAIL_FAILED" ? "EXISTING_USER" : null;
       const r = normalizeOwnerStatusResult([
-        row({ owner_state: "DELIVERY_FAILED", owner_email: "f@x.com", failure_code: code }),
+        row({ owner_state: "DELIVERY_FAILED", owner_email: "f@x.com", failure_code: code, invitation_kind }),
       ]);
       assert.equal(r.status, "ok");
       assert.equal(r.status === "ok" && r.value.state, "DELIVERY_FAILED");
@@ -159,9 +169,18 @@ describe("normalizeOwnerStatusResult — fails closed", () => {
     );
   });
 
-  test("terminal DELIVERY_FAILED tolerates a missing email (informational only)", () => {
+  test("EXISTING_ACCOUNT with no email now fails (it is actionable: send-existing)", () => {
+    // EXISTING_ACCOUNT is no longer a dead end — it offers an existing-user send,
+    // which needs a recipient — so a missing email is a fault, not tolerated.
     const r = normalizeOwnerStatusResult([
       row({ owner_state: "DELIVERY_FAILED", owner_email: null, failure_code: "EXISTING_ACCOUNT" }),
+    ]);
+    assert.equal(r.status, "malformed");
+  });
+
+  test("FINALIZATION_FAILED tolerates a missing email (informational only)", () => {
+    const r = normalizeOwnerStatusResult([
+      row({ owner_state: "DELIVERY_FAILED", owner_email: null, failure_code: "FINALIZATION_FAILED" }),
     ]);
     assert.equal(r.status, "ok");
   });
@@ -186,7 +205,7 @@ describe("normalizeOwnerStatusResult — fails closed", () => {
     assert.equal(r.status, "ok");
     assert.deepEqual(
       r.status === "ok" && Object.keys(r.value).sort(),
-      ["acceptedAt", "email", "expiresAt", "failureCode", "firstName", "lastName", "sentAt", "state"],
+      ["acceptedAt", "email", "expiresAt", "failureCode", "firstName", "invitationKind", "lastName", "sentAt", "state"],
     );
   });
 });
@@ -195,10 +214,11 @@ describe("normalizeOwnerStatusResult — fails closed", () => {
 // Failure-code vocabulary — the server-only recorder passes only these codes
 // ============================================================================
 describe("RETAILER_OWNER_FAILURE_CODES", () => {
-  test("is exactly the three approved safe codes", () => {
+  test("is exactly the four approved safe codes", () => {
     assert.deepEqual([...RETAILER_OWNER_FAILURE_CODES].sort(), [
       "AUTH_DISPATCH_FAILED",
       "EXISTING_ACCOUNT",
+      "EXISTING_USER_EMAIL_FAILED",
       "FINALIZATION_FAILED",
     ]);
   });
@@ -248,11 +268,15 @@ describe("buildOwnerStatusView", () => {
   test("NONE action = Invite", () => {
     assert.equal(buildOwnerStatusView(status({ state: "NONE" })).action?.label, "Invite Retailer Owner");
   });
-  test("PENDING action = Resend", () => {
-    assert.equal(buildOwnerStatusView(status({ state: "PENDING" })).action?.label, "Resend invitation");
+  test("PENDING action = Resend (needs a recipient email)", () => {
+    assert.equal(
+      buildOwnerStatusView(status({ state: "PENDING", email: "p@x.com" })).action?.label,
+      "Resend invitation",
+    );
   });
-  test("EXPIRED action = Send new invitation", () => {
-    assert.equal(buildOwnerStatusView(status({ state: "EXPIRED" })).action?.label, "Send new invitation");
+  test("EXPIRED action = Invite Retailer Owner", () => {
+    // EXPIRED reuses the editable new-user invite form, so it carries the invite label.
+    assert.equal(buildOwnerStatusView(status({ state: "EXPIRED" })).action?.label, "Invite Retailer Owner");
   });
   test("ACTIVE has no action", () => {
     assert.equal(buildOwnerStatusView(status({ state: "ACTIVE" })).action, null);
@@ -267,9 +291,9 @@ describe("buildOwnerStatusView", () => {
     const v = buildOwnerStatusView(status({ state: "DELIVERY_FAILED", failureCode: null, email: "f@x.com" }));
     assert.equal(v.action?.label, "Retry invitation");
   });
-  test("DELIVERY_FAILED + EXISTING_ACCOUNT offers no action", () => {
+  test("DELIVERY_FAILED + EXISTING_ACCOUNT now offers the existing-user send", () => {
     const v = buildOwnerStatusView(status({ state: "DELIVERY_FAILED", failureCode: "EXISTING_ACCOUNT", email: "f@x.com" }));
-    assert.equal(v.action, null);
+    assert.equal(v.action?.label, "Send existing-user invitation");
     assert.ok(v.description.includes("already has an account"));
   });
   test("DELIVERY_FAILED + FINALIZATION_FAILED offers no action", () => {
@@ -362,5 +386,296 @@ describe("success feedback", () => {
     assert.equal(resolveOwnerInvitedMessage("constructor"), null);
     assert.equal(resolveOwnerInvitedMessage(undefined), null);
     assert.equal(resolveOwnerInvitedMessage(["sent"]), null);
+  });
+});
+
+// ============================================================================
+// invitation_kind normalization + EXISTING_USER_EMAIL_FAILED
+// ============================================================================
+describe("normalizeOwnerStatusResult — invitation_kind", () => {
+  test("EXISTING_USER_EMAIL_FAILED is an approved failure code", () => {
+    assert.ok(RETAILER_OWNER_FAILURE_CODES.includes("EXISTING_USER_EMAIL_FAILED"));
+  });
+
+  test("NEW_USER PENDING carries invitationKind NEW_USER", () => {
+    const r = normalizeOwnerStatusResult([
+      row({ owner_state: "PENDING", owner_email: "p@x.com", invitation_kind: "NEW_USER" }),
+    ]);
+    assert.equal(r.status === "ok" && r.value.invitationKind, "NEW_USER");
+  });
+
+  test("EXISTING_USER PENDING carries invitationKind EXISTING_USER", () => {
+    const r = normalizeOwnerStatusResult([
+      row({ owner_state: "PENDING", owner_email: "p@x.com", invitation_kind: "EXISTING_USER" }),
+    ]);
+    assert.equal(r.status === "ok" && r.value.invitationKind, "EXISTING_USER");
+  });
+
+  test("null invitation_kind is allowed on non-NONE states", () => {
+    const r = normalizeOwnerStatusResult([
+      row({ owner_state: "PENDING", owner_email: "p@x.com", invitation_kind: null }),
+    ]);
+    assert.equal(r.status === "ok" && r.value.invitationKind, null);
+  });
+
+  test("an unknown invitation_kind fails closed", () => {
+    const r = normalizeOwnerStatusResult([
+      row({ owner_state: "PENDING", owner_email: "p@x.com", invitation_kind: "SOMETHING" }),
+    ]);
+    assert.equal(r.status, "malformed");
+  });
+
+  test("invitation_kind on the NONE state fails closed", () => {
+    const r = normalizeOwnerStatusResult([
+      row({ owner_state: "NONE", invitation_kind: "NEW_USER" }),
+    ]);
+    assert.equal(r.status, "malformed");
+  });
+
+  test("EXISTING_USER_EMAIL_FAILED with a valid EXISTING_USER DELIVERY_FAILED normalizes", () => {
+    const r = normalizeOwnerStatusResult([
+      row({
+        owner_state: "DELIVERY_FAILED",
+        owner_email: "e@x.com",
+        failure_code: "EXISTING_USER_EMAIL_FAILED",
+        invitation_kind: "EXISTING_USER",
+      }),
+    ]);
+    assert.equal(r.status, "ok");
+    assert.equal(r.status === "ok" && r.value.failureCode, "EXISTING_USER_EMAIL_FAILED");
+    assert.equal(r.status === "ok" && r.value.invitationKind, "EXISTING_USER");
+  });
+
+  test("EXISTING_USER_EMAIL_FAILED on a NEW_USER invitation fails closed", () => {
+    const r = normalizeOwnerStatusResult([
+      row({
+        owner_state: "DELIVERY_FAILED",
+        owner_email: "e@x.com",
+        failure_code: "EXISTING_USER_EMAIL_FAILED",
+        invitation_kind: "NEW_USER",
+      }),
+    ]);
+    assert.equal(r.status, "malformed");
+  });
+});
+
+// ============================================================================
+// classifyOwnerAction — the single action source of truth
+// ============================================================================
+describe("classifyOwnerAction", () => {
+  test("ACTIVE -> none", () => {
+    assert.equal(classifyOwnerAction(status({ state: "ACTIVE" })).kind, "none");
+  });
+
+  test("NONE and EXPIRED -> invite-new", () => {
+    assert.equal(classifyOwnerAction(status({ state: "NONE" })).kind, "invite-new");
+    assert.equal(classifyOwnerAction(status({ state: "EXPIRED" })).kind, "invite-new");
+  });
+
+  test("NEW_USER PENDING -> resend-new with the canonical email", () => {
+    const plan = classifyOwnerAction(
+      status({ state: "PENDING", email: "Owner@X.com", invitationKind: "NEW_USER" }),
+    );
+    assert.equal(plan.kind, "resend-new");
+    assert.equal(plan.kind === "resend-new" && plan.email, "owner@x.com");
+  });
+
+  test("EXISTING_USER PENDING -> resend-existing", () => {
+    const plan = classifyOwnerAction(
+      status({ state: "PENDING", email: "e@x.com", invitationKind: "EXISTING_USER" }),
+    );
+    assert.equal(plan.kind, "resend-existing");
+  });
+
+  test("NEW_USER DELIVERY_FAILED EXISTING_ACCOUNT -> send-existing", () => {
+    const plan = classifyOwnerAction(
+      status({
+        state: "DELIVERY_FAILED",
+        email: "e@x.com",
+        failureCode: "EXISTING_ACCOUNT",
+        invitationKind: "NEW_USER",
+      }),
+    );
+    assert.equal(plan.kind, "send-existing");
+  });
+
+  test("NEW_USER DELIVERY_FAILED AUTH_DISPATCH_FAILED -> retry-new", () => {
+    const plan = classifyOwnerAction(
+      status({
+        state: "DELIVERY_FAILED",
+        email: "e@x.com",
+        failureCode: "AUTH_DISPATCH_FAILED",
+        invitationKind: "NEW_USER",
+      }),
+    );
+    assert.equal(plan.kind, "retry-new");
+  });
+
+  test("EXISTING_USER DELIVERY_FAILED (EXISTING_USER_EMAIL_FAILED) -> retry-existing", () => {
+    const plan = classifyOwnerAction(
+      status({
+        state: "DELIVERY_FAILED",
+        email: "e@x.com",
+        failureCode: "EXISTING_USER_EMAIL_FAILED",
+        invitationKind: "EXISTING_USER",
+      }),
+    );
+    assert.equal(plan.kind, "retry-existing");
+  });
+
+  test("FINALIZATION_FAILED -> none", () => {
+    assert.equal(
+      classifyOwnerAction(
+        status({ state: "DELIVERY_FAILED", failureCode: "FINALIZATION_FAILED" }),
+      ).kind,
+      "none",
+    );
+  });
+
+  test("a DELIVERY_FAILED with no email -> none (cannot act)", () => {
+    assert.equal(
+      classifyOwnerAction(
+        status({ state: "DELIVERY_FAILED", email: null, failureCode: "AUTH_DISPATCH_FAILED" }),
+      ).kind,
+      "none",
+    );
+  });
+});
+
+describe("isExistingUserActionKind", () => {
+  test("true for the three existing-user kinds", () => {
+    assert.ok(isExistingUserActionKind("send-existing"));
+    assert.ok(isExistingUserActionKind("resend-existing"));
+    assert.ok(isExistingUserActionKind("retry-existing"));
+  });
+  test("false for new-user kinds and none", () => {
+    for (const k of ["invite-new", "resend-new", "retry-new", "none"] as const) {
+      assert.equal(isExistingUserActionKind(k), false);
+    }
+  });
+});
+
+describe("buildOwnerStatusView — existing-user states", () => {
+  test("EXISTING_ACCOUNT offers the Send existing-user invitation action", () => {
+    const view = buildOwnerStatusView(
+      status({
+        state: "DELIVERY_FAILED",
+        email: "e@x.com",
+        failureCode: "EXISTING_ACCOUNT",
+        invitationKind: "NEW_USER",
+      }),
+    );
+    assert.equal(view.action?.label, "Send existing-user invitation");
+  });
+
+  test("EXISTING_USER PENDING offers a Resend action", () => {
+    const view = buildOwnerStatusView(
+      status({ state: "PENDING", email: "e@x.com", invitationKind: "EXISTING_USER" }),
+    );
+    assert.equal(view.action?.label, "Resend invitation");
+  });
+
+  test("EXISTING_USER DELIVERY_FAILED offers a Retry action", () => {
+    const view = buildOwnerStatusView(
+      status({
+        state: "DELIVERY_FAILED",
+        email: "e@x.com",
+        failureCode: "EXISTING_USER_EMAIL_FAILED",
+        invitationKind: "EXISTING_USER",
+      }),
+    );
+    assert.equal(view.action?.label, "Retry invitation");
+  });
+
+  test("FINALIZATION_FAILED offers no action", () => {
+    const view = buildOwnerStatusView(
+      status({ state: "DELIVERY_FAILED", failureCode: "FINALIZATION_FAILED" }),
+    );
+    assert.equal(view.action, null);
+  });
+});
+
+// ============================================================================
+// AUTHORITATIVE VENDOR UI STATE MATRIX (A–K) — one row per matrix entry.
+//
+// Pins the single source both Vendor pages derive from: for each status, the
+// classifier kind, the view action label, whether an action exists, and which flow
+// (new-user vs existing-user token+Resend) carries it out. This is the regression
+// guard that the detail card and the invite page cannot drift apart, and that the
+// existing-user rollout did not change new-user rows.
+// ============================================================================
+describe("Vendor UI state matrix (A–K)", () => {
+  type Row = {
+    id: string;
+    s: VendorRetailerOwnerStatus;
+    kind: string;
+    label: string | null; // null => no action
+    existingUserFlow: boolean;
+  };
+
+  const rows: Row[] = [
+    // A. NONE -> editable new-user invite.
+    { id: "A NONE", s: status({ state: "NONE" }), kind: "invite-new", label: "Invite Retailer Owner", existingUserFlow: false },
+    // B. EXPIRED -> editable new-user invite (reuses the invite label).
+    { id: "B EXPIRED", s: status({ state: "EXPIRED", email: "e@x.com" }), kind: "invite-new", label: "Invite Retailer Owner", existingUserFlow: false },
+    // C. NEW_USER PENDING -> locked new-user resend.
+    { id: "C NEW_USER PENDING", s: status({ state: "PENDING", email: "p@x.com", invitationKind: "NEW_USER" }), kind: "resend-new", label: "Resend invitation", existingUserFlow: false },
+    // D. NEW_USER DELIVERY_FAILED + AUTH_DISPATCH_FAILED -> locked new-user retry.
+    { id: "D NEW_USER AUTH_DISPATCH_FAILED", s: status({ state: "DELIVERY_FAILED", email: "e@x.com", failureCode: "AUTH_DISPATCH_FAILED", invitationKind: "NEW_USER" }), kind: "retry-new", label: "Retry invitation", existingUserFlow: false },
+    // E. NEW_USER DELIVERY_FAILED + historical null -> locked new-user retry.
+    { id: "E NEW_USER null-failure", s: status({ state: "DELIVERY_FAILED", email: "e@x.com", failureCode: null, invitationKind: "NEW_USER" }), kind: "retry-new", label: "Retry invitation", existingUserFlow: false },
+    // F. NEW_USER DELIVERY_FAILED + EXISTING_ACCOUNT -> existing-user SEND.
+    { id: "F EXISTING_ACCOUNT", s: status({ state: "DELIVERY_FAILED", email: "e@x.com", failureCode: "EXISTING_ACCOUNT", invitationKind: "NEW_USER" }), kind: "send-existing", label: "Send existing-user invitation", existingUserFlow: true },
+    // G. EXISTING_USER PENDING -> existing-user RESEND.
+    { id: "G EXISTING_USER PENDING", s: status({ state: "PENDING", email: "e@x.com", invitationKind: "EXISTING_USER" }), kind: "resend-existing", label: "Resend invitation", existingUserFlow: true },
+    // H. EXISTING_USER DELIVERY_FAILED + EXISTING_USER_EMAIL_FAILED -> existing-user RETRY.
+    { id: "H EXISTING_USER_EMAIL_FAILED", s: status({ state: "DELIVERY_FAILED", email: "e@x.com", failureCode: "EXISTING_USER_EMAIL_FAILED", invitationKind: "EXISTING_USER" }), kind: "retry-existing", label: "Retry invitation", existingUserFlow: true },
+    // H (null variant). EXISTING_USER DELIVERY_FAILED + null -> existing-user RETRY.
+    { id: "H EXISTING_USER null-failure", s: status({ state: "DELIVERY_FAILED", email: "e@x.com", failureCode: null, invitationKind: "EXISTING_USER" }), kind: "retry-existing", label: "Retry invitation", existingUserFlow: true },
+    // I. FINALIZATION_FAILED -> no action.
+    { id: "I FINALIZATION_FAILED", s: status({ state: "DELIVERY_FAILED", email: "e@x.com", failureCode: "FINALIZATION_FAILED", invitationKind: "NEW_USER" }), kind: "none", label: null, existingUserFlow: false },
+    // J. ACTIVE -> no action.
+    { id: "J ACTIVE", s: status({ state: "ACTIVE", email: "e@x.com" }), kind: "none", label: null, existingUserFlow: false },
+  ];
+
+  for (const row of rows) {
+    test(`${row.id}: kind=${row.kind}, label=${row.label ?? "none"}, existingUserFlow=${row.existingUserFlow}`, () => {
+      const plan = classifyOwnerAction(row.s);
+      assert.equal(plan.kind, row.kind, `${row.id} classifier kind`);
+
+      const view = buildOwnerStatusView(row.s);
+      if (row.label === null) {
+        assert.equal(view.action, null, `${row.id} must offer no action`);
+      } else {
+        assert.equal(view.action?.label, row.label, `${row.id} action label`);
+      }
+
+      assert.equal(
+        isExistingUserActionKind(plan.kind),
+        row.existingUserFlow,
+        `${row.id} must be carried by the ${row.existingUserFlow ? "existing-user" : "new-user"} flow`,
+      );
+
+      // Canonical email is locked to the RPC's own value for every action-bearing
+      // state — never a browser-chosen recipient.
+      if (isExistingUserActionPlan(plan)) {
+        assert.equal(plan.email, "e@x.com", `${row.id} recipient must be the canonical status email`);
+      }
+    });
+  }
+
+  test("K MALFORMED/UNKNOWN: an unknown state fails closed (no plan, no action)", () => {
+    const r = normalizeOwnerStatusResult([row({ owner_state: "REVOKED" })]);
+    assert.equal(r.status, "malformed");
+    // A malformed read never reaches classifyOwnerAction/buildOwnerStatusView — the
+    // server maps it to "unavailable" and the pages render a generic notice, no form.
+  });
+
+  test("existing-user recipient is canonicalized (lower/trimmed), never the raw form value", () => {
+    const plan = classifyOwnerAction(
+      status({ state: "DELIVERY_FAILED", email: "  Owner@X.COM ", failureCode: "EXISTING_ACCOUNT", invitationKind: "NEW_USER" }),
+    );
+    assert.equal(plan.kind, "send-existing");
+    assert.equal(plan.kind === "send-existing" && plan.email, "owner@x.com");
   });
 });
