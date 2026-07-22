@@ -7,9 +7,16 @@ import {
   isRetailerOwnerInvitationsEnabled,
   RETAILER_OWNER_INVITATIONS_PAUSED_MESSAGE,
 } from "@/lib/features/retailer-owner-invitations";
+import {
+  isExistingUserInvitationsEnabled,
+  EXISTING_USER_INVITATIONS_PAUSED_MESSAGE,
+} from "@/lib/features/existing-user-invitations";
 import { inviteRetailerOwner } from "@/lib/invitations/retailer-owner-invitations";
+import { sendExistingUserRetailerOwnerInvitation } from "@/lib/invitations/existing-user-invitations";
 import { getVendorRetailerOwnerStatus } from "@/lib/retailers/vendor-retailer-owner-status";
 import {
+  classifyOwnerAction,
+  isExistingUserActionKind,
   planInvitationSubmit,
   resolveOwnerInvitedCode,
 } from "@/lib/retailers/owner-status-normalization";
@@ -17,6 +24,7 @@ import type {
   InviteOwnerState,
   InviteOwnerValues,
 } from "@/app/(admin)/retailers/[relationshipId]/owner/invite/invite-owner-state";
+import type { SendExistingUserState } from "@/app/(admin)/retailers/[relationshipId]/owner/invite/existing-user-send-state";
 
 /**
  * Server Action backing the Invite Retailer Owner form.
@@ -37,11 +45,13 @@ import type {
  * organization id, Retailer organization id, actor/profile id, role id, membership
  * id, Auth user id, or status parameter.
  *
- * Because of the "use server" directive, `inviteRetailerOwnerAction` must be this
- * module's only runtime export — every export here is exposed as a callable server
- * endpoint, so Next.js rejects anything that is not an async function. The state
- * types live in ./invite-owner-state; `import type` above is erased at compile
- * time and adds no export.
+ * Because of the "use server" directive, every RUNTIME export here is exposed as a
+ * callable server endpoint, so Next.js rejects anything that is not an async
+ * function. This module has two: `inviteRetailerOwnerAction` (the NEW-USER
+ * inviteUserByEmail flow) and `sendExistingUserRetailerOwnerInvitationAction` (the
+ * EXISTING-USER application-owned-token flow). The state types live in
+ * ./invite-owner-state and ./existing-user-send-state; `import type` above is erased
+ * at compile time and adds no export.
  */
 
 /**
@@ -456,5 +466,125 @@ export async function inviteRetailerOwnerAction(
   // Outside any try/catch, and nothing follows it: redirect() throws NEXT_REDIRECT,
   // so no success state is returned or could be. Swallowing that throw would turn a
   // sent invitation into a spurious failure message — and prompt a resend.
+  redirect(`/retailers/${relationshipId}?ownerInvited=${successCode}`);
+}
+
+// ============================================================================
+// EXISTING-USER flow — application-owned token + Resend, never inviteUserByEmail
+// ============================================================================
+
+/**
+ * Shown when the existing-user invitation was prepared but the Resend email did not
+ * go out. Safe to be specific: the DB row is now EXISTING_USER DELIVERY_FAILED
+ * (EXISTING_USER_EMAIL_FAILED), the retry-existing state, so the admin returning to
+ * this page sees a Retry control. Carries no provider error, status, or address.
+ */
+const EXISTING_EMAIL_FAILED_ERROR =
+  "The invitation was prepared, but the email could not be sent. You can retry it.";
+
+/**
+ * The one-click Server Action for the EXISTING-USER Retailer Owner invitation.
+ *
+ * Unlike the new-user action, it reads NO name or email field: the recipient email
+ * and names are the authoritative server status's own canonical values, re-derived
+ * inside sendExistingUserRetailerOwnerInvitation() from the caller's token. The only
+ * thing the browser supplies is `relationshipId`, an ADDRESS — which of the caller's
+ * own Retailers — never authorization; every RPC beneath re-derives the Vendor from
+ * auth.uid(). inviteUserByEmail() is never on this path.
+ *
+ * ENFORCEMENT ORDER, all fail-closed:
+ *   1. feature flag (RETAILER_OWNER_EXISTING_USER_INVITATIONS_ENABLED) — this line,
+ *      not the hidden button, is what makes a forged POST a no-op while paused;
+ *   2. authorization (getVendorSuperAdminAccess) — defense in depth over the RPCs;
+ *   3. relationship-id shape;
+ *   4. RE-READ the authoritative owner status and permit ONLY an existing-user
+ *      action kind — a state that drifted to a new-user or terminal one is refused
+ *      here, and the reserve/prepare RPCs refuse it again beneath.
+ */
+export async function sendExistingUserRetailerOwnerInvitationAction(
+  _prevState: SendExistingUserState,
+  formData: FormData,
+): Promise<SendExistingUserState> {
+  const relationshipId = readTrimmed(formData, "relationshipId");
+
+  // 1. Feature gate FIRST — before any database read or Resend call. Its own flag,
+  //    independent of the new-user RETAILER_OWNER_INVITATIONS_ENABLED gate.
+  if (!isExistingUserInvitationsEnabled()) {
+    return { error: EXISTING_USER_INVITATIONS_PAUSED_MESSAGE };
+  }
+
+  // 2. Authorization. A Server Action is a public endpoint; the page that rendered
+  //    the button is no guarantee. Delegated to the shared function so this and the
+  //    layout cannot disagree. Redirects sit outside every try/catch (redirect()
+  //    signals by throwing NEXT_REDIRECT).
+  const access = await getVendorSuperAdminAccess();
+  if (access.status === "unauthenticated") {
+    redirect("/login");
+  }
+  if (access.status === "unauthorized") {
+    redirect("/access-denied");
+  }
+
+  // 3. A malformed relationship id can only be a tampered form; refuse generically.
+  if (!UUID_PATTERN.test(relationshipId)) {
+    return { error: GENERIC_INVITE_ERROR };
+  }
+
+  // 4. Re-resolve the authoritative status and confirm it still offers an
+  //    existing-user action. The page may be stale — the invitation could have been
+  //    accepted, expired, or converted since it loaded. This gate, plus the RPCs'
+  //    own checks, is what makes the concurrency window safe.
+  const statusResult = await getVendorRetailerOwnerStatus(relationshipId);
+  if (statusResult.status === "unavailable") {
+    return { error: STATE_CHANGED_ERROR };
+  }
+
+  const plan = classifyOwnerAction(statusResult.ownerStatus);
+  if (!isExistingUserActionKind(plan.kind)) {
+    // ACTIVE, a new-user state, or a terminal one: this action does not handle it.
+    // Generic and actionable — refresh to see the true current state.
+    return { error: STATE_CHANGED_ERROR };
+  }
+
+  // Remember the pre-dispatch state for the success banner code, exactly as the
+  // new-user action does. EXISTING_USER PENDING -> "resent"; the DELIVERY_FAILED
+  // conversion/retry states -> "sent".
+  const preDispatchState = statusResult.ownerStatus.state;
+
+  // 5. Delegate. The service returns a closed union of plain statuses — no id, email,
+  //    token, or provider detail — which this maps to this codebase's own strings.
+  const result = await sendExistingUserRetailerOwnerInvitation(relationshipId);
+
+  switch (result.status) {
+    case "sent":
+      break;
+
+    case "email-failed":
+      // Prepared but not delivered. Row is now the retry-existing state, so staying
+      // on this page shows a Retry control. Inline error, no redirect.
+      return { error: EXISTING_EMAIL_FAILED_ERROR };
+
+    case "blocked-active":
+      return { error: EXISTING_OWNER_ERROR };
+
+    case "misconfigured":
+      return { error: CONFIGURATION_ERROR };
+
+    case "blocked":
+    case "unavailable":
+    default:
+      // A state that drifted, a refused authorization, a cross-tenant id, or a
+      // database/transport outage alike. None of that may reach the browser.
+      return { error: STATE_CHANGED_ERROR };
+  }
+
+  // Success: reserved, converted to EXISTING_USER, and the app-owned link emailed.
+  // The membership is NOT active — it activates when the invitee signs in and accepts.
+  revalidatePath("/retailers");
+  revalidatePath(`/retailers/${relationshipId}`);
+
+  const successCode = resolveOwnerInvitedCode(preDispatchState);
+
+  // Outside any try/catch, nothing follows: redirect() throws NEXT_REDIRECT.
   redirect(`/retailers/${relationshipId}?ownerInvited=${successCode}`);
 }

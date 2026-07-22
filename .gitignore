@@ -32,6 +32,8 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# ...but the secret-free template IS committed, so contributors know which vars to set.
+!.env.example
 
 # vercel
 .vercel

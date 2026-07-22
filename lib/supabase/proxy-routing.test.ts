@@ -151,6 +151,67 @@ describe("decideProxyRoute — signed-out navigation to protected routes", () =>
   });
 });
 
+describe("decideProxyRoute — existing-user invitation public routes", () => {
+  const ENTER = "/invitations/existing/enter";
+  const CLEAN = "/invitations/existing";
+
+  test("E1. both new paths are in the public allow-set", () => {
+    assert.ok(PUBLIC_PATHS.has(ENTER), `${ENTER} must be public`);
+    assert.ok(PUBLIC_PATHS.has(CLEAN), `${CLEAN} must be public`);
+  });
+
+  test("E2. signed-out GET the intake route continues (it sets the cookie, no session)", () => {
+    const d = decideProxyRoute(input({ method: "GET", pathname: ENTER, hasVerifiedClaims: false }));
+    assert.equal(d.kind, "continue");
+    assert.equal(destinationOf(d), undefined);
+  });
+
+  test("E3. signed-out GET the clean acceptance page continues (so it can render the sign-in prompt)", () => {
+    // The whole point: a signed-out visitor must REACH the page — being 307'd to
+    // /login here would drop the page's ability to preserve next=/invitations/existing.
+    const d = decideProxyRoute(input({ method: "GET", pathname: CLEAN, hasVerifiedClaims: false }));
+    assert.equal(d.kind, "continue");
+    assert.equal(destinationOf(d), undefined);
+  });
+
+  test("E4. signed-out HEAD both routes continues", () => {
+    for (const pathname of [ENTER, CLEAN]) {
+      assert.equal(
+        decideProxyRoute(input({ method: "HEAD", pathname, hasVerifiedClaims: false })).kind,
+        "continue",
+      );
+    }
+  });
+
+  test("E5. authenticated GET both routes continues (the page/route handles account state)", () => {
+    for (const pathname of [ENTER, CLEAN]) {
+      assert.equal(
+        decideProxyRoute(input({ method: "GET", pathname, hasVerifiedClaims: true })).kind,
+        "continue",
+      );
+    }
+  });
+
+  test("E6. a signed-out Server Action POST to the acceptance page continues (action fails closed downstream)", () => {
+    for (const isServerAction of [true, false]) {
+      assert.equal(
+        decideProxyRoute(input({ method: "POST", pathname: CLEAN, hasVerifiedClaims: false, isServerAction })).kind,
+        "continue",
+      );
+    }
+  });
+
+  test("E7. EXACT match only — an unlisted sibling path is NOT public (still protected)", () => {
+    // Guards against ever loosening PUBLIC_PATHS into a prefix rule that would open
+    // sibling routes nobody reviewed.
+    for (const pathname of ["/invitations/existing/other", "/invitations/existingx", "/invitations"]) {
+      const d = decideProxyRoute(input({ method: "GET", pathname, hasVerifiedClaims: false }));
+      assert.equal(d.kind, "redirect", `${pathname} must not be public`);
+      assert.equal(destinationOf(d), LOGIN_PATH);
+    }
+  });
+});
+
 describe("decideProxyRoute — authenticated navigation to protected routes continues", () => {
   test("6. authenticated GET /retailer continues normally", () => {
     const d = decideProxyRoute(
