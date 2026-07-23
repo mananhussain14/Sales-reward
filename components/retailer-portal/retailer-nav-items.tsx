@@ -60,22 +60,33 @@ const RECEIPTS_ITEM: RetailerNavItem = {
   ),
 };
 
+const PRODUCTS_ITEM: RetailerNavItem = {
+  label: "Products",
+  href: "/retailer/products",
+  icon: (
+    <path d="M21 7.5l-9-5.25L3 7.5m18 0l-9 5.25m9-5.25v9l-9 5.25M3 7.5l9 5.25M3 7.5v9l9 5.25m0-9v9" />
+  ),
+};
+
 /**
  * The navigation for a given portal access kind.
  *
- *   owner      the whole portal, minus Receipts. Submitting a receipt is a Sales Staff
+ *   owner      the whole portal, minus Receipts. Products is the READ-ONLY assigned
+ *              list; managing the catalog is a Vendor capability on a different
+ *              surface entirely. Submitting a receipt is a Sales Staff
  *              act: RECEIPT_SUBMIT is mapped to SALES_STAFF alone, so an Owner would
  *              be refused by every receipt RPC. Showing them the entry would advertise
  *              a capability the database will not give them — which is exactly the
  *              "Owner navigation accidentally exposes a Sales-Staff-only action"
  *              mistake this milestone must avoid.
- *   reader     Staff only. Overview and Shops are backed by RPCs whose resolver
+ *   reader     Staff and Products. Overview and Shops are backed by RPCs whose resolver
  *              requires the RETAILER_OWNER role, so a Manager would be redirected by
  *              those pages; and Receipts is refused for the same reason as for an
  *              Owner. Linking any of them would advertise dead ends.
  *   submitter  Receipts only. A Sales Staff member holds neither RETAILER_PORTAL_READ
- *              through the owner role nor RETAILER_STAFF_READ, so the other three
- *              pages are not theirs to see.
+ *              through the owner role nor RETAILER_STAFF_READ, and no
+ *              RETAILER_PRODUCTS_READ mapping either — so Overview, Shops, Staff and
+ *              Products are all refused to them by SQL, and none is offered here.
  *
  * Which items appear is presentation, never protection: each page re-resolves its own
  * access on the server, and every RPC behind every read and write decides again in SQL.
@@ -87,7 +98,7 @@ export function retailerNavItems(
     return [RECEIPTS_ITEM];
   }
   if (kind === "reader") {
-    return [STAFF_ITEM];
+    return [STAFF_ITEM, PRODUCTS_ITEM];
   }
-  return [OVERVIEW_ITEM, SHOPS_ITEM, STAFF_ITEM];
+  return [OVERVIEW_ITEM, SHOPS_ITEM, STAFF_ITEM, PRODUCTS_ITEM];
 }

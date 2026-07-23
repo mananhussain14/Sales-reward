@@ -11,8 +11,14 @@ export type NavItem = {
 
 /**
  * Vendor Admin primary navigation.
- * "Dashboard", "Retailers", "Users", "Roles", and "Audit Logs" are active; every
- * other module is intentionally disabled so it does not open a 404 page.
+ * "Dashboard", "Retailers", "Products", "Users", "Roles", and "Audit Logs" are
+ * active; every other module is intentionally disabled so it does not open a 404
+ * page.
+ *
+ * Products was already listed here as a disabled placeholder and is simply enabled
+ * rather than replaced, so no competing entry is introduced. Whether the page then
+ * admits the caller is decided on the server and again in SQL — the nav is
+ * presentation, never protection.
  */
 export const NAV_ITEMS: NavItem[] = [
   {
@@ -50,7 +56,7 @@ export const NAV_ITEMS: NavItem[] = [
   {
     label: "Products",
     href: "/products",
-    disabled: true,
+    disabled: false,
     icon: (
       <path d="M21 7.5l-9-5.25L3 7.5m18 0l-9 5.25m9-5.25v9l-9 5.25M3 7.5l9 5.25M3 7.5v9l9 5.25m0-9v9" />
     ),
