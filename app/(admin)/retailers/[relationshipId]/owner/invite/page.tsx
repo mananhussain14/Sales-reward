@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import {
   isRetailerOwnerInvitationsEnabled,
@@ -18,6 +17,10 @@ import {
 } from "@/lib/retailers/owner-status-normalization";
 import { InviteOwnerForm } from "@/app/(admin)/retailers/[relationshipId]/owner/invite/invite-owner-form";
 import { SendExistingUserForm } from "@/app/(admin)/retailers/[relationshipId]/owner/invite/send-existing-user-form";
+import { BackLink } from "@/components/ui/page-header";
+import { cardClasses } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { MailIcon } from "@/components/ui/icons";
 
 /**
  * Static, and deliberately generic — the same reasoning as the Retailer detail
@@ -40,35 +43,13 @@ const ACTIVE_STATUS = "ACTIVE";
 
 /** Returns to the Retailer. Present in every state this page can render. */
 function BackToRetailerLink({ relationshipId }: { relationshipId: string }) {
-  return (
-    <Link
-      href={`/retailers/${relationshipId}`}
-      className="inline-flex items-center gap-1.5 rounded-sm text-sm text-zinc-500 underline-offset-4 transition-colors hover:text-indigo-600 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 dark:text-zinc-400 dark:hover:text-indigo-400 dark:focus-visible:ring-offset-zinc-950"
-    >
-      <svg
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={1.75}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        className="h-4 w-4"
-        aria-hidden="true"
-      >
-        <path d="M15.75 19.5L8.25 12l7.5-7.5" />
-      </svg>
-      Back to Retailer
-    </Link>
-  );
+  return <BackLink href={`/retailers/${relationshipId}`}>Back to Retailer</BackLink>;
 }
 
 /** Neutral panel, used for the unavailable and inactive states alike. */
 function NoticePanel({ title, body }: { title: string; body: string }) {
   return (
-    <div className="rounded-xl border border-zinc-200 bg-white px-6 py-10 text-center dark:border-zinc-800 dark:bg-zinc-950">
-      <p className="text-sm font-medium text-zinc-900 dark:text-zinc-50">{title}</p>
-      <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">{body}</p>
-    </div>
+    <EmptyState icon={<MailIcon className="h-6 w-6" />} title={title} description={body} />
   );
 }
 
@@ -157,7 +138,7 @@ export default async function InviteRetailerOwnerPage({ params }: PageProps) {
         <BackToRetailerLink relationshipId={relationshipId} />
 
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+          <h2 className="text-2xl font-semibold tracking-tight text-slate-900">
             Invite Retailer Owner
           </h2>
           {/*
@@ -259,16 +240,16 @@ export default async function InviteRetailerOwnerPage({ params }: PageProps) {
       <BackToRetailerLink relationshipId={relationshipId} />
 
       <div>
-        <h2 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+        <h2 className="text-2xl font-semibold tracking-tight text-slate-900">
           {heading.title}
         </h2>
-        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+        <p className="mt-1 text-sm text-slate-500">
           For{" "}
-          <span className="font-medium text-zinc-700 dark:text-zinc-300">
+          <span className="font-medium text-slate-700">
             {retailer.retailerName}
           </span>
           , managed by{" "}
-          <span className="font-medium text-zinc-700 dark:text-zinc-300">
+          <span className="font-medium text-slate-700">
             {organizationName}
           </span>
           . {heading.lead}
@@ -306,7 +287,7 @@ export default async function InviteRetailerOwnerPage({ params }: PageProps) {
         // canonical email (plan.email), shown read-only; the Server Action re-derives
         // it and refuses any drifted state, so a hand-crafted POST cannot substitute
         // a recipient or act on the wrong state.
-        <div className="rounded-xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
+        <div className={cardClasses("standard", "p-6")}>
           <SendExistingUserForm
             relationshipId={relationshipId}
             lockedEmail={existingPlan!.email}
@@ -328,7 +309,7 @@ export default async function InviteRetailerOwnerPage({ params }: PageProps) {
         <NoticePanel title={view!.heading} body={view!.description} />
       ) : (
         // NEW-USER flow: invite-new / resend-new / retry-new.
-        <div className="rounded-xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
+        <div className={cardClasses("standard", "p-6")}>
           <InviteOwnerForm
             relationshipId={relationshipId}
             model={buildInviteFormModel(okStatus)}

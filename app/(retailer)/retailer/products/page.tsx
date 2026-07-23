@@ -2,6 +2,11 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { getRetailerPortalAccess } from "@/lib/staff/retailer-staff-access";
 import { getRetailerAssignedProducts } from "@/lib/products/retailer-products";
+import { PageHeader } from "@/components/ui/page-header";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Alert } from "@/components/ui/alert";
+import { cardClasses } from "@/components/ui/card";
+import { ProductsIcon } from "@/components/ui/icons";
 
 export const metadata: Metadata = {
   title: "Products · Retailer Portal",
@@ -27,14 +32,13 @@ export const metadata: Metadata = {
  * Retailer's data. The RPC returns none of them.
  */
 
-const thClasses =
-  "px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400";
-const tdClasses = "px-5 py-3.5 text-sm text-zinc-600 dark:text-zinc-400";
+const thClasses = "px-4 py-3 font-semibold";
+const tdClasses = "px-4 py-3 text-slate-600";
 
 function OptionalCell({ value }: { value: string | null }) {
   if (value === null) {
     return (
-      <span className="text-zinc-400 dark:text-zinc-600" aria-label="Not recorded">
+      <span className="text-slate-400" aria-label="Not recorded">
         —
       </span>
     );
@@ -67,52 +71,41 @@ export default async function RetailerProductsPage() {
 
   return (
     <div className="mx-auto w-full max-w-5xl">
-      <header>
-        <h2 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-          Products
-        </h2>
-        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-          The products currently available to your Retailer. This list is maintained by
-          your Vendor.
-        </p>
-      </header>
+      <PageHeader
+        title="Products"
+        description="The products currently available to your Retailer. This list is maintained by your Vendor."
+      />
 
       {result.status !== "ok" ? (
-        <div
+        <Alert
+          tone="warning"
           role="alert"
-          className="mt-8 rounded-xl border border-amber-200 bg-amber-50 px-5 py-4 dark:border-amber-900/60 dark:bg-amber-950/40"
+          title="Products could not be loaded"
+          className="mt-8"
         >
-          <h3 className="text-sm font-semibold text-amber-900 dark:text-amber-200">
-            Products could not be loaded
-          </h3>
-          <p className="mt-1 text-sm text-amber-800 dark:text-amber-300">
-            Something went wrong while loading your products. Please try again in a
-            moment.
-          </p>
-        </div>
+          Something went wrong while loading your products. Please try again in a
+          moment.
+        </Alert>
       ) : result.products.length === 0 ? (
         /* Worded so it cannot be mistaken for a permission problem: the reader IS
            authorized — that is why they can see this page — their Vendor simply has not
            assigned anything yet. */
-        <div className="mt-8 rounded-xl border border-dashed border-zinc-300 bg-white px-6 py-12 text-center dark:border-zinc-700 dark:bg-zinc-950">
-          <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-            No products yet
-          </h3>
-          <p className="mx-auto mt-1 max-w-sm text-sm text-zinc-500 dark:text-zinc-400">
-            Products your Vendor assigns to your Retailer will appear here
-            automatically.
-          </p>
-        </div>
+        <EmptyState
+          className="mt-8"
+          icon={<ProductsIcon className="h-6 w-6" />}
+          title="No products yet"
+          description="Products your Vendor assigns to your Retailer will appear here automatically."
+        />
       ) : (
         <>
           {/* Desktop table. Horizontally scrollable rather than wrapping. */}
-          <div className="mt-8 hidden overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm sm:block dark:border-zinc-800 dark:bg-zinc-950">
+          <div className={cardClasses("standard", "mt-8 hidden overflow-hidden sm:block")}>
             <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-zinc-200 dark:divide-zinc-800">
+              <table className="w-full border-collapse text-left text-sm">
                 <caption className="sr-only">
                   Products assigned to your Retailer
                 </caption>
-                <thead className="bg-zinc-50 dark:bg-zinc-900/50">
+                <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                   <tr>
                     <th scope="col" className={thClasses}>
                       Code
@@ -128,23 +121,23 @@ export default async function RetailerProductsPage() {
                     </th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
+                <tbody className="divide-y divide-slate-100">
                   {/* Rendered in the RPC's own order (name, code, id). Nothing is
                       re-sorted here — a second, locale-dependent ordering could
                       disagree with the database's. Rows are not interactive: there is
                       no product-detail route for a Retailer, and this milestone gives
                       them nothing to do with a product. */}
                   {result.products.map((product) => (
-                    <tr key={product.productId}>
-                      <td className="whitespace-nowrap px-5 py-3.5 font-mono text-sm text-zinc-700 dark:text-zinc-300">
+                    <tr key={product.productId} className="transition-colors hover:bg-slate-50">
+                      <td className="whitespace-nowrap px-4 py-3 font-mono text-slate-700">
                         {product.productCode}
                       </td>
-                      <td className="px-5 py-3.5 text-sm">
-                        <span className="font-medium text-zinc-900 dark:text-zinc-100">
+                      <td className="px-4 py-3">
+                        <span className="font-medium text-slate-900">
                           {product.productName}
                         </span>
                         {product.description && (
-                          <span className="mt-0.5 block max-w-md text-xs text-zinc-500 dark:text-zinc-400">
+                          <span className="mt-0.5 block max-w-md text-xs text-slate-500">
                             {product.description}
                           </span>
                         )}
@@ -165,31 +158,22 @@ export default async function RetailerProductsPage() {
           {/* Mobile: stacked cards. */}
           <ul className="mt-8 flex flex-col gap-3 sm:hidden">
             {result.products.map((product) => (
-              <li
-                key={product.productId}
-                className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-950"
-              >
-                <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                  {product.productName}
-                </p>
-                <p className="font-mono text-xs text-zinc-500 dark:text-zinc-400">
-                  {product.productCode}
-                </p>
+              <li key={product.productId} className={cardClasses("standard", "p-4")}>
+                <p className="text-sm font-medium text-slate-900">{product.productName}</p>
+                <p className="font-mono text-xs text-slate-500">{product.productCode}</p>
                 {product.description && (
-                  <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-                    {product.description}
-                  </p>
+                  <p className="mt-2 text-xs text-slate-500">{product.description}</p>
                 )}
                 <dl className="mt-3 flex flex-col gap-1.5 text-sm">
                   <div className="flex justify-between gap-3">
-                    <dt className="text-zinc-500 dark:text-zinc-400">Brand</dt>
-                    <dd className="text-zinc-700 dark:text-zinc-300">
+                    <dt className="text-slate-500">Brand</dt>
+                    <dd className="text-slate-700">
                       <OptionalCell value={product.brand} />
                     </dd>
                   </div>
                   <div className="flex justify-between gap-3">
-                    <dt className="text-zinc-500 dark:text-zinc-400">Barcode</dt>
-                    <dd className="font-mono text-zinc-700 dark:text-zinc-300">
+                    <dt className="text-slate-500">Barcode</dt>
+                    <dd className="font-mono text-slate-700">
                       <OptionalCell value={product.barcode} />
                     </dd>
                   </div>

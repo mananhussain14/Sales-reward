@@ -43,6 +43,10 @@ const STAFF_STATE = "app/invitations/staff/accept-state.ts";
 const REGISTRATION_MODULE = "lib/staff/staff-registration.ts";
 const ACCESS_DENIED = "app/access-denied/page.tsx";
 const RETAILER_ACCESS_DENIED = "app/retailer-access-denied/page.tsx";
+// Both access-denied routes render one shared, role-neutral card; the neutral
+// wording lives there now, so the wording assertions read it while the
+// forbidden-phrase checks still cover the page + the shared card together.
+const ACCESS_DENIED_CARD = "components/ui/access-denied-card.tsx";
 
 describe("the wrong-account / account-switch screen", () => {
   const page = read(STAFF_PAGE);
@@ -311,10 +315,11 @@ describe("login next handling is unchanged and safe", () => {
 
 describe("access-denied wording is role-neutral", () => {
   test("21. the shared /access-denied page names no specific role or portal", () => {
-    const rendered = stripComments(read(ACCESS_DENIED));
-    assert.ok(rendered.includes("Access denied"), "the title changed");
+    const card = stripComments(read(ACCESS_DENIED_CARD));
+    const rendered = stripComments(read(ACCESS_DENIED)) + card;
+    assert.ok(card.includes("Access denied"), "the title changed");
     assert.ok(
-      rendered.includes("this account does not have access to this"),
+      card.includes("this account does not have access to this"),
       "missing the neutral body",
     );
     for (const phrase of ["Vendor Super Admin", "Vendor Admin · v0.1", "Retailer Owner Portal"]) {
@@ -323,9 +328,10 @@ describe("access-denied wording is role-neutral", () => {
   });
 
   test("22. the retailer access-denied page names no Retailer Owner Portal wording", () => {
-    const rendered = stripComments(read(RETAILER_ACCESS_DENIED));
+    const card = stripComments(read(ACCESS_DENIED_CARD));
+    const rendered = stripComments(read(RETAILER_ACCESS_DENIED)) + card;
     assert.ok(
-      rendered.includes("this account does not have access to this"),
+      card.includes("this account does not have access to this"),
       "missing the neutral body",
     );
     for (const phrase of ["Retailer Owner Portal", "Retailer Owner portal"]) {

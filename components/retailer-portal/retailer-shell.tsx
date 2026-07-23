@@ -5,6 +5,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { SignOutButton } from "@/components/auth/sign-out-button";
 import { retailerNavItems } from "@/components/retailer-portal/retailer-nav-items";
+import { BrandLockup } from "@/components/ui/brand";
+import { cn } from "@/components/ui/cn";
 
 /**
  * Retailer Portal application shell.
@@ -110,10 +112,10 @@ export function RetailerShell({
   const initials = getRetailerInitials(retailerName);
 
   return (
-    <div className="min-h-screen bg-zinc-50 dark:bg-zinc-900">
+    <div className="min-h-screen bg-slate-50">
       <a
         href="#main-content"
-        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-[60] focus:rounded-md focus:bg-indigo-600 focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-white"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-[60] focus:rounded-lg focus:bg-indigo-600 focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-white"
       >
         Skip to main content
       </a>
@@ -121,20 +123,13 @@ export function RetailerShell({
       {/* Sidebar: a fixed rail on lg+, a slide-in drawer below it. */}
       <aside
         id="retailer-sidebar"
-        className={`fixed inset-y-0 left-0 z-50 w-64 transform border-r border-zinc-200 bg-white transition-transform duration-200 ease-in-out lg:translate-x-0 dark:border-zinc-800 dark:bg-zinc-950 ${
-          sidebarOpen ? "translate-x-0" : "-translate-x-full"
-        }`}
+        className={cn(
+          "fixed inset-y-0 left-0 z-50 w-64 transform border-r border-slate-200 bg-white transition-transform duration-200 ease-in-out lg:translate-x-0",
+          sidebarOpen ? "translate-x-0 shadow-modal lg:shadow-none" : "-translate-x-full",
+        )}
       >
-        <div className="flex h-16 items-center gap-2.5 border-b border-zinc-200 px-5 dark:border-zinc-800">
-          <span
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-indigo-600 text-sm font-bold text-white"
-            aria-hidden="true"
-          >
-            SR
-          </span>
-          <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-            SalesReward
-          </span>
+        <div className="flex h-16 items-center border-b border-slate-100 px-5">
+          <BrandLockup context="Retailer" idSuffix="-retailer-nav" />
         </div>
 
         <nav aria-label="Retailer portal" className="px-3 py-4">
@@ -148,12 +143,20 @@ export function RetailerShell({
                     href={item.href}
                     onClick={closeSidebar}
                     aria-current={active ? "page" : undefined}
-                    className={`flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
+                    className={cn(
+                      "group relative flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500",
                       active
-                        ? "bg-indigo-50 text-indigo-700 dark:bg-indigo-950/50 dark:text-indigo-300"
-                        : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
-                    }`}
+                        ? "bg-indigo-50 text-indigo-700"
+                        : "text-slate-600 hover:bg-slate-100 hover:text-slate-900",
+                    )}
                   >
+                    <span
+                      aria-hidden="true"
+                      className={cn(
+                        "absolute left-0 top-1/2 h-6 w-1 -translate-y-1/2 rounded-r-full bg-indigo-600 transition-opacity",
+                        active ? "opacity-100" : "opacity-0",
+                      )}
+                    />
                     <svg
                       viewBox="0 0 24 24"
                       fill="none"
@@ -181,12 +184,12 @@ export function RetailerShell({
           type="button"
           aria-label="Close navigation menu"
           onClick={closeSidebar}
-          className="fixed inset-0 z-40 bg-zinc-900/50 lg:hidden"
+          className="fixed inset-0 z-40 bg-slate-900/40 backdrop-blur-[2px] lg:hidden"
         />
       )}
 
       <div className="flex min-h-screen flex-col lg:pl-64">
-        <header className="sticky top-0 z-30 flex h-16 items-center gap-4 border-b border-zinc-200 bg-white/80 px-4 backdrop-blur sm:px-6 dark:border-zinc-800 dark:bg-zinc-950/80">
+        <header className="sticky top-0 z-30 flex h-16 items-center gap-4 border-b border-slate-200 bg-white/85 px-4 backdrop-blur-md sm:px-6">
           <button
             type="button"
             onClick={() => setSidebarOpen((prev) => !prev)}
@@ -195,7 +198,7 @@ export function RetailerShell({
             }
             aria-expanded={sidebarOpen}
             aria-controls="retailer-sidebar"
-            className="inline-flex h-9 w-9 items-center justify-center rounded-md text-zinc-600 hover:bg-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 lg:hidden dark:text-zinc-300 dark:hover:bg-zinc-800"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-xl text-slate-600 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 lg:hidden"
           >
             <svg
               viewBox="0 0 24 24"
@@ -212,7 +215,7 @@ export function RetailerShell({
           </button>
 
           <div className="min-w-0 flex-1">
-            <h1 className="truncate text-base font-semibold text-zinc-900 dark:text-zinc-50">
+            <h1 className="truncate text-base font-semibold text-slate-900">
               Retailer Portal
             </h1>
           </div>
@@ -225,16 +228,16 @@ export function RetailerShell({
                 the caption still says which experience is in view. */}
             <div className="hidden min-w-0 flex-col items-end leading-tight sm:flex">
               {retailerName !== null && (
-                <span className="max-w-[12rem] truncate text-sm font-medium text-zinc-900 md:max-w-[16rem] dark:text-zinc-100">
+                <span className="max-w-[12rem] truncate text-sm font-medium text-slate-900 md:max-w-[16rem]">
                   {retailerName}
                 </span>
               )}
-              <span className="text-xs text-zinc-500 dark:text-zinc-400">
+              <span className="text-xs text-slate-500">
                 {ACCESS_CAPTIONS[accessKind]}
               </span>
             </div>
             <span
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-zinc-200 text-sm font-semibold text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 text-sm font-semibold text-white shadow-sm"
               aria-hidden="true"
             >
               {initials}
@@ -242,7 +245,7 @@ export function RetailerShell({
 
             <span
               aria-hidden="true"
-              className="hidden h-6 w-px bg-zinc-200 sm:block dark:bg-zinc-800"
+              className="hidden h-6 w-px bg-slate-200 sm:block"
             />
 
             {/* The existing shared sign-out implementation, unchanged. */}
@@ -250,7 +253,10 @@ export function RetailerShell({
           </div>
         </header>
 
-        <main id="main-content" className="flex-1 px-4 py-6 sm:px-6 lg:px-8">
+        <main
+          id="main-content"
+          className="sr-animate-fade-in flex-1 px-4 py-6 sm:px-6 lg:px-8"
+        >
           {children}
         </main>
       </div>

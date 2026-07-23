@@ -3,6 +3,8 @@
 import { useActionState } from "react";
 import { sendExistingUserRetailerOwnerInvitationAction } from "@/app/(admin)/retailers/[relationshipId]/owner/invite/actions";
 import { INITIAL_SEND_EXISTING_USER_STATE } from "@/app/(admin)/retailers/[relationshipId]/owner/invite/existing-user-send-state";
+import { Alert } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 
 /**
  * The one-click confirm form for sending an EXISTING-USER Retailer Owner invitation.
@@ -37,15 +39,7 @@ export function SendExistingUserForm({
       {/* Routing address only; re-validated and re-authorized on the server. */}
       <input type="hidden" name="relationshipId" value={relationshipId} />
 
-      {state.error && (
-        <div
-          role="alert"
-          aria-live="polite"
-          className="flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300"
-        >
-          <p>{state.error}</p>
-        </div>
-      )}
+      {state.error && <Alert tone="error">{state.error}</Alert>}
 
       {/*
         Read-only recipient. Rendered as static text, NOT an <input>, so there is
@@ -53,24 +47,20 @@ export function SendExistingUserForm({
         the address. The value is the RPC's own canonical email.
       */}
       <div className="space-y-1.5">
-        <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">Recipient</p>
-        <p className="rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300">
+        <p className="text-sm font-medium text-slate-800">Recipient</p>
+        <p className="rounded-xl border border-slate-300 bg-slate-50 px-3.5 py-2.5 text-sm text-slate-700">
           {lockedEmail}
         </p>
-        <p className="text-xs text-zinc-500 dark:text-zinc-400">
+        <p className="text-xs text-slate-500">
           This address already has a SalesReward account. They will receive a secure
           link, sign in, and accept — no new account is created. The address cannot be
           changed here.
         </p>
       </div>
 
-      <button
-        type="submit"
-        disabled={pending}
-        className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-70 dark:focus-visible:ring-offset-zinc-950"
-      >
-        {pending ? pendingLabel : submitLabel}
-      </button>
+      <Button type="submit" fullWidth loading={pending} loadingLabel={pendingLabel}>
+        {submitLabel}
+      </Button>
     </form>
   );
 }

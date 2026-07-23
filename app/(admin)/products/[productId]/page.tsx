@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { getVendorSuperAdminAccess } from "@/lib/auth/vendor-admin-access";
 import {
@@ -17,6 +16,10 @@ import {
   ProductStatusForm,
   UnassignRetailerForm,
 } from "@/app/(admin)/products/product-forms";
+import { BackLink, SectionHeader } from "@/components/ui/page-header";
+import { SectionCard } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { RetailersIcon } from "@/components/ui/icons";
 
 export const metadata: Metadata = {
   title: "Product · SalesReward Admin",
@@ -73,27 +76,18 @@ export default async function ProductDetailPage({
   const assignments = await getProductRetailerAssignments(product.productId);
 
   return (
-    <div className="mx-auto w-full max-w-4xl">
-      <nav aria-label="Breadcrumb" className="text-sm">
-        <Link
-          href="/products"
-          className="rounded-sm text-zinc-500 underline-offset-4 transition-colors hover:text-indigo-600 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:text-zinc-400 dark:hover:text-indigo-400"
-        >
-          ← Products
-        </Link>
-      </nav>
+    <div className="mx-auto w-full max-w-4xl space-y-8">
+      <BackLink href="/products">Products</BackLink>
 
-      <header className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
-          <h2 className="truncate text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+          <h2 className="truncate text-2xl font-semibold tracking-tight text-slate-900">
             {product.productName}
           </h2>
-          <p className="mt-1 font-mono text-sm text-zinc-500 dark:text-zinc-400">
-            {product.productCode}
-          </p>
+          <p className="mt-1 font-mono text-sm text-slate-500">{product.productCode}</p>
         </div>
         <div className="flex shrink-0 items-start gap-3">
-          <span className="text-xs text-zinc-500 dark:text-zinc-400">
+          <span className="text-xs text-slate-500">
             {productStatusLabel(product.status)}
           </span>
           <ProductStatusForm
@@ -107,90 +101,56 @@ export default async function ProductDetailPage({
       {/* ------------------------------------------------------------------ */}
       {/* Details                                                             */}
       {/* ------------------------------------------------------------------ */}
-      <section aria-labelledby="details-heading" className="mt-8">
-        <h3
-          id="details-heading"
-          className="text-sm font-semibold text-zinc-900 dark:text-zinc-50"
-        >
-          Details
-        </h3>
-        <div className="mt-3 rounded-xl border border-zinc-200 bg-white p-5 shadow-sm sm:p-6 dark:border-zinc-800 dark:bg-zinc-950">
-          <EditProductForm product={product} />
-        </div>
-      </section>
+      <SectionCard title="Details">
+        <EditProductForm product={product} />
+      </SectionCard>
 
       {/* ------------------------------------------------------------------ */}
       {/* Retailer assignments                                                */}
       {/* ------------------------------------------------------------------ */}
-      <section aria-labelledby="assignments-heading" className="mt-10">
-        <h3
-          id="assignments-heading"
-          className="text-sm font-semibold text-zinc-900 dark:text-zinc-50"
-        >
-          Retailer assignments
-        </h3>
-        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-          Assigned Retailers see this product while it is active. Withdrawing keeps the
-          record and can be reversed.
-        </p>
+      <section aria-label="Retailer assignments" className="space-y-3">
+        <SectionHeader
+          title="Retailer assignments"
+          description="Assigned Retailers see this product while it is active. Withdrawing keeps the record and can be reversed."
+        />
 
         {assignments.status !== "ok" ? (
-          <div
-            role="alert"
-            className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-5 py-4 dark:border-amber-900/60 dark:bg-amber-950/40"
-          >
-            <h4 className="text-sm font-semibold text-amber-900 dark:text-amber-200">
-              Assignments could not be loaded
-            </h4>
-            <p className="mt-1 text-sm text-amber-800 dark:text-amber-300">
-              Something went wrong. Please try again in a moment.
-            </p>
-          </div>
+          <EmptyState
+            icon={<RetailersIcon className="h-6 w-6" />}
+            tone="amber"
+            title="Assignments could not be loaded"
+            description="Something went wrong. Please try again in a moment."
+          />
         ) : assignments.assignments.length === 0 ? (
-          <div className="mt-3 rounded-xl border border-dashed border-zinc-300 bg-white px-6 py-10 text-center dark:border-zinc-700 dark:bg-zinc-950">
-            <h4 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-              No Retailers yet
-            </h4>
-            <p className="mx-auto mt-1 max-w-sm text-sm text-zinc-500 dark:text-zinc-400">
-              Once you onboard a Retailer, you can assign products to them here.
-            </p>
-          </div>
+          <EmptyState
+            icon={<RetailersIcon className="h-6 w-6" />}
+            title="No Retailers yet"
+            description="Once you onboard a Retailer, you can assign products to them here."
+          />
         ) : (
-          <div className="mt-3 overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-card">
             <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-zinc-200 dark:divide-zinc-800">
+              <table className="w-full border-collapse text-left text-sm">
                 <caption className="sr-only">
                   Your Retailers, and whether this product is assigned to each
                 </caption>
-                <thead className="bg-zinc-50 dark:bg-zinc-900/50">
+                <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                   <tr>
-                    <th
-                      scope="col"
-                      className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400"
-                    >
+                    <th scope="col" className="px-5 py-3 text-left font-semibold">
                       Retailer
                     </th>
-                    <th
-                      scope="col"
-                      className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400"
-                    >
+                    <th scope="col" className="px-5 py-3 text-left font-semibold">
                       Retailer status
                     </th>
-                    <th
-                      scope="col"
-                      className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400"
-                    >
+                    <th scope="col" className="px-5 py-3 text-left font-semibold">
                       This product
                     </th>
-                    <th
-                      scope="col"
-                      className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400"
-                    >
+                    <th scope="col" className="px-5 py-3 text-left font-semibold">
                       <span className="sr-only">Actions</span>
                     </th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
+                <tbody className="divide-y divide-slate-100">
                   {assignments.assignments.map((row) => {
                     const isAssigned = row.assignmentStatus === "ACTIVE";
                     // The database refuses a new assignment for an inactive product, an
@@ -201,22 +161,20 @@ export default async function ProductDetailPage({
                       canAssignToRetailer(row) && product.status === "ACTIVE";
 
                     return (
-                      <tr key={row.retailerOrganizationId}>
-                        <td className="px-5 py-3.5 text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                      <tr key={row.retailerOrganizationId} className="transition-colors hover:bg-slate-50">
+                        <td className="px-5 py-3.5 text-sm font-medium text-slate-900">
                           {row.retailerName}
                         </td>
                         <td className="whitespace-nowrap px-5 py-3.5">
                           <StatusBadge status={row.retailerStatus} />
                         </td>
-                        <td className="whitespace-nowrap px-5 py-3.5 text-sm text-zinc-600 dark:text-zinc-400">
+                        <td className="whitespace-nowrap px-5 py-3.5 text-sm text-slate-600">
                           {isAssigned ? (
-                            <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-400">
+                            <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
                               Assigned
                             </span>
                           ) : (
-                            <span className="text-zinc-400 dark:text-zinc-600">
-                              Not assigned
-                            </span>
+                            <span className="text-slate-400">Not assigned</span>
                           )}
                         </td>
                         <td className="whitespace-nowrap px-5 py-3.5">

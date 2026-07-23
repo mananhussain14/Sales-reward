@@ -8,6 +8,10 @@ import {
   buildInitialInviteOwnerState,
   type InviteOwnerField,
 } from "@/app/(admin)/retailers/[relationshipId]/owner/invite/invite-owner-state";
+import { Alert } from "@/components/ui/alert";
+import { Button, buttonClasses } from "@/components/ui/button";
+import { cardClasses } from "@/components/ui/card";
+import { FieldHint, inputClasses, Label } from "@/components/ui/field";
 
 /**
  * Invite Retailer Owner form.
@@ -25,9 +29,6 @@ import {
  * Retailer organization id, actor/profile id, role id, membership id, or Auth user
  * id anywhere in this form.
  */
-
-const INPUT_CLASS =
-  "block w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 shadow-sm outline-none transition-colors placeholder:text-zinc-400 focus-visible:border-indigo-500 focus-visible:ring-2 focus-visible:ring-indigo-500 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-500";
 
 /**
  * One labelled input with its own error region.
@@ -62,12 +63,7 @@ function Field({
 
   return (
     <div className="space-y-2">
-      <label
-        htmlFor={name}
-        className="block text-sm font-medium text-zinc-900 dark:text-zinc-100"
-      >
-        {label}
-      </label>
+      <Label htmlFor={name}>{label}</Label>
       <input
         id={name}
         name={name}
@@ -80,19 +76,15 @@ function Field({
         disabled={disabled}
         aria-invalid={error ? true : undefined}
         aria-describedby={error ? errorId : hint ? hintId : undefined}
-        className={INPUT_CLASS}
+        className={inputClasses(Boolean(error))}
       />
       {error ? (
         // role="alert" so the message is announced when it appears after submit.
-        <p id={errorId} role="alert" className="text-sm text-red-600 dark:text-red-400">
+        <p id={errorId} role="alert" className="text-sm font-medium text-red-700">
           {error}
         </p>
       ) : (
-        hint && (
-          <p id={hintId} className="text-xs text-zinc-500 dark:text-zinc-400">
-            {hint}
-          </p>
-        )
+        hint && <FieldHint id={hintId}>{hint}</FieldHint>
       )}
     </div>
   );
@@ -134,11 +126,9 @@ export function InviteOwnerForm({ relationshipId, model }: InviteOwnerFormProps)
         submitted.
       */}
       {model.previousRecipient && (
-        <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm dark:border-zinc-800 dark:bg-zinc-900/50">
-          <p className="font-medium text-zinc-700 dark:text-zinc-300">
-            Previous recipient
-          </p>
-          <p className="mt-0.5 text-zinc-600 dark:text-zinc-400">
+        <div className={cardClasses("muted", "px-4 py-3 text-sm")}>
+          <p className="font-medium text-slate-700">Previous recipient</p>
+          <p className="mt-0.5 text-slate-600">
             {model.previousRecipient.name}
             {model.previousRecipient.email ? ` · ${model.previousRecipient.email}` : ""}
           </p>
@@ -151,26 +141,9 @@ export function InviteOwnerForm({ relationshipId, model }: InviteOwnerFormProps)
         what makes the announcement fire. Matches app/login/login-form.tsx.
       */}
       {state.formError && (
-        <div
-          id="invite-owner-error"
-          role="alert"
-          aria-live="polite"
-          className="flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300"
-        >
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={1.75}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className="mt-0.5 h-4 w-4 shrink-0"
-            aria-hidden="true"
-          >
-            <path d="M12 9v3.75m0 3.75h.008M10.34 3.94l-8.02 13.5A1.5 1.5 0 003.6 19.5h16.8a1.5 1.5 0 001.28-2.06l-8.02-13.5a1.5 1.5 0 00-2.58 0z" />
-          </svg>
-          <p>{state.formError}</p>
-        </div>
+        <Alert id="invite-owner-error" tone="error">
+          {state.formError}
+        </Alert>
       )}
 
       <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
@@ -214,12 +187,7 @@ export function InviteOwnerForm({ relationshipId, model }: InviteOwnerFormProps)
         // on appearance, aria-invalid on the input, and aria-describedby pointing at
         // the error when present and the hint otherwise.
         <div className="space-y-2">
-          <label
-            htmlFor="email"
-            className="block text-sm font-medium text-zinc-900 dark:text-zinc-100"
-          >
-            Email address
-          </label>
+          <Label htmlFor="email">Email address</Label>
           <input
             id="email"
             name="email"
@@ -228,17 +196,17 @@ export function InviteOwnerForm({ relationshipId, model }: InviteOwnerFormProps)
             readOnly
             aria-invalid={state.fieldErrors.email ? true : undefined}
             aria-describedby={state.fieldErrors.email ? "email-error" : "email-hint"}
-            className={`${INPUT_CLASS} cursor-not-allowed opacity-70`}
+            className={inputClasses(Boolean(state.fieldErrors.email), "cursor-not-allowed opacity-70")}
           />
           {state.fieldErrors.email ? (
-            <p id="email-error" role="alert" className="text-sm text-red-600 dark:text-red-400">
+            <p id="email-error" role="alert" className="text-sm font-medium text-red-700">
               {state.fieldErrors.email}
             </p>
           ) : (
-            <p id="email-hint" className="text-xs text-zinc-500 dark:text-zinc-400">
+            <FieldHint id="email-hint">
               The invitation will be re-sent to this address. To invite a different
               person, wait for this invitation to expire.
-            </p>
+            </FieldHint>
           )}
         </div>
       ) : (
@@ -267,28 +235,17 @@ export function InviteOwnerForm({ relationshipId, model }: InviteOwnerFormProps)
           href={`/retailers/${relationshipId}`}
           aria-disabled={pending ? true : undefined}
           tabIndex={pending ? -1 : undefined}
-          className={`inline-flex items-center justify-center gap-2 rounded-md border border-zinc-300 bg-white px-4 py-2.5 text-sm font-semibold text-zinc-700 shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:focus-visible:ring-offset-zinc-950 ${
-            pending
-              ? "pointer-events-none cursor-not-allowed opacity-60"
-              : "hover:bg-zinc-50 dark:hover:bg-zinc-800"
-          }`}
+          className={buttonClasses(
+            { variant: "outline" },
+            pending ? "pointer-events-none cursor-not-allowed opacity-60" : undefined,
+          )}
         >
           Cancel
         </Link>
 
-        <button
-          type="submit"
-          disabled={pending}
-          className="inline-flex items-center justify-center gap-2 rounded-md bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-70 dark:focus-visible:ring-offset-zinc-950"
-        >
-          {pending && (
-            <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 animate-spin" aria-hidden="true">
-              <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth={4} className="opacity-25" />
-              <path d="M12 2a10 10 0 0110 10" stroke="currentColor" strokeWidth={4} strokeLinecap="round" />
-            </svg>
-          )}
-          {pending ? model.pendingLabel : model.submitLabel}
-        </button>
+        <Button type="submit" loading={pending} loadingLabel={model.pendingLabel}>
+          {model.submitLabel}
+        </Button>
       </div>
     </form>
   );

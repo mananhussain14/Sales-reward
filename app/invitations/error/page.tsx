@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { InvitationShell } from "@/components/ui/invitation-shell";
+import { InboxIcon } from "@/components/ui/icons";
 
 export const metadata: Metadata = {
   title: "Invitation unavailable · SalesReward",
@@ -29,54 +31,34 @@ export const metadata: Metadata = {
  */
 export default function InvitationErrorPage() {
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-zinc-50 px-4 py-12 dark:bg-zinc-900">
-      <main className="w-full max-w-sm">
-        {/* Mirrors the login page lockup so the two read as one product. */}
-        <div className="mb-8 flex flex-col items-center text-center">
-          <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-indigo-600 text-base font-bold text-white">
-            SR
-          </span>
-          <span className="mt-3 text-base font-semibold text-zinc-900 dark:text-zinc-50">
-            SalesReward
-          </span>
-        </div>
+    <InvitationShell
+      icon={<InboxIcon className="h-6 w-6" />}
+      iconTone="amber"
+      title="This invitation link cannot be used"
+      description="The link may have expired, may already have been used, or may no longer be valid. Please ask the person who invited you to send a new invitation."
+    >
+      {/*
+        No "try again" control and no link back to the callback. Retrying is
+        impossible by construction — an invitation token is single-use — so
+        offering it would only produce a second identical failure.
 
-        <div className="rounded-xl border border-zinc-200 bg-white p-6 text-center shadow-sm sm:p-8 dark:border-zinc-800 dark:bg-zinc-950">
-          <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-            This invitation link cannot be used
-          </h1>
-          <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
-            The link may have expired, may already have been used, or may no longer
-            be valid.
-          </p>
-          <p className="mt-4 text-sm text-zinc-500 dark:text-zinc-400">
-            Please ask the person who invited you to send a new invitation.
-          </p>
-        </div>
-
-        {/*
-          No "try again" control and no link back to the callback. Retrying is
-          impossible by construction — an invitation token is single-use — so
-          offering it would only produce a second identical failure.
-
-          A sign-in link IS offered, because this page has more than one kind of
-          visitor. Someone whose link expired has no password and cannot use it —
-          hence the wording below, which offers rather than instructs. But someone
-          who ALREADY completed their invitation and then re-clicked the old email
-          also lands here, and for them signing in is exactly the right next step.
-          The two are indistinguishable to this page by design, so it offers the
-          action that helps one and merely fails harmlessly for the other.
-        */}
-        <p className="mt-6 text-center text-sm text-zinc-500 dark:text-zinc-400">
-          Already set up your account?{" "}
-          <Link
-            href="/login"
-            className="rounded-sm font-medium text-indigo-600 underline-offset-4 transition-colors hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 dark:text-indigo-400 dark:focus-visible:ring-offset-zinc-900"
-          >
-            Sign in
-          </Link>
-        </p>
-      </main>
-    </div>
+        A sign-in link IS offered, because this page has more than one kind of
+        visitor. Someone whose link expired has no password and cannot use it —
+        hence the wording below, which offers rather than instructs. But someone
+        who ALREADY completed their invitation and then re-clicked the old email
+        also lands here, and for them signing in is exactly the right next step.
+        The two are indistinguishable to this page by design, so it offers the
+        action that helps one and merely fails harmlessly for the other.
+      */}
+      <p className="text-center text-sm text-slate-500">
+        Already set up your account?{" "}
+        <Link
+          href="/login"
+          className="rounded-sm font-medium text-indigo-600 underline-offset-4 transition-colors hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2"
+        >
+          Sign in
+        </Link>
+      </p>
+    </InvitationShell>
   );
 }

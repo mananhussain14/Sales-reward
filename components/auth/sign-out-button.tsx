@@ -3,6 +3,8 @@
 import { useActionState } from "react";
 import { signOut } from "@/app/auth/actions";
 import { INITIAL_SIGN_OUT_STATE } from "@/app/auth/sign-out-state";
+import { buttonClasses } from "@/components/ui/button";
+import { SignOutIcon, SpinnerIcon } from "@/components/ui/icons";
 
 /**
  * Sign-out control for the Vendor Admin.
@@ -41,8 +43,8 @@ export function SignOutButton({ variant = "header" }: SignOutButtonProps) {
   const isCard = variant === "card";
 
   const buttonClassName = isCard
-    ? "inline-flex w-full items-center justify-center gap-2 rounded-md bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-70 dark:focus-visible:ring-offset-zinc-950"
-    : "inline-flex items-center justify-center gap-2 rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 shadow-sm transition-colors hover:bg-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:focus-visible:ring-offset-zinc-950";
+    ? buttonClasses({ variant: "primary", size: "md", fullWidth: true })
+    : buttonClasses({ variant: "outline", size: "sm" });
 
   /*
     Errors are rendered in a live region so screen readers announce them. The
@@ -60,8 +62,8 @@ export function SignOutButton({ variant = "header" }: SignOutButtonProps) {
       aria-live="polite"
       className={
         isCard
-          ? "mb-4 flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-left text-sm text-red-800 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300"
-          : "absolute right-0 top-full z-40 mt-2 flex w-64 items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-left text-sm text-red-800 shadow-lg dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300"
+          ? "mb-4 flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-left text-sm text-red-800"
+          : "absolute right-0 top-full z-40 mt-2 flex w-64 items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-left text-sm text-red-800 shadow-elevated"
       }
     >
       <svg
@@ -90,28 +92,10 @@ export function SignOutButton({ variant = "header" }: SignOutButtonProps) {
         aria-describedby={state.error ? ERROR_ID : undefined}
         className={buttonClassName}
       >
-        {pending && (
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            className="h-4 w-4 animate-spin"
-            aria-hidden="true"
-          >
-            <circle
-              cx="12"
-              cy="12"
-              r="10"
-              stroke="currentColor"
-              strokeWidth={4}
-              className="opacity-25"
-            />
-            <path
-              d="M12 2a10 10 0 0110 10"
-              stroke="currentColor"
-              strokeWidth={4}
-              strokeLinecap="round"
-            />
-          </svg>
+        {pending ? (
+          <SpinnerIcon className="h-4 w-4 animate-spin" />
+        ) : (
+          <SignOutIcon className="h-4 w-4" />
         )}
         {pending ? "Signing out…" : "Sign out"}
       </button>

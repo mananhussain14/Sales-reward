@@ -1,5 +1,9 @@
 "use client";
 
+import { cardClasses } from "@/components/ui/card";
+import { buttonClasses } from "@/components/ui/button";
+import { AlertTriangleIcon } from "@/components/ui/icons";
+
 /**
  * Error boundary for the Retailer Owner Portal route group.
  *
@@ -49,30 +53,20 @@ export default function RetailerPortalError({
 }) {
   return (
     <div className="mx-auto w-full max-w-2xl py-8">
-      <div className="rounded-xl border border-zinc-200 bg-white p-6 text-center shadow-sm sm:p-8 dark:border-zinc-800 dark:bg-zinc-950">
+      <div className={cardClasses("standard", "p-6 text-center sm:p-8")}>
         <span
-          className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-400"
+          className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-50 text-amber-600"
           aria-hidden="true"
         >
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={1.75}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className="h-5 w-5"
-          >
-            <path d="M12 9v3.75m0 3.75h.008M10.34 3.94l-8.02 13.5A1.5 1.5 0 003.6 19.5h16.8a1.5 1.5 0 001.28-2.06l-8.02-13.5a1.5 1.5 0 00-2.58 0z" />
-          </svg>
+          <AlertTriangleIcon className="h-6 w-6" />
         </span>
 
-        <h2 className="mt-4 text-lg font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+        <h2 className="mt-4 text-lg font-semibold tracking-tight text-slate-900">
           Something went wrong
         </h2>
 
         {/* Generic by design — see the note above. */}
-        <p className="mx-auto mt-2 max-w-md text-sm text-zinc-500 dark:text-zinc-400">
+        <p className="mx-auto mt-2 max-w-md text-sm text-slate-500">
           We could not load your retailer portal just now. This is usually
           temporary — please try again in a moment.
         </p>
@@ -81,7 +75,7 @@ export default function RetailerPortalError({
           <button
             type="button"
             onClick={reset}
-            className="inline-flex w-full items-center justify-center rounded-md bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 sm:w-auto dark:focus-visible:ring-offset-zinc-950"
+            className={buttonClasses({ variant: "primary", fullWidth: true }, "sm:w-auto")}
           >
             Try again
           </button>
@@ -91,7 +85,7 @@ export default function RetailerPortalError({
               is the more reliable escape. */}
           <a
             href="/retailer"
-            className="inline-flex w-full items-center justify-center rounded-md border border-zinc-300 bg-white px-4 py-2.5 text-sm font-medium text-zinc-700 shadow-sm transition-colors hover:bg-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 sm:w-auto dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:focus-visible:ring-offset-zinc-950"
+            className={buttonClasses({ variant: "outline", fullWidth: true }, "sm:w-auto")}
           >
             Back to overview
           </a>

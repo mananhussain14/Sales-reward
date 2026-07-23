@@ -6,6 +6,11 @@ import {
   getVendorRetailers,
   type VendorRetailer,
 } from "@/lib/retailers/vendor-retailers";
+import { PageHeader } from "@/components/ui/page-header";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Alert } from "@/components/ui/alert";
+import { buttonClasses } from "@/components/ui/button";
+import { PlusIcon, RetailersIcon } from "@/components/ui/icons";
 
 export const metadata: Metadata = {
   title: "Retailers · SalesReward Admin",
@@ -40,7 +45,7 @@ function RetailerNameLink({ retailer }: { retailer: VendorRetailer }) {
   return (
     <Link
       href={`/retailers/${retailer.relationshipId}`}
-      className="rounded-sm font-medium text-zinc-900 underline-offset-4 transition-colors hover:text-indigo-600 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 dark:text-zinc-50 dark:hover:text-indigo-400 dark:focus-visible:ring-offset-zinc-950"
+      className="rounded-sm font-medium text-slate-900 underline-offset-4 transition-colors hover:text-indigo-600 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 dark:text-slate-50 dark:hover:text-indigo-400 dark:focus-visible:ring-offset-slate-950"
     >
       {retailer.retailerName}
     </Link>
@@ -50,27 +55,27 @@ function RetailerNameLink({ retailer }: { retailer: VendorRetailer }) {
 /** Wide-screen presentation. Hidden below `md`, where the cards take over. */
 function RetailerTable({ retailers }: { retailers: VendorRetailer[] }) {
   return (
-    <div className="hidden overflow-hidden rounded-xl border border-zinc-200 md:block dark:border-zinc-800">
+    <div className="hidden overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-card md:block">
       <table className="w-full border-collapse text-left text-sm">
-        <thead className="bg-zinc-50 dark:bg-zinc-900">
+        <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
           <tr>
-            <th scope="col" className="px-4 py-3 font-medium text-zinc-500 dark:text-zinc-400">
+            <th scope="col" className="px-4 py-3 font-semibold">
               Retailer
             </th>
-            <th scope="col" className="px-4 py-3 font-medium text-zinc-500 dark:text-zinc-400">
+            <th scope="col" className="px-4 py-3 font-semibold">
               Retailer status
             </th>
-            <th scope="col" className="px-4 py-3 font-medium text-zinc-500 dark:text-zinc-400">
+            <th scope="col" className="px-4 py-3 font-semibold">
               Relationship
             </th>
-            <th scope="col" className="px-4 py-3 font-medium text-zinc-500 dark:text-zinc-400">
+            <th scope="col" className="px-4 py-3 font-semibold">
               Shops
             </th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-zinc-200 bg-white dark:divide-zinc-800 dark:bg-zinc-950">
+        <tbody className="divide-y divide-slate-100">
           {retailers.map((retailer) => (
-            <tr key={retailer.relationshipId}>
+            <tr key={retailer.relationshipId} className="transition-colors hover:bg-slate-50">
               <td className="px-4 py-3">
                 <RetailerNameLink retailer={retailer} />
               </td>
@@ -80,7 +85,7 @@ function RetailerTable({ retailers }: { retailers: VendorRetailer[] }) {
               <td className="px-4 py-3">
                 <StatusBadge status={retailer.relationshipStatus} />
               </td>
-              <td className="px-4 py-3 text-zinc-600 dark:text-zinc-300">
+              <td className="px-4 py-3 text-slate-600">
                 <ShopCount shopCount={retailer.shopCount} />
               </td>
             </tr>
@@ -107,26 +112,26 @@ function RetailerCards({ retailers }: { retailers: VendorRetailer[] }) {
       {retailers.map((retailer) => (
         <li
           key={retailer.relationshipId}
-          className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950"
+          className="rounded-2xl border border-slate-200 bg-white p-4 shadow-card"
         >
           <p>
             <RetailerNameLink retailer={retailer} />
           </p>
           <dl className="mt-2 space-y-2">
             <div className="flex items-center gap-2">
-              <dt className="text-xs text-zinc-500 dark:text-zinc-400">Retailer</dt>
+              <dt className="text-xs text-slate-500">Retailer</dt>
               <dd>
                 <StatusBadge status={retailer.retailerStatus} />
               </dd>
             </div>
             <div className="flex items-center gap-2">
-              <dt className="text-xs text-zinc-500 dark:text-zinc-400">Relationship</dt>
+              <dt className="text-xs text-slate-500">Relationship</dt>
               <dd>
                 <StatusBadge status={retailer.relationshipStatus} />
               </dd>
             </div>
           </dl>
-          <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-300">
+          <p className="mt-2 text-sm text-slate-600">
             <ShopCount shopCount={retailer.shopCount} />
           </p>
         </li>
@@ -150,34 +155,9 @@ function RetailerCards({ retailers }: { retailers: VendorRetailer[] }) {
  */
 function CreatedBanner() {
   return (
-    <div
-      role="status"
-      className="flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-300"
-    >
-      <svg
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={1.75}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        className="mt-0.5 h-4 w-4 shrink-0"
-        aria-hidden="true"
-      >
-        <path d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-      </svg>
-      <p>Retailer created successfully.</p>
-    </div>
-  );
-}
-
-/** Neutral panel used for both the empty and the unavailable states. */
-function NoticePanel({ title, body }: { title: string; body: string }) {
-  return (
-    <div className="rounded-xl border border-zinc-200 bg-white px-6 py-10 text-center dark:border-zinc-800 dark:bg-zinc-950">
-      <p className="text-sm font-medium text-zinc-900 dark:text-zinc-50">{title}</p>
-      <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">{body}</p>
-    </div>
+    <Alert tone="success" role="status">
+      Retailer created successfully.
+    </Alert>
   );
 }
 
@@ -227,44 +207,29 @@ export default async function RetailersPage({
         also after both redirects above, so it can never render for a caller who
         is not an authorized Vendor Super Admin.
       */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h2 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-            Retailers
-          </h2>
-          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+      {/*
+        A plain link, not a Client Component: navigating to the form needs no
+        client state. The form on the other side is where interactivity begins.
+        It is placed here, outside the three body states below, so it is present
+        whether the directory lists Retailers, is empty, or could not be loaded.
+      */}
+      <PageHeader
+        title="Retailers"
+        description={
+          <>
             Retailer organizations managed by{" "}
-            <span className="font-medium text-zinc-700 dark:text-zinc-300">
-              {organizationName}
-            </span>
+            <span className="font-medium text-slate-700">{organizationName}</span>
             , with each Retailer&apos;s own state, the state of its relationship
             with this Vendor, and how many shops it has on record.
-          </p>
-        </div>
-
-        {/*
-          A plain link, not a Client Component: navigating to the form needs no
-          client state. The form on the other side is where interactivity begins.
-        */}
-        <Link
-          href="/retailers/new"
-          className="inline-flex shrink-0 items-center justify-center gap-2 rounded-md bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-zinc-950"
-        >
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={1.75}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className="h-4 w-4"
-            aria-hidden="true"
-          >
-            <path d="M12 4.5v15m7.5-7.5h-15" />
-          </svg>
-          Add Retailer
-        </Link>
-      </div>
+          </>
+        }
+        actions={
+          <Link href="/retailers/new" className={buttonClasses({ variant: "primary" })}>
+            <PlusIcon className="h-4 w-4" />
+            Add Retailer
+          </Link>
+        }
+      />
 
       {justCreated && <CreatedBanner />}
 
@@ -272,14 +237,23 @@ export default async function RetailersPage({
         // Deliberately generic and reason-free: the only cause is a database
         // failure, whose detail must never reach a browser. Distinct from the
         // empty state below — unknown is not the same as none.
-        <NoticePanel
+        <EmptyState
+          icon={<RetailersIcon className="h-6 w-6" />}
           title="Directory unavailable"
-          body="The Retailer directory could not be loaded. Please try again shortly."
+          description="The Retailer directory could not be loaded. Please try again shortly."
         />
       ) : retailers.length === 0 ? (
-        <NoticePanel
+        <EmptyState
+          icon={<RetailersIcon className="h-6 w-6" />}
+          tone="indigo"
           title="No Retailers yet"
-          body="This Vendor has no Retailer organizations on record."
+          description="This Vendor has no Retailer organizations on record."
+          action={
+            <Link href="/retailers/new" className={buttonClasses({ variant: "primary" })}>
+              <PlusIcon className="h-4 w-4" />
+              Add Retailer
+            </Link>
+          }
         />
       ) : (
         <section aria-label="Vendor-managed Retailers">

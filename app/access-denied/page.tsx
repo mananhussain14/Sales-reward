@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { getVendorSuperAdminAccess } from "@/lib/auth/vendor-admin-access";
-import { SignOutButton } from "@/components/auth/sign-out-button";
+import { AccessDeniedCard } from "@/components/ui/access-denied-card";
 
 export const metadata: Metadata = {
   title: "Access denied · SalesReward",
@@ -49,60 +49,5 @@ export default async function AccessDeniedPage() {
     redirect("/");
   }
 
-  return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-zinc-50 px-4 py-12 dark:bg-zinc-900">
-      <main className="w-full max-w-sm">
-        {/* Branding — mirrors the login lockup so the two pages read as one product. */}
-        <div className="mb-8 flex flex-col items-center text-center">
-          <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-indigo-600 text-base font-bold text-white">
-            SR
-          </span>
-          <span className="mt-3 text-base font-semibold text-zinc-900 dark:text-zinc-50">
-            SalesReward
-          </span>
-        </div>
-
-        <div className="rounded-xl border border-zinc-200 bg-white p-6 shadow-sm sm:p-8 dark:border-zinc-800 dark:bg-zinc-950">
-          <div className="flex flex-col items-center text-center">
-            <span
-              className="flex h-11 w-11 items-center justify-center rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-400"
-              aria-hidden="true"
-            >
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={1.75}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                className="h-5 w-5"
-              >
-                <path d="M12 9v3.75m0 3.75h.008M10.34 3.94l-8.02 13.5A1.5 1.5 0 003.6 19.5h16.8a1.5 1.5 0 001.28-2.06l-8.02-13.5a1.5 1.5 0 00-2.58 0z" />
-              </svg>
-            </span>
-
-            <h1 className="mt-4 text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-              Access denied
-            </h1>
-
-            <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
-              You are signed in, but this account does not have access to this
-              page.
-            </p>
-
-            <p className="mt-3 text-sm text-zinc-500 dark:text-zinc-400">
-              Use the navigation available to your account, or sign in with a
-              different account.
-            </p>
-
-            {/* Lets the user sign out and return to /login with another account. */}
-            <div className="mt-6 w-full">
-              <SignOutButton variant="card" />
-            </div>
-          </div>
-        </div>
-
-      </main>
-    </div>
-  );
+  return <AccessDeniedCard />;
 }

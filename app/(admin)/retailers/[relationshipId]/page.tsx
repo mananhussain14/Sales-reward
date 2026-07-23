@@ -19,6 +19,12 @@ import {
   resolveOwnerInvitedMessage,
   type VendorRetailerOwnerStatus,
 } from "@/lib/retailers/owner-status-normalization";
+import { BackLink } from "@/components/ui/page-header";
+import { cardClasses } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Alert } from "@/components/ui/alert";
+import { buttonClasses } from "@/components/ui/button";
+import { PlusIcon, RetailersIcon, ShopIcon, UsersIcon } from "@/components/ui/icons";
 
 /**
  * Static, and deliberately generic. Naming the Retailer in the title would mean
@@ -52,7 +58,7 @@ const ACTIVE_STATUS = "ACTIVE";
  */
 function NotRecorded() {
   return (
-    <span className="text-zinc-400 dark:text-zinc-500">
+    <span className="text-slate-400">
       <span aria-hidden="true">—</span>
       <span className="sr-only">Not recorded</span>
     </span>
@@ -62,30 +68,6 @@ function NotRecorded() {
 /** Renders a nullable stored string, falling back to the absent marker. */
 function OptionalValue({ value }: { value: string | null }) {
   return value === null ? <NotRecorded /> : <>{value}</>;
-}
-
-/** Returns to the directory. Present in every state this page can render. */
-function BackToRetailersLink() {
-  return (
-    <Link
-      href="/retailers"
-      className="inline-flex items-center gap-1.5 rounded-sm text-sm text-zinc-500 underline-offset-4 transition-colors hover:text-indigo-600 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 dark:text-zinc-400 dark:hover:text-indigo-400 dark:focus-visible:ring-offset-zinc-950"
-    >
-      <svg
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={1.75}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        className="h-4 w-4"
-        aria-hidden="true"
-      >
-        <path d="M15.75 19.5L8.25 12l7.5-7.5" />
-      </svg>
-      Back to Retailers
-    </Link>
-  );
 }
 
 /** One labelled fact in the summary list. */
@@ -98,8 +80,8 @@ function SummaryItem({
 }) {
   return (
     <div>
-      <dt className="text-xs font-medium text-zinc-500 dark:text-zinc-400">{label}</dt>
-      <dd className="mt-1 text-sm text-zinc-900 dark:text-zinc-50">{children}</dd>
+      <dt className="text-xs font-medium text-slate-500">{label}</dt>
+      <dd className="mt-1 text-sm text-slate-900">{children}</dd>
     </div>
   );
 }
@@ -114,10 +96,7 @@ function SummaryItem({
  */
 function RetailerSummary({ retailer }: { retailer: VendorRetailerDetail }) {
   return (
-    <section
-      aria-label="Retailer summary"
-      className="rounded-xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950"
-    >
+    <section aria-label="Retailer summary" className={cardClasses("standard", "p-6")}>
       <dl className="grid grid-cols-1 gap-x-6 gap-y-5 sm:grid-cols-2 lg:grid-cols-4">
         <SummaryItem label="Retailer status">
           <StatusBadge status={retailer.retailerStatus} />
@@ -139,28 +118,28 @@ function RetailerSummary({ retailer }: { retailer: VendorRetailerDetail }) {
 /** Wide-screen shop presentation. Hidden below `md`, where the cards take over. */
 function ShopTable({ shops }: { shops: VendorRetailerShopDetail[] }) {
   return (
-    <div className="hidden overflow-hidden rounded-xl border border-zinc-200 md:block dark:border-zinc-800">
+    <div className="hidden overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-card md:block">
       <table className="w-full border-collapse text-left text-sm">
-        <thead className="bg-zinc-50 dark:bg-zinc-900">
+        <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
           <tr>
-            <th scope="col" className="px-4 py-3 font-medium text-zinc-500 dark:text-zinc-400">
+            <th scope="col" className="px-4 py-3 font-semibold">
               Shop
             </th>
-            <th scope="col" className="px-4 py-3 font-medium text-zinc-500 dark:text-zinc-400">
+            <th scope="col" className="px-4 py-3 font-semibold">
               Code
             </th>
-            <th scope="col" className="px-4 py-3 font-medium text-zinc-500 dark:text-zinc-400">
+            <th scope="col" className="px-4 py-3 font-semibold">
               City
             </th>
-            <th scope="col" className="px-4 py-3 font-medium text-zinc-500 dark:text-zinc-400">
+            <th scope="col" className="px-4 py-3 font-semibold">
               Country
             </th>
-            <th scope="col" className="px-4 py-3 font-medium text-zinc-500 dark:text-zinc-400">
+            <th scope="col" className="px-4 py-3 font-semibold">
               Status
             </th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-zinc-200 bg-white dark:divide-zinc-800 dark:bg-zinc-950">
+        <tbody className="divide-y divide-slate-100">
           {shops.map((shop, index) => (
             // The shop payload deliberately carries no id, and two shops may
             // legitimately share every visible field — name, code, city, country,
@@ -170,17 +149,15 @@ function ShopTable({ shops }: { shops: VendorRetailerShopDetail[] }) {
             // relationship ids arrived: this list is server-rendered once, in the
             // loader's fixed alphabetical order, and is never reordered,
             // filtered, paginated, or mutated on the client.
-            <tr key={index}>
-              <td className="px-4 py-3 font-medium text-zinc-900 dark:text-zinc-50">
-                {shop.name}
-              </td>
-              <td className="px-4 py-3 text-zinc-600 dark:text-zinc-300">
+            <tr key={index} className="transition-colors hover:bg-slate-50">
+              <td className="px-4 py-3 font-medium text-slate-900">{shop.name}</td>
+              <td className="px-4 py-3 text-slate-600">
                 <OptionalValue value={shop.code} />
               </td>
-              <td className="px-4 py-3 text-zinc-600 dark:text-zinc-300">
+              <td className="px-4 py-3 text-slate-600">
                 <OptionalValue value={shop.city} />
               </td>
-              <td className="px-4 py-3 text-zinc-600 dark:text-zinc-300">
+              <td className="px-4 py-3 text-slate-600">
                 <OptionalValue value={shop.countryCode} />
               </td>
               <td className="px-4 py-3">
@@ -207,30 +184,27 @@ function ShopCards({ shops }: { shops: VendorRetailerShopDetail[] }) {
         // Index key for the same reason as the table above: the payload has no
         // id, the visible fields are not guaranteed unique, and the order is
         // fixed and server-rendered.
-        <li
-          key={index}
-          className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950"
-        >
+        <li key={index} className={cardClasses("standard", "p-4")}>
           <div className="flex items-start justify-between gap-3">
-            <p className="font-medium text-zinc-900 dark:text-zinc-50">{shop.name}</p>
+            <p className="font-medium text-slate-900">{shop.name}</p>
             <StatusBadge status={shop.status} />
           </div>
           <dl className="mt-3 space-y-1.5 text-sm">
             <div className="flex gap-2">
-              <dt className="text-zinc-500 dark:text-zinc-400">Code</dt>
-              <dd className="text-zinc-700 dark:text-zinc-300">
+              <dt className="text-slate-500">Code</dt>
+              <dd className="text-slate-700">
                 <OptionalValue value={shop.code} />
               </dd>
             </div>
             <div className="flex gap-2">
-              <dt className="text-zinc-500 dark:text-zinc-400">City</dt>
-              <dd className="text-zinc-700 dark:text-zinc-300">
+              <dt className="text-slate-500">City</dt>
+              <dd className="text-slate-700">
                 <OptionalValue value={shop.city} />
               </dd>
             </div>
             <div className="flex gap-2">
-              <dt className="text-zinc-500 dark:text-zinc-400">Country</dt>
-              <dd className="text-zinc-700 dark:text-zinc-300">
+              <dt className="text-slate-500">Country</dt>
+              <dd className="text-slate-700">
                 <OptionalValue value={shop.countryCode} />
               </dd>
             </div>
@@ -250,20 +224,20 @@ function ShopCards({ shops }: { shops: VendorRetailerShopDetail[] }) {
  * than repeating it beside the heading.
  */
 function NoticePanel({
+  icon,
   title,
   body,
+  tone,
   action,
 }: {
+  icon: React.ReactNode;
   title: string;
   body: string;
+  tone?: "slate" | "indigo" | "emerald" | "amber";
   action?: React.ReactNode;
 }) {
   return (
-    <div className="rounded-xl border border-zinc-200 bg-white px-6 py-10 text-center dark:border-zinc-800 dark:bg-zinc-950">
-      <p className="text-sm font-medium text-zinc-900 dark:text-zinc-50">{title}</p>
-      <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">{body}</p>
-      {action && <div className="mt-4 flex justify-center">{action}</div>}
-    </div>
+    <EmptyState icon={icon} title={title} description={body} tone={tone} action={action} />
   );
 }
 
@@ -283,24 +257,9 @@ function NoticePanel({
  */
 function ShopCreatedBanner() {
   return (
-    <div
-      role="status"
-      className="flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-300"
-    >
-      <svg
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={1.75}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        className="mt-0.5 h-4 w-4 shrink-0"
-        aria-hidden="true"
-      >
-        <path d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-      </svg>
-      <p>Shop added successfully.</p>
-    </div>
+    <Alert tone="success" role="status">
+      Shop added successfully.
+    </Alert>
   );
 }
 
@@ -328,24 +287,9 @@ function ShopCreatedBanner() {
  */
 function OwnerInvitedBanner({ message }: { message: string }) {
   return (
-    <div
-      role="status"
-      className="flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-300"
-    >
-      <svg
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={1.75}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        className="mt-0.5 h-4 w-4 shrink-0"
-        aria-hidden="true"
-      >
-        <path d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-      </svg>
-      <p>{message}</p>
-    </div>
+    <Alert tone="success" role="status">
+      {message}
+    </Alert>
   );
 }
 
@@ -386,7 +330,7 @@ function OwnerActionLink({
   return (
     <Link
       href={`/retailers/${relationshipId}/owner/invite`}
-      className="inline-flex shrink-0 items-center justify-center gap-2 rounded-md border border-zinc-300 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 shadow-sm transition-colors hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:focus-visible:ring-offset-zinc-950"
+      className={buttonClasses({ variant: "outline" }, "shrink-0")}
     >
       <InviteOwnerIcon />
       {label}
@@ -409,7 +353,10 @@ function OwnerActionPaused() {
   return (
     <span
       aria-disabled="true"
-      className="inline-flex shrink-0 cursor-not-allowed items-center justify-center gap-2 rounded-md border border-dashed border-zinc-300 bg-zinc-50 px-4 py-2 text-sm font-semibold text-zinc-400 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-500"
+      className={buttonClasses(
+        { variant: "outline" },
+        "shrink-0 cursor-not-allowed border-dashed bg-slate-50 text-slate-400 hover:bg-slate-50 hover:text-slate-400",
+      )}
     >
       <InviteOwnerIcon />
       Owner invitations paused
@@ -422,8 +369,8 @@ function OwnerDetail({ label, value }: { label: string; value: string | null }) 
   if (value === null) return null;
   return (
     <div>
-      <dt className="text-xs font-medium text-zinc-500 dark:text-zinc-400">{label}</dt>
-      <dd className="mt-0.5 text-sm text-zinc-900 dark:text-zinc-50">{value}</dd>
+      <dt className="text-xs font-medium text-slate-500">{label}</dt>
+      <dd className="mt-0.5 text-sm text-slate-900">{value}</dd>
     </div>
   );
 }
@@ -457,10 +404,7 @@ function OwnerManagementCard({
 }) {
   return (
     <section aria-labelledby="owner-heading" className="space-y-3">
-      <h3
-        id="owner-heading"
-        className="text-lg font-semibold tracking-tight text-zinc-900 dark:text-zinc-50"
-      >
+      <h3 id="owner-heading" className="text-lg font-semibold tracking-tight text-slate-900">
         Retailer Owner
       </h3>
 
@@ -468,14 +412,11 @@ function OwnerManagementCard({
         // Fail closed: a read that could not complete is NOT NONE. Generic and
         // reason-free — the only cause is a database or network failure, whose
         // detail must never reach a browser.
-        <div className="rounded-xl border border-zinc-200 bg-white px-6 py-8 text-center dark:border-zinc-800 dark:bg-zinc-950">
-          <p className="text-sm font-medium text-zinc-900 dark:text-zinc-50">
-            Owner status unavailable
-          </p>
-          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-            The Retailer Owner status is temporarily unavailable. Please try again.
-          </p>
-        </div>
+        <EmptyState
+          icon={<UsersIcon className="h-6 w-6" />}
+          title="Owner status unavailable"
+          description="The Retailer Owner status is temporarily unavailable. Please try again."
+        />
       ) : (
         <OwnerManagementBody
           ownerStatus={ownerStatusResult.ownerStatus}
@@ -532,15 +473,11 @@ function OwnerManagementBody({
   const showAcceptedAt = ownerStatus.state === "ACTIVE";
 
   return (
-    <div className="rounded-xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
+    <div className={cardClasses("standard", "p-6")}>
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-            {view.heading}
-          </p>
-          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-            {view.description}
-          </p>
+          <p className="text-sm font-semibold text-slate-900">{view.heading}</p>
+          <p className="mt-1 text-sm text-slate-500">{view.description}</p>
         </div>
 
         {/*
@@ -605,28 +542,12 @@ function AddShopLink({
   relationshipId: string;
   emphasis: "primary" | "secondary";
 }) {
-  const base =
-    "inline-flex shrink-0 items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-semibold shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-zinc-950";
-
-  const variant =
-    emphasis === "primary"
-      ? "bg-indigo-600 text-white hover:bg-indigo-500"
-      : "border border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800";
-
   return (
-    <Link href={`/retailers/${relationshipId}/shops/new`} className={`${base} ${variant}`}>
-      <svg
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={1.75}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        className="h-4 w-4"
-        aria-hidden="true"
-      >
-        <path d="M12 4.5v15m7.5-7.5h-15" />
-      </svg>
+    <Link
+      href={`/retailers/${relationshipId}/shops/new`}
+      className={buttonClasses({ variant: emphasis === "primary" ? "primary" : "outline" }, "shrink-0")}
+    >
+      <PlusIcon className="h-4 w-4" />
       Add Shop
     </Link>
   );
@@ -677,21 +598,20 @@ export default async function RetailerDetailPage({
   if (detail.status === "unavailable") {
     return (
       <div className="mx-auto max-w-6xl space-y-6">
-        <BackToRetailersLink />
+        <BackLink href="/retailers">Back to Retailers</BackLink>
         {/*
           Deliberately generic and reason-free: the only cause is a database or
           network failure, whose detail must never reach a browser. No query,
           table, policy, identifier, or error text appears here.
         */}
         <NoticePanel
+          icon={<RetailersIcon className="h-6 w-6" />}
           title="Retailer unavailable"
           body="Retailer details are temporarily unavailable. Please try again."
         />
-        <p className="text-center text-sm text-zinc-500 dark:text-zinc-400">
+        <p className="text-center text-sm text-slate-500">
           Signed in to{" "}
-          <span className="font-medium text-zinc-700 dark:text-zinc-300">
-            {detail.organizationName}
-          </span>
+          <span className="font-medium text-slate-700">{detail.organizationName}</span>
         </p>
       </div>
     );
@@ -747,22 +667,18 @@ export default async function RetailerDetailPage({
 
   return (
     <div className="mx-auto max-w-6xl space-y-6">
-      <BackToRetailersLink />
+      <BackLink href="/retailers">Back to Retailers</BackLink>
 
       {justCreatedShop && <ShopCreatedBanner />}
       {ownerInvitedMessage && <OwnerInvitedBanner message={ownerInvitedMessage} />}
 
       <div className="flex flex-col gap-4">
-        <h2 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+        <h2 className="text-2xl font-semibold tracking-tight text-slate-900">
           {retailer.retailerName}
         </h2>
-        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+        <p className="mt-1.5 max-w-2xl text-sm text-slate-500">
           A read-only view of this Retailer organization and its shops, as managed
-          by{" "}
-          <span className="font-medium text-zinc-700 dark:text-zinc-300">
-            {organizationName}
-          </span>
-          .
+          by <span className="font-medium text-slate-700">{organizationName}</span>.
         </p>
       </div>
 
@@ -785,10 +701,7 @@ export default async function RetailerDetailPage({
 
       <section aria-labelledby="shops-heading" className="space-y-3">
         <div className="flex items-center justify-between gap-4">
-          <h3
-            id="shops-heading"
-            className="text-lg font-semibold tracking-tight text-zinc-900 dark:text-zinc-50"
-          >
+          <h3 id="shops-heading" className="text-lg font-semibold tracking-tight text-slate-900">
             Shops
           </h3>
 
@@ -806,6 +719,8 @@ export default async function RetailerDetailPage({
           // one: a Retailer with no shops yet is an ordinary, expected state, and
           // this is a different claim from "we could not load the shops".
           <NoticePanel
+            icon={<ShopIcon className="h-6 w-6" />}
+            tone="indigo"
             title="No shops yet"
             body="This Retailer has no shops recorded."
             action={

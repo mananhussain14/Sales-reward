@@ -6,32 +6,22 @@ import {
   type VendorPermissionSummary,
   type VendorRoleSummary,
 } from "@/lib/rbac/vendor-rbac-catalog";
+import { PageHeader } from "@/components/ui/page-header";
+import { EmptyState } from "@/components/ui/empty-state";
+import { cardClasses } from "@/components/ui/card";
+import { KeyIcon, RolesIcon } from "@/components/ui/icons";
 
 export const metadata: Metadata = {
   title: "Roles & Permissions · SalesReward Admin",
 };
 
-/** Neutral panel used for both the empty and the unavailable states. */
-function NoticePanel({ title, body }: { title: string; body: string }) {
-  return (
-    <div className="rounded-xl border border-zinc-200 bg-white px-6 py-10 text-center dark:border-zinc-800 dark:bg-zinc-950">
-      <p className="text-sm font-medium text-zinc-900 dark:text-zinc-50">{title}</p>
-      <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">{body}</p>
-    </div>
-  );
-}
-
 /** A permission's name over its description. Shared by both sections. */
 function PermissionLine({ permission }: { permission: VendorPermissionSummary }) {
   return (
     <>
-      <p className="text-sm font-medium text-zinc-900 dark:text-zinc-50">
-        {permission.name}
-      </p>
+      <p className="text-sm font-medium text-slate-900">{permission.name}</p>
       {permission.description !== null && (
-        <p className="mt-0.5 text-sm text-zinc-500 dark:text-zinc-400">
-          {permission.description}
-        </p>
+        <p className="mt-0.5 text-sm text-slate-500">{permission.description}</p>
       )}
     </>
   );
@@ -44,29 +34,23 @@ function PermissionLine({ permission }: { permission: VendorPermissionSummary })
  */
 function RoleCard({ role }: { role: VendorRoleSummary }) {
   return (
-    <li className="rounded-xl border border-zinc-200 bg-white p-4 sm:p-5 dark:border-zinc-800 dark:bg-zinc-950">
+    <li className={cardClasses("standard", "p-4 sm:p-5")}>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-50">
-          {role.name}
-        </h3>
+        <h3 className="text-base font-semibold text-slate-900">{role.name}</h3>
         <StatusBadge status={role.status} />
       </div>
 
       {role.description !== null && (
-        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-          {role.description}
-        </p>
+        <p className="mt-1 text-sm text-slate-500">{role.description}</p>
       )}
 
-      <div className="mt-4 border-t border-zinc-100 pt-4 dark:border-zinc-800/80">
-        <h4 className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+      <div className="mt-4 border-t border-slate-100 pt-4">
+        <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
           Permissions
         </h4>
 
         {role.permissions.length === 0 ? (
-          <p className="mt-2 text-sm text-zinc-400 dark:text-zinc-500">
-            No permissions assigned
-          </p>
+          <p className="mt-2 text-sm text-slate-400">No permissions assigned</p>
         ) : (
           <ul className="mt-2 space-y-3">
             {role.permissions.map((permission, index) => (
@@ -109,25 +93,20 @@ export default async function RolesPage() {
 
   return (
     <div className="mx-auto max-w-6xl space-y-6">
-      <div>
-        <h2 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-          Roles &amp; Permissions
-        </h2>
-        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-          The access-control catalogue available to{" "}
-          <span className="font-medium text-zinc-700 dark:text-zinc-300">
-            {organizationName}
-          </span>
-          . These role and permission definitions are shared across the platform;
-          this view is read-only.
-        </p>
-      </div>
+      <PageHeader
+        title="Roles & Permissions"
+        description={
+          <>
+            The access-control catalogue available to{" "}
+            <span className="font-medium text-slate-700">{organizationName}</span>
+            . These role and permission definitions are shared across the
+            platform; this view is read-only.
+          </>
+        }
+      />
 
       <section aria-labelledby="roles-heading" className="space-y-3">
-        <h3
-          id="roles-heading"
-          className="text-sm font-semibold text-zinc-900 dark:text-zinc-50"
-        >
+        <h3 id="roles-heading" className="text-lg font-semibold tracking-tight text-slate-900">
           Roles
         </h3>
 
@@ -135,14 +114,17 @@ export default async function RolesPage() {
           // Deliberately generic and reason-free: the only cause is a database
           // failure, whose detail must never reach a browser. Distinct from the
           // empty state below — unknown is not the same as none.
-          <NoticePanel
+          <EmptyState
+            icon={<RolesIcon className="h-6 w-6" />}
             title="Roles unavailable"
-            body="The role catalogue could not be loaded. Please try again shortly."
+            description="The role catalogue could not be loaded. Please try again shortly."
           />
         ) : roles.length === 0 ? (
-          <NoticePanel
+          <EmptyState
+            icon={<RolesIcon className="h-6 w-6" />}
+            tone="indigo"
             title="No roles yet"
-            body="The catalogue has no role definitions on record."
+            description="The catalogue has no role definitions on record."
           />
         ) : (
           <ul className="space-y-3">
@@ -158,27 +140,30 @@ export default async function RolesPage() {
       <section aria-labelledby="permissions-heading" className="space-y-3">
         <h3
           id="permissions-heading"
-          className="text-sm font-semibold text-zinc-900 dark:text-zinc-50"
+          className="text-lg font-semibold tracking-tight text-slate-900"
         >
           Permissions catalogue
         </h3>
-        <p className="text-sm text-zinc-500 dark:text-zinc-400">
+        <p className="text-sm text-slate-500">
           Every permission on record, including any not currently assigned to a
           role.
         </p>
 
         {permissions === null ? (
-          <NoticePanel
+          <EmptyState
+            icon={<KeyIcon className="h-6 w-6" />}
             title="Permissions unavailable"
-            body="The permission catalogue could not be loaded. Please try again shortly."
+            description="The permission catalogue could not be loaded. Please try again shortly."
           />
         ) : permissions.length === 0 ? (
-          <NoticePanel
+          <EmptyState
+            icon={<KeyIcon className="h-6 w-6" />}
+            tone="indigo"
             title="No permissions yet"
-            body="The catalogue has no permission definitions on record."
+            description="The catalogue has no permission definitions on record."
           />
         ) : (
-          <ul className="divide-y divide-zinc-200 overflow-hidden rounded-xl border border-zinc-200 bg-white dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-950">
+          <ul className="divide-y divide-slate-100 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-card">
             {permissions.map((permission, index) => (
               <li key={index} className="px-4 py-3">
                 <PermissionLine permission={permission} />

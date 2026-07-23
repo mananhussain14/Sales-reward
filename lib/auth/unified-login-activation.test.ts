@@ -47,9 +47,11 @@ const REGISTRATION_MODULE = "lib/staff/staff-registration.ts";
 describe("the login page is universal", () => {
   test("1. it renders the neutral SalesReward wording", () => {
     const page = read(LOGIN_PAGE);
-    assert.ok(page.includes("Sign in to SalesReward"), "missing the neutral heading");
+    // Role-neutral premium wording. The heading welcomes without naming a role,
+    // and the supporting line names the product (SalesReward) but no portal.
+    assert.ok(page.includes("Welcome back"), "missing the neutral heading");
     assert.ok(
-      page.includes("Enter your email and password to continue"),
+      page.includes("Sign in to your SalesReward account to continue"),
       "missing the neutral subheading",
     );
   });

@@ -1,3 +1,6 @@
+import { Skeleton } from "@/components/ui/skeleton";
+import { cardClasses } from "@/components/ui/card";
+
 /**
  * Route-level loading UI for the Retailer Owner shop list.
  *
@@ -28,44 +31,40 @@ export default function RetailerShopsLoading() {
       <div aria-hidden="true">
         {/* Title block */}
         <div>
-          <div className="h-7 w-32 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
-          <div className="mt-2 h-4 w-72 max-w-full animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
+          <Skeleton className="h-7 w-32" />
+          <Skeleton className="mt-2 h-4 w-72 max-w-full" />
         </div>
 
         {/* Desktop table shell */}
-        <div className="mt-8 hidden overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm sm:block dark:border-zinc-800 dark:bg-zinc-950">
+        <div className={cardClasses("standard", "mt-8 hidden overflow-hidden sm:block")}>
           <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-zinc-200 dark:divide-zinc-800">
-              <thead className="bg-zinc-50 dark:bg-zinc-900/50">
+            <table className="w-full border-collapse text-left text-sm">
+              <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                 <tr>
                   {["Shop", "Code", "City", "Country", "Status"].map((heading) => (
-                    <th
-                      key={heading}
-                      scope="col"
-                      className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400"
-                    >
+                    <th key={heading} scope="col" className="px-4 py-3 font-semibold">
                       {heading}
                     </th>
                   ))}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
+              <tbody className="divide-y divide-slate-100">
                 {SKELETON_ROWS.map((row) => (
                   <tr key={row}>
-                    <td className="px-5 py-3.5">
-                      <div className="h-4 w-40 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
+                    <td className="px-4 py-3">
+                      <Skeleton className="h-4 w-40" />
                     </td>
-                    <td className="px-5 py-3.5">
-                      <div className="h-4 w-16 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
+                    <td className="px-4 py-3">
+                      <Skeleton className="h-4 w-16" />
                     </td>
-                    <td className="px-5 py-3.5">
-                      <div className="h-4 w-24 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
+                    <td className="px-4 py-3">
+                      <Skeleton className="h-4 w-24" />
                     </td>
-                    <td className="px-5 py-3.5">
-                      <div className="h-4 w-10 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
+                    <td className="px-4 py-3">
+                      <Skeleton className="h-4 w-10" />
                     </td>
-                    <td className="px-5 py-3.5">
-                      <div className="h-5 w-16 animate-pulse rounded-full bg-zinc-200 dark:bg-zinc-800" />
+                    <td className="px-4 py-3">
+                      <Skeleton className="h-5 w-16 rounded-full" />
                     </td>
                   </tr>
                 ))}
@@ -77,19 +76,16 @@ export default function RetailerShopsLoading() {
         {/* Mobile card shells */}
         <ul className="mt-8 flex flex-col gap-3 sm:hidden">
           {SKELETON_ROWS.map((row) => (
-            <li
-              key={row}
-              className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-950"
-            >
+            <li key={row} className={cardClasses("standard", "p-4")}>
               <div className="flex items-start justify-between gap-3">
-                <div className="h-4 w-36 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
-                <div className="h-5 w-16 shrink-0 animate-pulse rounded-full bg-zinc-200 dark:bg-zinc-800" />
+                <Skeleton className="h-4 w-36" />
+                <Skeleton className="h-5 w-16 shrink-0 rounded-full" />
               </div>
               <div className="mt-3 flex flex-col gap-2">
                 {[0, 1, 2].map((line) => (
                   <div key={line} className="flex justify-between gap-3">
-                    <div className="h-4 w-14 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
-                    <div className="h-4 w-20 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
+                    <Skeleton className="h-4 w-14" />
+                    <Skeleton className="h-4 w-20" />
                   </div>
                 ))}
               </div>

@@ -4,6 +4,9 @@ import { useActionState, useState } from "react";
 import { inviteStaffAction } from "@/app/(retailer)/retailer/staff/actions";
 import { INITIAL_INVITE_STAFF_STATE } from "@/app/(retailer)/retailer/staff/invite-staff-state";
 import type { AssignableShop } from "@/lib/staff/staff-normalization";
+import { Alert } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { FieldError, inputClasses, Label } from "@/components/ui/field";
 
 /**
  * The Invite Staff form.
@@ -47,19 +50,9 @@ const ROLE_OPTIONS = [
   },
 ] as const;
 
-const inputClasses =
-  "block w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 shadow-sm outline-none transition-colors placeholder:text-zinc-400 focus-visible:border-indigo-500 focus-visible:ring-2 focus-visible:ring-indigo-500 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-500";
-
-const labelClasses =
-  "block text-sm font-medium text-zinc-900 dark:text-zinc-100";
-
-function FieldError({ id, message }: { id: string; message?: string }) {
+function FormFieldError({ id, message }: { id: string; message?: string }) {
   if (!message) return null;
-  return (
-    <p id={id} role="alert" className="text-sm text-red-600 dark:text-red-400">
-      {message}
-    </p>
-  );
+  return <FieldError id={id}>{message}</FieldError>;
 }
 
 export function InviteStaffForm({ shops }: InviteStaffFormProps) {
@@ -93,31 +86,13 @@ export function InviteStaffForm({ shops }: InviteStaffFormProps) {
 
   return (
     <form action={formAction} className="space-y-5" noValidate>
-      {state.formError && (
-        <div
-          role="alert"
-          aria-live="polite"
-          className="flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300"
-        >
-          <p>{state.formError}</p>
-        </div>
-      )}
+      {state.formError && <Alert tone="error">{state.formError}</Alert>}
 
-      {state.successMessage && (
-        <div
-          role="status"
-          aria-live="polite"
-          className="flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-300"
-        >
-          <p>{state.successMessage}</p>
-        </div>
-      )}
+      {state.successMessage && <Alert tone="success">{state.successMessage}</Alert>}
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="space-y-2">
-          <label htmlFor="firstName" className={labelClasses}>
-            First name
-          </label>
+          <Label htmlFor="firstName">First name</Label>
           <input
             id="firstName"
             name="firstName"
@@ -129,15 +104,13 @@ export function InviteStaffForm({ shops }: InviteStaffFormProps) {
             aria-describedby={
               state.fieldErrors.firstName ? "firstName-error" : undefined
             }
-            className={inputClasses}
+            className={inputClasses(Boolean(state.fieldErrors.firstName))}
           />
-          <FieldError id="firstName-error" message={state.fieldErrors.firstName} />
+          <FormFieldError id="firstName-error" message={state.fieldErrors.firstName} />
         </div>
 
         <div className="space-y-2">
-          <label htmlFor="lastName" className={labelClasses}>
-            Last name
-          </label>
+          <Label htmlFor="lastName">Last name</Label>
           <input
             id="lastName"
             name="lastName"
@@ -149,16 +122,14 @@ export function InviteStaffForm({ shops }: InviteStaffFormProps) {
             aria-describedby={
               state.fieldErrors.lastName ? "lastName-error" : undefined
             }
-            className={inputClasses}
+            className={inputClasses(Boolean(state.fieldErrors.lastName))}
           />
-          <FieldError id="lastName-error" message={state.fieldErrors.lastName} />
+          <FormFieldError id="lastName-error" message={state.fieldErrors.lastName} />
         </div>
       </div>
 
       <div className="space-y-2">
-        <label htmlFor="email" className={labelClasses}>
-          Email address
-        </label>
+        <Label htmlFor="email">Email address</Label>
         <input
           id="email"
           name="email"
@@ -168,10 +139,10 @@ export function InviteStaffForm({ shops }: InviteStaffFormProps) {
           disabled={pending}
           defaultValue={state.values.email}
           aria-describedby={state.fieldErrors.email ? "email-error" : undefined}
-          className={inputClasses}
+          className={inputClasses(Boolean(state.fieldErrors.email))}
         />
-        <FieldError id="email-error" message={state.fieldErrors.email} />
-        <p className="text-xs text-zinc-500 dark:text-zinc-400">
+        <FormFieldError id="email-error" message={state.fieldErrors.email} />
+        <p className="text-xs text-slate-500">
           The invitation can only be accepted by this address.
         </p>
       </div>
@@ -182,12 +153,12 @@ export function InviteStaffForm({ shops }: InviteStaffFormProps) {
         className="space-y-2"
         aria-describedby={state.fieldErrors.roleCode ? "roleCode-error" : undefined}
       >
-        <legend className={labelClasses}>Role</legend>
+        <legend className="block text-sm font-medium text-slate-800">Role</legend>
         <div className="mt-2 space-y-2">
           {ROLE_OPTIONS.map((option) => (
             <label
               key={option.code}
-              className="flex cursor-pointer items-start gap-3 rounded-lg border border-zinc-200 px-4 py-3 transition-colors hover:bg-zinc-50 has-[:checked]:border-indigo-500 has-[:checked]:bg-indigo-50 dark:border-zinc-800 dark:hover:bg-zinc-900 dark:has-[:checked]:border-indigo-500 dark:has-[:checked]:bg-indigo-950/40"
+              className="flex cursor-pointer items-start gap-3 rounded-xl border border-slate-200 px-4 py-3 transition-colors hover:bg-slate-50 has-[:checked]:border-indigo-500 has-[:checked]:bg-indigo-50"
             >
               <input
                 type="radio"
@@ -196,20 +167,18 @@ export function InviteStaffForm({ shops }: InviteStaffFormProps) {
                 checked={roleCode === option.code}
                 onChange={() => setRoleCode(option.code)}
                 disabled={pending}
-                className="mt-0.5 h-4 w-4 shrink-0 border-zinc-300 text-indigo-600 focus-visible:ring-2 focus-visible:ring-indigo-500 dark:border-zinc-600"
+                className="mt-0.5 h-4 w-4 shrink-0 border-slate-300 text-indigo-600 focus-visible:ring-2 focus-visible:ring-indigo-500"
               />
               <span className="min-w-0">
-                <span className="block text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                <span className="block text-sm font-medium text-slate-900">
                   {option.label}
                 </span>
-                <span className="block text-xs text-zinc-500 dark:text-zinc-400">
-                  {option.hint}
-                </span>
+                <span className="block text-xs text-slate-500">{option.hint}</span>
               </span>
             </label>
           ))}
         </div>
-        <FieldError id="roleCode-error" message={state.fieldErrors.roleCode} />
+        <FormFieldError id="roleCode-error" message={state.fieldErrors.roleCode} />
       </fieldset>
 
       {/* Shops. Rendered ONLY for Sales Staff — a Retailer Manager invitation must
@@ -220,13 +189,13 @@ export function InviteStaffForm({ shops }: InviteStaffFormProps) {
           className="space-y-2"
           aria-describedby={state.fieldErrors.shopIds ? "shopIds-error" : undefined}
         >
-          <legend className={labelClasses}>Shops</legend>
-          <p className="text-xs text-zinc-500 dark:text-zinc-400">
+          <legend className="block text-sm font-medium text-slate-800">Shops</legend>
+          <p className="text-xs text-slate-500">
             Choose at least one active shop this person will work in.
           </p>
 
           {shops.length === 0 ? (
-            <p className="rounded-lg border border-dashed border-zinc-300 px-4 py-3 text-sm text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
+            <p className="rounded-xl border border-dashed border-slate-300 px-4 py-3 text-sm text-slate-500">
               Your Retailer has no active shops yet, so Sales Staff cannot be invited.
             </p>
           ) : (
@@ -234,7 +203,7 @@ export function InviteStaffForm({ shops }: InviteStaffFormProps) {
               {shops.map((shop) => (
                 <label
                   key={shop.shopId}
-                  className="flex cursor-pointer items-start gap-3 rounded-lg border border-zinc-200 px-4 py-2.5 transition-colors hover:bg-zinc-50 has-[:checked]:border-indigo-500 has-[:checked]:bg-indigo-50 dark:border-zinc-800 dark:hover:bg-zinc-900 dark:has-[:checked]:border-indigo-500 dark:has-[:checked]:bg-indigo-950/40"
+                  className="flex cursor-pointer items-start gap-3 rounded-xl border border-slate-200 px-4 py-2.5 transition-colors hover:bg-slate-50 has-[:checked]:border-indigo-500 has-[:checked]:bg-indigo-50"
                 >
                   <input
                     type="checkbox"
@@ -242,14 +211,14 @@ export function InviteStaffForm({ shops }: InviteStaffFormProps) {
                     value={shop.shopId}
                     defaultChecked={state.values.shopIds.includes(shop.shopId)}
                     disabled={pending}
-                    className="mt-0.5 h-4 w-4 shrink-0 rounded border-zinc-300 text-indigo-600 focus-visible:ring-2 focus-visible:ring-indigo-500 dark:border-zinc-600"
+                    className="mt-0.5 h-4 w-4 shrink-0 rounded border-slate-300 text-indigo-600 focus-visible:ring-2 focus-visible:ring-indigo-500"
                   />
                   <span className="min-w-0">
-                    <span className="block truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                    <span className="block truncate text-sm font-medium text-slate-900">
                       {shop.shopName}
                     </span>
                     {(shop.shopCode || shop.city) && (
-                      <span className="block truncate text-xs text-zinc-500 dark:text-zinc-400">
+                      <span className="block truncate text-xs text-slate-500">
                         {[shop.shopCode, shop.city].filter(Boolean).join(" · ")}
                       </span>
                     )}
@@ -259,40 +228,20 @@ export function InviteStaffForm({ shops }: InviteStaffFormProps) {
             </div>
           )}
 
-          <FieldError id="shopIds-error" message={state.fieldErrors.shopIds} />
+          <FormFieldError id="shopIds-error" message={state.fieldErrors.shopIds} />
         </fieldset>
       )}
 
-      <button
+      <Button
         type="submit"
-        disabled={pending}
-        className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-70 sm:w-auto dark:focus-visible:ring-offset-zinc-950"
+        variant="primary"
+        fullWidth
+        className="sm:w-auto"
+        loading={pending}
+        loadingLabel="Sending invitation…"
       >
-        {pending && (
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            className="h-4 w-4 animate-spin"
-            aria-hidden="true"
-          >
-            <circle
-              cx="12"
-              cy="12"
-              r="10"
-              stroke="currentColor"
-              strokeWidth={4}
-              className="opacity-25"
-            />
-            <path
-              d="M12 2a10 10 0 0110 10"
-              stroke="currentColor"
-              strokeWidth={4}
-              strokeLinecap="round"
-            />
-          </svg>
-        )}
-        {pending ? "Sending invitation…" : "Send invitation"}
-      </button>
+        Send invitation
+      </Button>
     </form>
   );
 }

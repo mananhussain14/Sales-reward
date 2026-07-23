@@ -1,26 +1,169 @@
 @import "tailwindcss";
 
+/*
+  SalesReward design system.
+
+  A single, centralized source of visual truth. The premium light experience is
+  built on Tailwind's slate / indigo / emerald / amber scales — those scales ARE
+  the brand palette (slate-50 #F8FAFC, slate-200 #E2E8F0, indigo-600 #4F46E5,
+  emerald-600 #059669, amber-600 #D97706 …), so components use them directly and
+  stay consistent without a bespoke color layer to drift from.
+
+  The product is deliberately LIGHT-ONLY for this milestone. The `dark:` variant
+  is redefined below to key off an explicit `.dark` class that is never added,
+  which makes every historical `dark:` utility inert rather than requiring 600
+  class edits to remove. One decision, centralized, reversible.
+*/
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Core surfaces */
+  --app-background: #f8fafc; /* slate-50  */
+  --app-background-secondary: #f1f5f9; /* slate-100 */
+  --surface: #ffffff;
+  --surface-nav: #0f172a; /* slate-900 dark navigation */
+  --border: #e2e8f0; /* slate-200 */
+  --border-strong: #cbd5e1; /* slate-300 */
+
+  /* Brand */
+  --brand: #4f46e5; /* indigo-600 */
+  --brand-hover: #4338ca; /* indigo-700 */
+  --brand-soft: #eef2ff; /* indigo-50  */
+
+  /* Text */
+  --foreground: #0f172a; /* slate-900 */
+  --text-secondary: #475569; /* slate-600 */
+  --text-muted: #64748b; /* slate-500 */
+
+  --background: var(--app-background);
 }
 
 @theme inline {
-  --color-background: var(--background);
+  --color-background: var(--app-background);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+
+  /* Premium, layered shadows — no heavy black. */
+  --shadow-card: 0 1px 2px 0 rgb(15 23 42 / 0.04), 0 1px 3px 0 rgb(15 23 42 / 0.06);
+  --shadow-elevated: 0 4px 12px -2px rgb(15 23 42 / 0.08), 0 2px 6px -2px rgb(15 23 42 / 0.05);
+  --shadow-modal: 0 20px 40px -12px rgb(15 23 42 / 0.22), 0 8px 16px -8px rgb(15 23 42 / 0.12);
+  --shadow-brand: 0 8px 24px -6px rgb(79 70 229 / 0.35);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  color-scheme: light;
 }
 
 body {
-  background: var(--background);
+  background: var(--app-background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Roboto, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* A calmer text selection that matches the brand. */
+::selection {
+  background-color: #c7d2fe; /* indigo-200 */
+  color: #1e1b4b; /* indigo-950 */
+}
+
+/*
+  Restrained motion helpers reused by success confirmations and skeletons.
+  All are disabled under a reduced-motion preference below.
+*/
+@keyframes sr-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes sr-pop {
+  0% {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.08);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes sr-draw {
+  from {
+    stroke-dashoffset: 24;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes sr-shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.sr-animate-fade-in {
+  animation: sr-fade-in 220ms ease-out both;
+}
+
+.sr-animate-pop {
+  animation: sr-pop 280ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+.sr-check-draw {
+  stroke-dasharray: 24;
+  stroke-dashoffset: 24;
+  animation: sr-draw 360ms ease-out 120ms forwards;
+}
+
+/* Skeleton surfaces use a subtle left-to-right shimmer. */
+.sr-skeleton {
+  position: relative;
+  overflow: hidden;
+  background-color: #e2e8f0; /* slate-200 */
+}
+
+.sr-skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgb(255 255 255 / 0.65),
+    transparent
+  );
+  animation: sr-shimmer 1.4s infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .sr-skeleton::after {
+    display: none;
+  }
+
+  .sr-check-draw {
+    stroke-dashoffset: 0;
+  }
 }

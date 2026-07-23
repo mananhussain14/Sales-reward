@@ -1,3 +1,6 @@
+import { Skeleton, SkeletonStatGrid } from "@/components/ui/skeleton";
+import { cardClasses } from "@/components/ui/card";
+
 /**
  * Route-level loading UI for the Retailer Owner overview.
  *
@@ -23,42 +26,33 @@ export default function RetailerOverviewLoading() {
 
       <div aria-hidden="true">
         {/* Header */}
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0 flex-1">
-            <div className="h-3 w-40 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
-            <div className="mt-2 h-7 w-64 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
-            <div className="mt-2 h-4 w-80 max-w-full animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
+            <Skeleton className="h-3 w-40" />
+            <Skeleton className="mt-2 h-7 w-64" />
+            <Skeleton className="mt-2 h-4 w-80 max-w-full" />
           </div>
-          <div className="h-5 w-28 shrink-0 animate-pulse rounded-full bg-zinc-200 dark:bg-zinc-800" />
+          <Skeleton className="h-5 w-28 shrink-0 rounded-full" />
         </div>
 
         {/* Metric grid — same columns and gap as the real page. */}
-        <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {[0, 1, 2, 3].map((tile) => (
-            <div
-              key={tile}
-              className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950"
-            >
-              <div className="h-4 w-24 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
-              <div className="mt-3 h-8 w-16 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
-              <div className="mt-2 h-3 w-32 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
-            </div>
-          ))}
+        <div className="mt-8">
+          <SkeletonStatGrid count={4} />
         </div>
 
-        <div className="mt-4 h-4 w-28 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
+        <Skeleton className="mt-4 h-4 w-28" />
 
         {/* Detail panel */}
         <div className="mt-8">
-          <div className="h-4 w-40 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
-          <div className="mt-3 divide-y divide-zinc-200 overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-950">
+          <Skeleton className="h-4 w-40" />
+          <div className={cardClasses("standard", "mt-3 divide-y divide-slate-100")}>
             {[0, 1, 2].map((row) => (
               <div
                 key={row}
                 className="flex items-center justify-between gap-4 px-5 py-3.5"
               >
-                <div className="h-4 w-32 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
-                <div className="h-4 w-24 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
+                <Skeleton className="h-4 w-32" />
+                <Skeleton className="h-4 w-24" />
               </div>
             ))}
           </div>

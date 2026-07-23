@@ -46,14 +46,14 @@ export function AdminHeader({
   const initials = getOrganizationInitials(organizationName);
 
   return (
-    <header className="sticky top-0 z-30 flex h-16 items-center gap-4 border-b border-zinc-200 bg-white/80 px-4 backdrop-blur sm:px-6 dark:border-zinc-800 dark:bg-zinc-950/80">
+    <header className="sticky top-0 z-30 flex h-16 items-center gap-4 border-b border-slate-200 bg-white/85 px-4 backdrop-blur-md sm:px-6">
       <button
         type="button"
         onClick={onToggleSidebar}
         aria-label={sidebarOpen ? "Close navigation menu" : "Open navigation menu"}
         aria-expanded={sidebarOpen}
         aria-controls="admin-sidebar"
-        className="inline-flex h-9 w-9 items-center justify-center rounded-md text-zinc-600 hover:bg-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 lg:hidden dark:text-zinc-300 dark:hover:bg-zinc-800"
+        className="inline-flex h-10 w-10 items-center justify-center rounded-xl text-slate-600 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 lg:hidden"
       >
         <svg
           viewBox="0 0 24 24"
@@ -70,7 +70,7 @@ export function AdminHeader({
       </button>
 
       <div className="min-w-0 flex-1">
-        <h1 className="truncate text-base font-semibold text-zinc-900 dark:text-zinc-50">
+        <h1 className="truncate text-base font-semibold text-slate-900">
           Vendor Admin
         </h1>
       </div>
@@ -79,15 +79,15 @@ export function AdminHeader({
         {/* Identity lockup: who is signed in, over which organization they are
             managing. Hidden below `sm`, where the avatar alone carries it. */}
         <div className="hidden min-w-0 flex-col items-end leading-tight sm:flex">
-          <span className="max-w-[12rem] truncate text-sm font-medium text-zinc-900 md:max-w-[16rem] dark:text-zinc-100">
+          <span className="max-w-[12rem] truncate text-sm font-medium text-slate-900 md:max-w-[16rem]">
             {userDisplayName}
           </span>
-          <span className="max-w-[12rem] truncate text-xs text-zinc-500 md:max-w-[16rem] dark:text-zinc-400">
+          <span className="max-w-[12rem] truncate text-xs text-slate-500 md:max-w-[16rem]">
             {organizationName}
           </span>
         </div>
         <span
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-zinc-200 text-sm font-semibold text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 text-sm font-semibold text-white shadow-sm"
           aria-hidden="true"
         >
           {initials}
@@ -96,7 +96,7 @@ export function AdminHeader({
         {/* Separator between the identity lockup and the sign-out action. */}
         <span
           aria-hidden="true"
-          className="hidden h-6 w-px bg-zinc-200 sm:block dark:bg-zinc-800"
+          className="hidden h-6 w-px bg-slate-200 sm:block"
         />
 
         <SignOutButton variant="header" />
