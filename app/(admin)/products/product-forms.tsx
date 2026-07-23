@@ -20,6 +20,9 @@ import {
   MAX_PRODUCT_NAME_LENGTH,
 } from "@/lib/products/product-input";
 import type { VendorProduct } from "@/lib/products/product-normalization";
+import { Alert } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { FieldHint, inputClasses, Label, textareaClasses } from "@/components/ui/field";
 
 /**
  * The Vendor product forms and row-level controls.
@@ -42,24 +45,12 @@ import type { VendorProduct } from "@/lib/products/product-normalization";
  * constants, so the inputs' `maxLength` and the server's rule cannot drift.
  */
 
-const inputClasses =
-  "block w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 shadow-sm outline-none transition-colors placeholder:text-zinc-400 focus-visible:border-indigo-500 focus-visible:ring-2 focus-visible:ring-indigo-500 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-500";
-
-const labelClasses = "block text-sm font-medium text-zinc-900 dark:text-zinc-100";
-
-const primaryButton =
-  "inline-flex items-center justify-center gap-2 rounded-md bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-70 dark:focus-visible:ring-offset-zinc-950";
-
-const smallButton =
-  "inline-flex items-center justify-center rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-700 shadow-sm transition-colors hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:focus-visible:ring-offset-zinc-950";
-
-const dangerButton =
-  "inline-flex items-center justify-center rounded-md border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 shadow-sm transition-colors hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:border-red-900/60 dark:bg-zinc-900 dark:text-red-400 dark:hover:bg-red-950/40 dark:focus-visible:ring-offset-zinc-950";
-
+/** Field-level error text, kept as its own element (not the shared Alert) so it can
+ *  carry role="alert" on the exact id each input's aria-describedby points at. */
 function FieldError({ id, message }: { id: string; message?: string }) {
   if (!message) return null;
   return (
-    <p id={id} role="alert" className="text-sm text-red-600 dark:text-red-400">
+    <p id={id} role="alert" className="text-sm font-medium text-red-700">
       {message}
     </p>
   );
@@ -68,24 +59,16 @@ function FieldError({ id, message }: { id: string; message?: string }) {
 function FormBanner({ state }: { state: ProductFormState }) {
   if (state.formError) {
     return (
-      <div
-        role="alert"
-        aria-live="polite"
-        className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300"
-      >
-        <p>{state.formError}</p>
-      </div>
+      <Alert tone="error" role="alert">
+        {state.formError}
+      </Alert>
     );
   }
   if (state.successMessage) {
     return (
-      <div
-        role="status"
-        aria-live="polite"
-        className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-300"
-      >
-        <p>{state.successMessage}</p>
-      </div>
+      <Alert tone="success" role="status">
+        {state.successMessage}
+      </Alert>
     );
   }
   return null;
@@ -104,9 +87,7 @@ function ProductDetailFields({
   return (
     <>
       <div className="space-y-2">
-        <label htmlFor={`${idPrefix}-productName`} className={labelClasses}>
-          Product name
-        </label>
+        <Label htmlFor={`${idPrefix}-productName`}>Product name</Label>
         <input
           id={`${idPrefix}-productName`}
           name="productName"
@@ -118,7 +99,7 @@ function ProductDetailFields({
           aria-describedby={
             state.fieldErrors.productName ? `${idPrefix}-productName-error` : undefined
           }
-          className={inputClasses}
+          className={inputClasses(Boolean(state.fieldErrors.productName))}
         />
         <FieldError
           id={`${idPrefix}-productName-error`}
@@ -128,9 +109,9 @@ function ProductDetailFields({
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="space-y-2">
-          <label htmlFor={`${idPrefix}-barcode`} className={labelClasses}>
-            Barcode <span className="font-normal text-zinc-500">(optional)</span>
-          </label>
+          <Label htmlFor={`${idPrefix}-barcode`} optional>
+            Barcode
+          </Label>
           <input
             id={`${idPrefix}-barcode`}
             name="barcode"
@@ -144,24 +125,21 @@ function ProductDetailFields({
                 ? `${idPrefix}-barcode-error`
                 : `${idPrefix}-barcode-hint`
             }
-            className={inputClasses}
+            className={inputClasses(Boolean(state.fieldErrors.barcode))}
           />
           <FieldError
             id={`${idPrefix}-barcode-error`}
             message={state.fieldErrors.barcode}
           />
-          <p
-            id={`${idPrefix}-barcode-hint`}
-            className="text-xs text-zinc-500 dark:text-zinc-400"
-          >
+          <FieldHint id={`${idPrefix}-barcode-hint`}>
             8 to 14 digits. Spaces and hyphens are removed.
-          </p>
+          </FieldHint>
         </div>
 
         <div className="space-y-2">
-          <label htmlFor={`${idPrefix}-brand`} className={labelClasses}>
-            Brand <span className="font-normal text-zinc-500">(optional)</span>
-          </label>
+          <Label htmlFor={`${idPrefix}-brand`} optional>
+            Brand
+          </Label>
           <input
             id={`${idPrefix}-brand`}
             name="brand"
@@ -172,16 +150,16 @@ function ProductDetailFields({
             aria-describedby={
               state.fieldErrors.brand ? `${idPrefix}-brand-error` : undefined
             }
-            className={inputClasses}
+            className={inputClasses(Boolean(state.fieldErrors.brand))}
           />
           <FieldError id={`${idPrefix}-brand-error`} message={state.fieldErrors.brand} />
         </div>
       </div>
 
       <div className="space-y-2">
-        <label htmlFor={`${idPrefix}-description`} className={labelClasses}>
-          Description <span className="font-normal text-zinc-500">(optional)</span>
-        </label>
+        <Label htmlFor={`${idPrefix}-description`} optional>
+          Description
+        </Label>
         <textarea
           id={`${idPrefix}-description`}
           name="description"
@@ -192,7 +170,7 @@ function ProductDetailFields({
           aria-describedby={
             state.fieldErrors.description ? `${idPrefix}-description-error` : undefined
           }
-          className={inputClasses}
+          className={textareaClasses(Boolean(state.fieldErrors.description))}
         />
         <FieldError
           id={`${idPrefix}-description-error`}
@@ -215,9 +193,7 @@ export function CreateProductForm() {
       <FormBanner state={state} />
 
       <div className="space-y-2">
-        <label htmlFor="create-productCode" className={labelClasses}>
-          Product code
-        </label>
+        <Label htmlFor="create-productCode">Product code</Label>
         <input
           id="create-productCode"
           name="productCode"
@@ -229,23 +205,23 @@ export function CreateProductForm() {
           aria-describedby={
             state.fieldErrors.productCode ? "create-productCode-error" : "create-code-hint"
           }
-          className={inputClasses}
+          className={inputClasses(Boolean(state.fieldErrors.productCode))}
         />
         <FieldError
           id="create-productCode-error"
           message={state.fieldErrors.productCode}
         />
-        <p id="create-code-hint" className="text-xs text-zinc-500 dark:text-zinc-400">
+        <FieldHint id="create-code-hint">
           Upper-cased automatically, and unique within your catalog. It cannot be
           changed later.
-        </p>
+        </FieldHint>
       </div>
 
       <ProductDetailFields state={state} pending={pending} idPrefix="create" />
 
-      <button type="submit" disabled={pending} className={primaryButton}>
-        {pending ? "Adding…" : "Add product"}
-      </button>
+      <Button type="submit" loading={pending} loadingLabel="Adding…">
+        Add product
+      </Button>
     </form>
   );
 }
@@ -274,20 +250,18 @@ export function EditProductForm({ product }: { product: VendorProduct }) {
       <FormBanner state={state} />
 
       <div className="space-y-1">
-        <span className={labelClasses}>Product code</span>
-        <p className="font-mono text-sm text-zinc-700 dark:text-zinc-300">
-          {product.productCode}
-        </p>
-        <p className="text-xs text-zinc-500 dark:text-zinc-400">
+        <span className="block text-sm font-medium text-slate-800">Product code</span>
+        <p className="font-mono text-sm text-slate-700">{product.productCode}</p>
+        <p className="text-xs text-slate-500">
           Product codes cannot be changed. Create a replacement product instead.
         </p>
       </div>
 
       <ProductDetailFields state={state} pending={pending} idPrefix="edit" />
 
-      <button type="submit" disabled={pending} className={primaryButton}>
-        {pending ? "Saving…" : "Save changes"}
-      </button>
+      <Button type="submit" loading={pending} loadingLabel="Saving…">
+        Save changes
+      </Button>
     </form>
   );
 }
@@ -301,18 +275,14 @@ function ActionFeedback({
 }) {
   if (error) {
     return (
-      <p role="alert" aria-live="polite" className="mt-1 text-xs text-red-600 dark:text-red-400">
+      <p role="alert" aria-live="polite" className="mt-1 text-xs text-red-600">
         {error}
       </p>
     );
   }
   if (success) {
     return (
-      <p
-        role="status"
-        aria-live="polite"
-        className="mt-1 text-xs text-emerald-700 dark:text-emerald-400"
-      >
+      <p role="status" aria-live="polite" className="mt-1 text-xs text-emerald-700">
         {success}
       </p>
     );
@@ -343,14 +313,16 @@ export function ProductStatusForm({
     <form action={formAction}>
       <input type="hidden" name="productId" value={productId} />
       <input type="hidden" name="status" value={next} />
-      <button
+      <Button
         type="submit"
-        disabled={pending}
+        variant={next === "ACTIVE" ? "outline" : "danger"}
+        size="sm"
+        loading={pending}
+        loadingLabel="Saving…"
         aria-label={`${label} ${productName}`}
-        className={next === "ACTIVE" ? smallButton : dangerButton}
       >
-        {pending ? "Saving…" : label}
-      </button>
+        {label}
+      </Button>
       <ActionFeedback error={state.error} success={state.success} />
     </form>
   );
@@ -377,14 +349,17 @@ export function AssignRetailerForm({
     <form action={formAction}>
       <input type="hidden" name="productId" value={productId} />
       <input type="hidden" name="retailerId" value={retailerId} />
-      <button
+      <Button
         type="submit"
-        disabled={pending || disabled}
+        variant="outline"
+        size="sm"
+        disabled={disabled}
+        loading={pending}
+        loadingLabel="Assigning…"
         aria-label={`Assign to ${retailerName}`}
-        className={smallButton}
       >
-        {pending ? "Assigning…" : "Assign"}
-      </button>
+        Assign
+      </Button>
       <ActionFeedback error={state.error} success={state.success} />
     </form>
   );
@@ -424,14 +399,16 @@ export function UnassignRetailerForm({
     >
       <input type="hidden" name="productId" value={productId} />
       <input type="hidden" name="retailerId" value={retailerId} />
-      <button
+      <Button
         type="submit"
-        disabled={pending}
+        variant="danger"
+        size="sm"
+        loading={pending}
+        loadingLabel="Withdrawing…"
         aria-label={`Withdraw from ${retailerName}`}
-        className={dangerButton}
       >
-        {pending ? "Withdrawing…" : "Withdraw"}
-      </button>
+        Withdraw
+      </Button>
       <ActionFeedback error={state.error} success={state.success} />
     </form>
   );

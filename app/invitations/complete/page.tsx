@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { CompleteInvitationForm } from "@/app/invitations/complete/complete-form";
+import { InvitationShell } from "@/components/ui/invitation-shell";
+import { KeyIcon } from "@/components/ui/icons";
 
 export const metadata: Metadata = {
   title: "Activate your account · SalesReward",
@@ -86,39 +88,22 @@ export default async function CompleteInvitationPage() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-zinc-50 px-4 py-12 dark:bg-zinc-900">
-      <main className="w-full max-w-sm">
-        {/* Mirrors the login page lockup so the two read as one product. */}
-        <div className="mb-8 flex flex-col items-center text-center">
-          <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-indigo-600 text-base font-bold text-white">
-            SR
+    <InvitationShell
+      icon={<KeyIcon className="h-6 w-6" />}
+      steps={["Invitation", "Set password", "Done"]}
+      activeStep={1}
+      title="Activate your account"
+      description={
+        <>
+          You have been invited as the owner of{" "}
+          <span className="font-medium text-slate-700">
+            {invitation.retailer_name}
           </span>
-          <span className="mt-3 text-base font-semibold text-zinc-900 dark:text-zinc-50">
-            SalesReward
-          </span>
-        </div>
-
-        <div className="rounded-xl border border-zinc-200 bg-white p-6 shadow-sm sm:p-8 dark:border-zinc-800 dark:bg-zinc-950">
-          <div className="mb-6">
-            <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-              Activate your account
-            </h1>
-            <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-              You have been invited as the owner of{" "}
-              <span className="font-medium text-zinc-700 dark:text-zinc-300">
-                {invitation.retailer_name}
-              </span>
-              . Choose a password to finish setting up your account.
-            </p>
-          </div>
-
-          <CompleteInvitationForm />
-        </div>
-
-        <p className="mt-6 text-center text-xs text-zinc-400 dark:text-zinc-600">
-          SalesReward · v0.1
-        </p>
-      </main>
-    </div>
+          . Choose a password to finish setting up your account.
+        </>
+      }
+    >
+      <CompleteInvitationForm />
+    </InvitationShell>
   );
 }

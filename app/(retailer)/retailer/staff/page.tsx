@@ -28,6 +28,12 @@ import {
   ResendInvitationForm,
   RevokeInvitationForm,
 } from "@/app/(retailer)/retailer/staff/invitation-controls";
+import { PageHeader, SectionHeader } from "@/components/ui/page-header";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Alert } from "@/components/ui/alert";
+import { cardClasses } from "@/components/ui/card";
+import { Badge, type BadgeTone } from "@/components/ui/badge";
+import { InboxIcon, StaffIcon } from "@/components/ui/icons";
 
 export const metadata: Metadata = {
   title: "Staff · Retailer Portal",
@@ -65,29 +71,23 @@ function invitationName(invitation: StaffInvitation): string {
 
 /** Renders a state label as a neutral pill. Not StatusBadge — different vocabulary. */
 function InvitationStateBadge({ invitation }: { invitation: StaffInvitation }) {
-  const tone =
+  const tone: BadgeTone =
     invitation.state === "ACCEPTED"
-      ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-400"
+      ? "emerald"
       : invitation.state === "DELIVERY_FAILED"
-        ? "bg-amber-50 text-amber-700 dark:bg-amber-950/50 dark:text-amber-400"
+        ? "amber"
         : invitation.state === "PENDING" || invitation.state === "RESERVED"
-          ? "bg-indigo-50 text-indigo-700 dark:bg-indigo-950/50 dark:text-indigo-300"
-          : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400";
+          ? "indigo"
+          : "slate";
 
-  return (
-    <span
-      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${tone}`}
-    >
-      {staffInvitationStateLabel(invitation.state)}
-    </span>
-  );
+  return <Badge tone={tone}>{staffInvitationStateLabel(invitation.state)}</Badge>;
 }
 
 /** The shops a roster row is assigned to, or an em dash. */
 function ShopList({ names }: { names: string[] }) {
   if (names.length === 0) {
     return (
-      <span className="text-zinc-400 dark:text-zinc-600" aria-label="No shops assigned">
+      <span className="text-slate-400" aria-label="No shops assigned">
         —
       </span>
     );
@@ -98,34 +98,26 @@ function ShopList({ names }: { names: string[] }) {
 /** A generic, retry-safe panel for a read that failed. Never names a cause. */
 function ReadUnavailable({ heading }: { heading: string }) {
   return (
-    <div
-      role="alert"
-      className="rounded-xl border border-amber-200 bg-amber-50 px-5 py-4 dark:border-amber-900/60 dark:bg-amber-950/40"
-    >
-      <h3 className="text-sm font-semibold text-amber-900 dark:text-amber-200">
-        {heading}
-      </h3>
-      <p className="mt-1 text-sm text-amber-800 dark:text-amber-300">
-        Something went wrong while loading this. Please try again in a moment.
-      </p>
-    </div>
+    <Alert tone="warning" role="alert" title={heading}>
+      Something went wrong while loading this. Please try again in a moment.
+    </Alert>
   );
 }
 
-function EmptyPanel({ title, body }: { title: string; body: string }) {
-  return (
-    <div className="rounded-xl border border-dashed border-zinc-300 bg-white px-6 py-10 text-center dark:border-zinc-700 dark:bg-zinc-950">
-      <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">{title}</h3>
-      <p className="mx-auto mt-1 max-w-sm text-sm text-zinc-500 dark:text-zinc-400">
-        {body}
-      </p>
-    </div>
-  );
+function EmptyPanel({
+  title,
+  body,
+  icon,
+}: {
+  title: string;
+  body: string;
+  icon?: React.ReactNode;
+}) {
+  return <EmptyState icon={icon} title={title} description={body} />;
 }
 
-const thClasses =
-  "px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400";
-const tdClasses = "px-5 py-3.5 text-sm text-zinc-600 dark:text-zinc-400";
+const thClasses = "px-4 py-3 font-semibold";
+const tdClasses = "px-4 py-3 text-slate-600";
 
 export default async function RetailerStaffPage() {
   const access = await getRetailerPortalAccess();
@@ -164,27 +156,20 @@ export default async function RetailerStaffPage() {
 
   return (
     <div className="mx-auto w-full max-w-6xl">
-      <header>
-        <h2 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-          Staff
-        </h2>
-        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-          {isOwner
+      <PageHeader
+        title="Staff"
+        description={
+          isOwner
             ? "The people who work at your Retailer, and the invitations you have sent."
-            : "The people who work at your Retailer."}
-        </p>
-      </header>
+            : "The people who work at your Retailer."
+        }
+      />
 
       {/* ---------------------------------------------------------------- */}
       {/* Active staff                                                      */}
       {/* ---------------------------------------------------------------- */}
       <section aria-labelledby="roster-heading" className="mt-8">
-        <h3
-          id="roster-heading"
-          className="text-sm font-semibold text-zinc-900 dark:text-zinc-50"
-        >
-          Active staff
-        </h3>
+        <SectionHeader title={<span id="roster-heading">Active staff</span>} />
 
         {members.status !== "ok" ? (
           <div className="mt-3">
@@ -193,6 +178,7 @@ export default async function RetailerStaffPage() {
         ) : members.members.length === 0 ? (
           <div className="mt-3">
             <EmptyPanel
+              icon={<StaffIcon className="h-6 w-6" />}
               title="No staff yet"
               body={
                 isOwner
@@ -204,13 +190,13 @@ export default async function RetailerStaffPage() {
         ) : (
           <>
             {/* Desktop table. Horizontally scrollable rather than wrapping. */}
-            <div className="mt-3 hidden overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm sm:block dark:border-zinc-800 dark:bg-zinc-950">
+            <div className={cardClasses("standard", "mt-3 hidden overflow-hidden sm:block")}>
               <div className="overflow-x-auto">
-                <table className="min-w-full divide-y divide-zinc-200 dark:divide-zinc-800">
+                <table className="w-full border-collapse text-left text-sm">
                   <caption className="sr-only">
                     Staff members at your Retailer
                   </caption>
-                  <thead className="bg-zinc-50 dark:bg-zinc-900/50">
+                  <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                     <tr>
                       <th scope="col" className={thClasses}>
                         Name
@@ -229,13 +215,13 @@ export default async function RetailerStaffPage() {
                       </th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
+                  <tbody className="divide-y divide-slate-100">
                     {/* Rendered in the RPC's own order. Nothing is re-sorted here —
                         a second, locale-dependent ordering could disagree with the
                         database's. The membership id is the stable key. */}
                     {members.members.map((member) => (
-                      <tr key={member.membershipId}>
-                        <td className="whitespace-nowrap px-5 py-3.5 text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                      <tr key={member.membershipId} className="transition-colors hover:bg-slate-50">
+                        <td className="whitespace-nowrap px-4 py-3 font-medium text-slate-900">
                           {memberName(member)}
                         </td>
                         <td className={`whitespace-nowrap ${tdClasses}`}>
@@ -244,7 +230,7 @@ export default async function RetailerStaffPage() {
                         <td className={tdClasses}>
                           <ShopList names={member.shopNames} />
                         </td>
-                        <td className="whitespace-nowrap px-5 py-3.5">
+                        <td className="whitespace-nowrap px-4 py-3">
                           <StatusBadge status={member.membershipStatus} />
                         </td>
                         <td className={`whitespace-nowrap ${tdClasses}`}>
@@ -260,32 +246,29 @@ export default async function RetailerStaffPage() {
             {/* Mobile: stacked cards. A five-column table is unreadable below `sm`. */}
             <ul className="mt-3 flex flex-col gap-3 sm:hidden">
               {members.members.map((member) => (
-                <li
-                  key={member.membershipId}
-                  className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-950"
-                >
+                <li key={member.membershipId} className={cardClasses("standard", "p-4")}>
                   <div className="flex items-start justify-between gap-3">
-                    <p className="min-w-0 flex-1 text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                    <p className="min-w-0 flex-1 text-sm font-medium text-slate-900">
                       {memberName(member)}
                     </p>
                     <StatusBadge status={member.membershipStatus} />
                   </div>
                   <dl className="mt-3 flex flex-col gap-1.5 text-sm">
                     <div className="flex justify-between gap-3">
-                      <dt className="text-zinc-500 dark:text-zinc-400">Role</dt>
-                      <dd className="text-zinc-700 dark:text-zinc-300">
+                      <dt className="text-slate-500">Role</dt>
+                      <dd className="text-slate-700">
                         {retailerRoleDisplayName(member.roleCode, member.roleName)}
                       </dd>
                     </div>
                     <div className="flex justify-between gap-3">
-                      <dt className="text-zinc-500 dark:text-zinc-400">Shops</dt>
-                      <dd className="text-right text-zinc-700 dark:text-zinc-300">
+                      <dt className="text-slate-500">Shops</dt>
+                      <dd className="text-right text-slate-700">
                         <ShopList names={member.shopNames} />
                       </dd>
                     </div>
                     <div className="flex justify-between gap-3">
-                      <dt className="text-zinc-500 dark:text-zinc-400">Joined</dt>
-                      <dd className="text-zinc-700 dark:text-zinc-300">
+                      <dt className="text-slate-500">Joined</dt>
+                      <dd className="text-slate-700">
                         {formatOwnerTimestamp(member.joinedAt ?? member.createdAt)}
                       </dd>
                     </div>
@@ -302,12 +285,7 @@ export default async function RetailerStaffPage() {
       {/* ---------------------------------------------------------------- */}
       {showsInvitationSection(invitations.status) && (
         <section aria-labelledby="invitations-heading" className="mt-10">
-          <h3
-            id="invitations-heading"
-            className="text-sm font-semibold text-zinc-900 dark:text-zinc-50"
-          >
-            Invitations
-          </h3>
+          <SectionHeader title={<span id="invitations-heading">Invitations</span>} />
 
           {invitations.status !== "ok" ? (
             <div className="mt-3">
@@ -316,18 +294,19 @@ export default async function RetailerStaffPage() {
           ) : invitations.invitations.length === 0 ? (
             <div className="mt-3">
               <EmptyPanel
+                icon={<InboxIcon className="h-6 w-6" />}
                 title="No invitations yet"
                 body="Invitations you send will appear here, along with their status."
               />
             </div>
           ) : (
-            <div className="mt-3 overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+            <div className={cardClasses("standard", "mt-3 overflow-hidden")}>
               <div className="overflow-x-auto">
-                <table className="min-w-full divide-y divide-zinc-200 dark:divide-zinc-800">
+                <table className="w-full border-collapse text-left text-sm">
                   <caption className="sr-only">
                     Staff invitations for your Retailer
                   </caption>
-                  <thead className="bg-zinc-50 dark:bg-zinc-900/50">
+                  <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                     <tr>
                       <th scope="col" className={thClasses}>
                         Recipient
@@ -349,7 +328,7 @@ export default async function RetailerStaffPage() {
                       </th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
+                  <tbody className="divide-y divide-slate-100">
                     {invitations.invitations.map((invitation) => {
                       const shops = describeIntendedShops(
                         invitation.shopIds,
@@ -358,12 +337,15 @@ export default async function RetailerStaffPage() {
                       const label = invitationName(invitation);
 
                       return (
-                        <tr key={invitation.invitationId}>
-                          <td className="px-5 py-3.5 text-sm">
-                            <span className="block font-medium text-zinc-900 dark:text-zinc-100">
+                        <tr
+                          key={invitation.invitationId}
+                          className="transition-colors hover:bg-slate-50"
+                        >
+                          <td className="px-4 py-3">
+                            <span className="block font-medium text-slate-900">
                               {label}
                             </span>
-                            <span className="block text-xs text-zinc-500 dark:text-zinc-400">
+                            <span className="block text-xs text-slate-500">
                               {invitation.email}
                             </span>
                           </td>
@@ -373,17 +355,14 @@ export default async function RetailerStaffPage() {
                           <td className={tdClasses}>
                             {shops.names.length === 0 &&
                             shops.unavailableCount === 0 ? (
-                              <span
-                                className="text-zinc-400 dark:text-zinc-600"
-                                aria-label="No shops"
-                              >
+                              <span className="text-slate-400" aria-label="No shops">
                                 —
                               </span>
                             ) : (
                               <>
                                 {shops.names.join(", ")}
                                 {shops.unavailableCount > 0 && (
-                                  <span className="block text-xs text-amber-700 dark:text-amber-400">
+                                  <span className="block text-xs text-amber-700">
                                     {shops.unavailableCount} shop
                                     {shops.unavailableCount === 1 ? "" : "s"} no longer
                                     available
@@ -392,10 +371,10 @@ export default async function RetailerStaffPage() {
                               </>
                             )}
                           </td>
-                          <td className="whitespace-nowrap px-5 py-3.5">
+                          <td className="whitespace-nowrap px-4 py-3">
                             <InvitationStateBadge invitation={invitation} />
                           </td>
-                          <td className="whitespace-nowrap px-5 py-3.5 text-xs text-zinc-500 dark:text-zinc-400">
+                          <td className="whitespace-nowrap px-4 py-3 text-xs text-slate-500">
                             <span className="block">
                               Created {formatOwnerTimestamp(invitation.createdAt)}
                             </span>
@@ -420,7 +399,7 @@ export default async function RetailerStaffPage() {
                               </>
                             )}
                           </td>
-                          <td className="whitespace-nowrap px-5 py-3.5">
+                          <td className="whitespace-nowrap px-4 py-3">
                             {/* Accepted, expired and revoked rows are history: no
                                 control is rendered at all. The RPCs refuse those
                                 states independently. */}
@@ -455,18 +434,12 @@ export default async function RetailerStaffPage() {
       {/* ---------------------------------------------------------------- */}
       {showsInviteSection(assignable.status) && (
         <section aria-labelledby="invite-heading" className="mt-10">
-          <h3
-            id="invite-heading"
-            className="text-sm font-semibold text-zinc-900 dark:text-zinc-50"
-          >
-            Invite staff
-          </h3>
-          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-            Send an invitation to join your Retailer. They will accept it by signing in
-            with the email address you enter.
-          </p>
+          <SectionHeader
+            title={<span id="invite-heading">Invite staff</span>}
+            description="Send an invitation to join your Retailer. They will accept it by signing in with the email address you enter."
+          />
 
-          <div className="mt-3 rounded-xl border border-zinc-200 bg-white p-5 shadow-sm sm:p-6 dark:border-zinc-800 dark:bg-zinc-950">
+          <div className={cardClasses("standard", "mt-3 p-5 sm:p-6")}>
             {showsInviteForm(assignable.status) ? (
               <InviteStaffForm shops={assignableShops} />
             ) : (

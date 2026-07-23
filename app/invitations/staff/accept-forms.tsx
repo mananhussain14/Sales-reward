@@ -10,6 +10,9 @@ import {
 } from "@/app/invitations/staff/actions";
 import { INITIAL_STAFF_ACCEPT_STATE } from "@/app/invitations/staff/accept-state";
 import { MIN_PASSWORD_LENGTH, PASSWORD_HINT } from "@/lib/auth/password-policy";
+import { buttonClasses } from "@/components/ui/button";
+import { inputClasses as controlInputClasses, Label } from "@/components/ui/field";
+import { SpinnerIcon } from "@/components/ui/icons";
 
 /**
  * The client controls on the staff invitation page.
@@ -22,14 +25,11 @@ import { MIN_PASSWORD_LENGTH, PASSWORD_HINT } from "@/lib/auth/password-policy";
  * state.
  */
 
-const primaryButton =
-  "inline-flex w-full items-center justify-center gap-2 rounded-md bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-70 dark:focus-visible:ring-offset-zinc-950";
+const primaryButton = buttonClasses({ variant: "primary", fullWidth: true });
 
-const secondaryButton =
-  "inline-flex w-full items-center justify-center gap-2 rounded-md border border-zinc-300 bg-white px-4 py-2.5 text-sm font-semibold text-zinc-700 shadow-sm transition-colors hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-70 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:focus-visible:ring-offset-zinc-950";
+const secondaryButton = buttonClasses({ variant: "outline", fullWidth: true });
 
-const inputClasses =
-  "block w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 shadow-sm outline-none transition-colors placeholder:text-zinc-400 focus-visible:border-indigo-500 focus-visible:ring-2 focus-visible:ring-indigo-500 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-500";
+const inputClasses = controlInputClasses();
 
 /**
  * The error banner.
@@ -44,7 +44,7 @@ function Alert({ error }: { error: string | null }) {
     <div
       role="alert"
       aria-live="polite"
-      className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300"
+      className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"
     >
       <p>{error}</p>
     </div>
@@ -53,17 +53,7 @@ function Alert({ error }: { error: string | null }) {
 
 /** A small inline spinner for the transition. */
 function Spinner() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      className="h-5 w-5 animate-spin text-indigo-600 dark:text-indigo-400"
-      aria-hidden="true"
-    >
-      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth={4} className="opacity-25" />
-      <path d="M12 2a10 10 0 0110 10" stroke="currentColor" strokeWidth={4} strokeLinecap="round" />
-    </svg>
-  );
+  return <SpinnerIcon className="h-5 w-5 animate-spin text-indigo-600" />;
 }
 
 /**
@@ -109,7 +99,7 @@ export function AcceptInvitationTransition() {
 
       <div className="flex items-center gap-3" role="status" aria-live="polite">
         <Spinner />
-        <span className="text-sm text-zinc-600 dark:text-zinc-300">
+        <span className="text-sm text-slate-600">
           {state.error ? "Almost there…" : "Joining your Retailer…"}
         </span>
       </div>
@@ -222,7 +212,7 @@ export function ActivateStaffAccountForm() {
   if (state.mode === "sign-in") {
     return (
       <div className="space-y-4">
-        <p className="text-sm text-zinc-500 dark:text-zinc-400">
+        <p className="text-sm text-slate-500">
           {state.message ?? "You already have a SalesReward account. Sign in to continue."}
         </p>
         <StaffInvitationSignInPrompt />
@@ -235,12 +225,7 @@ export function ActivateStaffAccountForm() {
       <Alert error={state.error} />
 
       <div className="space-y-2">
-        <label
-          htmlFor="activate-password"
-          className="block text-sm font-medium text-zinc-900 dark:text-zinc-100"
-        >
-          Password
-        </label>
+        <Label htmlFor="activate-password">Password</Label>
         <input
           id="activate-password"
           name="password"
@@ -252,21 +237,13 @@ export function ActivateStaffAccountForm() {
           aria-describedby="activate-password-hint"
           className={inputClasses}
         />
-        <p
-          id="activate-password-hint"
-          className="text-xs text-zinc-500 dark:text-zinc-400"
-        >
+        <p id="activate-password-hint" className="text-xs text-slate-500">
           {PASSWORD_HINT}
         </p>
       </div>
 
       <div className="space-y-2">
-        <label
-          htmlFor="activate-confirm-password"
-          className="block text-sm font-medium text-zinc-900 dark:text-zinc-100"
-        >
-          Confirm password
-        </label>
+        <Label htmlFor="activate-confirm-password">Confirm password</Label>
         <input
           id="activate-confirm-password"
           name="confirmPassword"
@@ -300,7 +277,7 @@ export function StaffInvitationSignInPrompt() {
   return (
     <Link
       href="/login?next=/invitations/staff"
-      className="inline-flex w-full items-center justify-center rounded-md bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-zinc-950"
+      className={buttonClasses({ variant: "primary", size: "lg", fullWidth: true })}
     >
       Sign in
     </Link>

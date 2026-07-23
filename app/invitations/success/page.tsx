@@ -4,6 +4,9 @@ import { redirect } from "next/navigation";
 import { getRetailerOwnerPortalAccess } from "@/lib/retailer-portal/retailer-owner-portal";
 import { LANDING_ROUTES } from "@/lib/auth/landing-decision";
 import { SignOutButton } from "@/components/auth/sign-out-button";
+import { InvitationShell } from "@/components/ui/invitation-shell";
+import { buttonClasses } from "@/components/ui/button";
+import { CheckCircleIcon, InboxIcon } from "@/components/ui/icons";
 
 export const metadata: Metadata = {
   title: "Account activated · SalesReward",
@@ -55,79 +58,37 @@ export default async function InvitationSuccessPage() {
   // retry-safe); neither exposes why.
   const isUnavailable = access.status === "unavailable";
 
+  if (isUnavailable) {
+    return (
+      <InvitationShell
+        icon={<InboxIcon className="h-6 w-6" />}
+        iconTone="amber"
+        title="Something went wrong"
+        description="We couldn’t load your workspace just now. This is usually temporary."
+      >
+        {/* A plain retry into the portal, which re-runs the access check.
+            No id or state is carried; it is a fixed internal route. */}
+        <Link
+          href={LANDING_ROUTES.retailer}
+          className={buttonClasses({ variant: "primary", size: "lg", fullWidth: true })}
+        >
+          Try again
+        </Link>
+      </InvitationShell>
+    );
+  }
+
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-zinc-50 px-4 py-12 dark:bg-zinc-900">
-      <main className="w-full max-w-sm">
-        <div className="mb-8 flex flex-col items-center text-center">
-          <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-indigo-600 text-base font-bold text-white">
-            SR
-          </span>
-          <span className="mt-3 text-base font-semibold text-zinc-900 dark:text-zinc-50">
-            SalesReward
-          </span>
-        </div>
-
-        <div className="rounded-xl border border-zinc-200 bg-white p-6 text-center shadow-sm sm:p-8 dark:border-zinc-800 dark:bg-zinc-950">
-          {isUnavailable ? (
-            <>
-              <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-                Something went wrong
-              </h1>
-              <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
-                We couldn&apos;t load your workspace just now. This is usually
-                temporary.
-              </p>
-              {/* A plain retry into the portal, which re-runs the access check.
-                  No id or state is carried; it is a fixed internal route. */}
-              <div className="mt-6">
-                <Link
-                  href={LANDING_ROUTES.retailer}
-                  className="inline-flex w-full items-center justify-center rounded-md bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-zinc-950"
-                >
-                  Try again
-                </Link>
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-400">
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth={1.75}
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="h-5 w-5"
-                  aria-hidden="true"
-                >
-                  <path d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-              </div>
-
-              <h1 className="mt-4 text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-                You&apos;re signed in
-              </h1>
-              {/* Deliberately generic. This branch is a signed-in caller who is
-                  not an authorized Retailer Owner; it must not confirm or deny
-                  any invitation or membership. */}
-              <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
-                This account doesn&apos;t currently have access to a retailer
-                workspace. If you believe this is a mistake, please contact the
-                person who invited you.
-              </p>
-
-              <div className="mt-6">
-                <SignOutButton variant="card" />
-              </div>
-            </>
-          )}
-        </div>
-
-        <p className="mt-6 text-center text-xs text-zinc-400 dark:text-zinc-600">
-          SalesReward · v0.1
-        </p>
-      </main>
-    </div>
+    <InvitationShell
+      icon={<CheckCircleIcon className="sr-animate-pop h-7 w-7" />}
+      iconTone="emerald"
+      title="You’re signed in"
+      // Deliberately generic. This branch is a signed-in caller who is not an
+      // authorized Retailer Owner; it must not confirm or deny any invitation or
+      // membership.
+      description="This account doesn’t currently have access to a retailer workspace. If you believe this is a mistake, please contact the person who invited you."
+    >
+      <SignOutButton variant="card" />
+    </InvitationShell>
   );
 }

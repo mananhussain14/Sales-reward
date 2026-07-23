@@ -9,6 +9,10 @@ import {
   SUPPORTED_RECEIPT_MIME_TYPES,
 } from "@/lib/receipts/receipt-file";
 import type { AssignedReceiptShop } from "@/lib/receipts/receipt-normalization";
+import { Alert } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Label, selectClasses, SelectChevron } from "@/components/ui/field";
+import { UploadIcon, XIcon } from "@/components/ui/icons";
 
 /**
  * The receipt submission form.
@@ -38,20 +42,6 @@ type SubmitReceiptFormProps = {
   shops: AssignedReceiptShop[];
 };
 
-const inputClasses =
-  "block w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 shadow-sm outline-none transition-colors focus-visible:border-indigo-500 focus-visible:ring-2 focus-visible:ring-indigo-500 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100";
-
-const labelClasses = "block text-sm font-medium text-zinc-900 dark:text-zinc-100";
-
-function FieldError({ id, message }: { id: string; message?: string }) {
-  if (!message) return null;
-  return (
-    <p id={id} role="alert" className="text-sm text-red-600 dark:text-red-400">
-      {message}
-    </p>
-  );
-}
-
 export function SubmitReceiptForm({ shops }: SubmitReceiptFormProps) {
   const [state, formAction, pending] = useActionState(
     submitReceiptAction,
@@ -64,6 +54,14 @@ export function SubmitReceiptForm({ shops }: SubmitReceiptFormProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const maxMegabytes = Math.floor(MAX_RECEIPT_FILE_BYTES / (1024 * 1024));
+  const disabled = pending || shops.length === 0;
+
+  // Clears the selected file and resets the native input. Presentation only — it
+  // touches no server state and posts nothing.
+  function clearChosen() {
+    setChosen(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
 
   return (
     <form
@@ -78,56 +76,55 @@ export function SubmitReceiptForm({ shops }: SubmitReceiptFormProps) {
       className="space-y-5"
       noValidate
     >
-      {state.formError && (
-        <div
-          role="alert"
-          aria-live="polite"
-          className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300"
-        >
-          <p>{state.formError}</p>
-        </div>
-      )}
+      {state.formError && <Alert tone="error">{state.formError}</Alert>}
 
       {state.successMessage && (
-        <div
-          role="status"
-          aria-live="polite"
-          className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-300"
-        >
-          <p>{state.successMessage}</p>
-        </div>
+        <Alert tone="success" className="sr-animate-fade-in">
+          {state.successMessage}
+        </Alert>
       )}
 
       <div className="space-y-2">
-        <label htmlFor="shopId" className={labelClasses}>
-          Shop
-        </label>
-        <select
-          id="shopId"
-          name="shopId"
-          required
-          disabled={pending || shops.length === 0}
-          defaultValue={state.selectedShopId}
-          aria-describedby={state.fieldErrors.shopId ? "shopId-error" : undefined}
-          className={inputClasses}
-        >
-          <option value="">Select a shop…</option>
-          {shops.map((shop) => (
-            <option key={shop.shopId} value={shop.shopId}>
-              {shop.shopCode ? `${shop.shopName} · ${shop.shopCode}` : shop.shopName}
-            </option>
-          ))}
-        </select>
-        <FieldError id="shopId-error" message={state.fieldErrors.shopId} />
-        <p className="text-xs text-zinc-500 dark:text-zinc-400">
+        <Label htmlFor="shopId">Shop</Label>
+        <div className="relative">
+          <select
+            id="shopId"
+            name="shopId"
+            required
+            disabled={disabled}
+            defaultValue={state.selectedShopId}
+            aria-describedby={state.fieldErrors.shopId ? "shopId-error" : undefined}
+            className={selectClasses(Boolean(state.fieldErrors.shopId))}
+          >
+            <option value="">Select a shop…</option>
+            {shops.map((shop) => (
+              <option key={shop.shopId} value={shop.shopId}>
+                {shop.shopCode ? `${shop.shopName} · ${shop.shopCode}` : shop.shopName}
+              </option>
+            ))}
+          </select>
+          <SelectChevron />
+        </div>
+        {state.fieldErrors.shopId && (
+          <p id="shopId-error" role="alert" className="text-sm font-medium text-red-700">
+            {state.fieldErrors.shopId}
+          </p>
+        )}
+        <p className="text-xs text-slate-500">
           Only the shops you are currently assigned to are listed.
         </p>
       </div>
 
       <div className="space-y-2">
-        <label htmlFor="receipt" className={labelClasses}>
-          Receipt photo
-        </label>
+        <Label htmlFor="receipt">Receipt photo</Label>
+
+        {/*
+          A large tap-to-upload target, mobile-first. The real <input type="file">
+          keeps every semantic it had — id, name, ref, accept, required, disabled,
+          onChange, aria — and stays keyboard-focusable; it is visually collapsed
+          (`sr-only peer`) and the styled label is what a pointer taps. `peer-focus`
+          lifts the label's ring so keyboard focus stays visible.
+        */}
         <input
           ref={fileInputRef}
           id="receipt"
@@ -137,7 +134,7 @@ export function SubmitReceiptForm({ shops }: SubmitReceiptFormProps) {
              type from the file's leading bytes and ignores what the browser claims. */
           accept={SUPPORTED_RECEIPT_MIME_TYPES.join(",")}
           required
-          disabled={pending || shops.length === 0}
+          disabled={disabled}
           onChange={(event) => {
             const file = event.currentTarget.files?.[0];
             setChosen(file ? { name: file.name, size: file.size } : null);
@@ -145,54 +142,77 @@ export function SubmitReceiptForm({ shops }: SubmitReceiptFormProps) {
           aria-describedby={
             state.fieldErrors.receipt ? "receipt-error" : "receipt-hint"
           }
-          className="block w-full text-sm text-zinc-700 file:mr-3 file:rounded-md file:border-0 file:bg-indigo-50 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-indigo-700 hover:file:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60 dark:text-zinc-300 dark:file:bg-indigo-950/60 dark:file:text-indigo-300"
+          className="peer sr-only"
         />
-        <FieldError id="receipt-error" message={state.fieldErrors.receipt} />
 
-        {chosen && (
-          <p
-            className="text-xs font-medium text-zinc-700 dark:text-zinc-300"
-            aria-live="polite"
+        {chosen ? (
+          <div className="flex items-center gap-3 rounded-2xl border border-indigo-200 bg-indigo-50/60 p-4 peer-focus-visible:ring-2 peer-focus-visible:ring-indigo-500 peer-focus-visible:ring-offset-2">
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white text-indigo-600 shadow-sm">
+              <UploadIcon className="h-5 w-5" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium text-slate-900" aria-live="polite">
+                {chosen.name}
+              </p>
+              <p className="text-xs text-slate-500">{formatFileSize(chosen.size)}</p>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <label
+                htmlFor="receipt"
+                className="cursor-pointer rounded-lg px-2.5 py-1.5 text-xs font-semibold text-indigo-700 transition-colors hover:bg-indigo-100"
+              >
+                Replace
+              </label>
+              <button
+                type="button"
+                onClick={clearChosen}
+                disabled={disabled}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+              >
+                <XIcon className="h-4 w-4" />
+                <span className="sr-only">Remove selected file</span>
+              </button>
+            </div>
+          </div>
+        ) : (
+          <label
+            htmlFor="receipt"
+            className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 px-6 py-8 text-center transition-colors hover:border-indigo-400 hover:bg-indigo-50/50 peer-focus-visible:border-indigo-500 peer-focus-visible:ring-2 peer-focus-visible:ring-indigo-500 peer-focus-visible:ring-offset-2 peer-disabled:cursor-not-allowed peer-disabled:opacity-60"
           >
-            {chosen.name} · {formatFileSize(chosen.size)}
+            <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600">
+              <UploadIcon className="h-6 w-6" />
+            </span>
+            <span className="text-sm font-semibold text-slate-900">
+              Tap to upload a receipt
+            </span>
+            <span className="text-xs text-slate-500">
+              One JPEG, PNG or WebP image, up to {maxMegabytes} MB
+            </span>
+          </label>
+        )}
+
+        {state.fieldErrors.receipt && (
+          <p id="receipt-error" role="alert" className="text-sm font-medium text-red-700">
+            {state.fieldErrors.receipt}
           </p>
         )}
 
-        <p id="receipt-hint" className="text-xs text-zinc-500 dark:text-zinc-400">
+        <p id="receipt-hint" className="text-xs text-slate-500">
           One JPEG, PNG or WebP image, up to {maxMegabytes} MB.
         </p>
       </div>
 
-      <button
+      <Button
         type="submit"
-        disabled={pending || shops.length === 0}
-        className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-70 sm:w-auto dark:focus-visible:ring-offset-zinc-950"
+        variant="primary"
+        size="lg"
+        disabled={disabled}
+        loading={pending}
+        loadingLabel="Submitting…"
+        className="w-full sm:w-auto"
       >
-        {pending && (
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            className="h-4 w-4 animate-spin"
-            aria-hidden="true"
-          >
-            <circle
-              cx="12"
-              cy="12"
-              r="10"
-              stroke="currentColor"
-              strokeWidth={4}
-              className="opacity-25"
-            />
-            <path
-              d="M12 2a10 10 0 0110 10"
-              stroke="currentColor"
-              strokeWidth={4}
-              strokeLinecap="round"
-            />
-          </svg>
-        )}
-        {pending ? "Submitting…" : "Submit receipt"}
-      </button>
+        Submit receipt
+      </Button>
     </form>
   );
 }

@@ -1,8 +1,10 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { getVendorRetailerDetail } from "@/lib/retailers/vendor-retailer-detail";
 import { ShopForm } from "@/app/(admin)/retailers/[relationshipId]/shops/new/shop-form";
+import { BackLink } from "@/components/ui/page-header";
+import { EmptyState } from "@/components/ui/empty-state";
+import { ShopIcon } from "@/components/ui/icons";
 
 /**
  * Static, and deliberately generic — the same reasoning as the detail page it
@@ -25,40 +27,6 @@ type PageProps = {
 };
 
 const ACTIVE_STATUS = "ACTIVE";
-
-/** Returns to the Retailer. Present in every state this page can render. */
-function BackToRetailerLink({ relationshipId }: { relationshipId: string }) {
-  return (
-    <Link
-      href={`/retailers/${relationshipId}`}
-      className="inline-flex items-center gap-1.5 rounded-sm text-sm text-zinc-500 underline-offset-4 transition-colors hover:text-indigo-600 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 dark:text-zinc-400 dark:hover:text-indigo-400 dark:focus-visible:ring-offset-zinc-950"
-    >
-      <svg
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={1.75}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        className="h-4 w-4"
-        aria-hidden="true"
-      >
-        <path d="M15.75 19.5L8.25 12l7.5-7.5" />
-      </svg>
-      Back to Retailer
-    </Link>
-  );
-}
-
-/** Neutral panel, used for the unavailable and inactive states alike. */
-function NoticePanel({ title, body }: { title: string; body: string }) {
-  return (
-    <div className="rounded-xl border border-zinc-200 bg-white px-6 py-10 text-center dark:border-zinc-800 dark:bg-zinc-950">
-      <p className="text-sm font-medium text-zinc-900 dark:text-zinc-50">{title}</p>
-      <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">{body}</p>
-    </div>
-  );
-}
 
 /**
  * Add Shop page for one Vendor-managed Retailer. A Server Component: the queries,
@@ -98,20 +66,19 @@ export default async function AddShopPage({ params }: PageProps) {
   if (detail.status === "unavailable") {
     return (
       <div className="mx-auto max-w-3xl space-y-6">
-        <BackToRetailerLink relationshipId={relationshipId} />
+        <BackLink href={`/retailers/${relationshipId}`}>Back to Retailer</BackLink>
         {/*
           Deliberately generic and reason-free: the only cause is a database or
           network failure, whose detail must never reach a browser.
         */}
-        <NoticePanel
+        <EmptyState
+          icon={<ShopIcon className="h-6 w-6" />}
           title="Retailer unavailable"
-          body="Retailer details are temporarily unavailable. Please try again."
+          description="Retailer details are temporarily unavailable. Please try again."
         />
-        <p className="text-center text-sm text-zinc-500 dark:text-zinc-400">
+        <p className="text-center text-sm text-slate-500">
           Signed in to{" "}
-          <span className="font-medium text-zinc-700 dark:text-zinc-300">
-            {detail.organizationName}
-          </span>
+          <span className="font-medium text-slate-700">{detail.organizationName}</span>
         </p>
       </div>
     );
@@ -138,31 +105,29 @@ export default async function AddShopPage({ params }: PageProps) {
     // matches /retailers/new.
     <div className="mx-auto max-w-3xl space-y-6">
       <div>
-        <BackToRetailerLink relationshipId={relationshipId} />
+        <BackLink href={`/retailers/${relationshipId}`}>Back to Retailer</BackLink>
 
-        <h2 className="mt-3 text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+        <h2 className="mt-3 text-2xl font-semibold tracking-tight text-slate-900">
           Add Shop
         </h2>
-        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+        <p className="mt-1.5 max-w-2xl text-sm text-slate-500">
           Add one more shop location to{" "}
-          <span className="font-medium text-zinc-700 dark:text-zinc-300">
-            {retailer.retailerName}
-          </span>
-          , the Retailer managed by{" "}
-          <span className="font-medium text-zinc-700 dark:text-zinc-300">
-            {organizationName}
-          </span>
-          . This creates a single additional shop and does not change anything
-          else about the Retailer.
+          <span className="font-medium text-slate-700">{retailer.retailerName}</span>,
+          the Retailer managed by{" "}
+          <span className="font-medium text-slate-700">{organizationName}</span>.
+          This creates a single additional shop and does not change anything else
+          about the Retailer.
         </p>
       </div>
 
       {canAddShop ? (
         <ShopForm relationshipId={relationshipId} />
       ) : (
-        <NoticePanel
+        <EmptyState
+          icon={<ShopIcon className="h-6 w-6" />}
+          tone="amber"
           title="Shops cannot be added right now"
-          body={
+          description={
             retailer.relationshipStatus !== ACTIVE_STATUS
               ? "This Vendor–Retailer relationship is not active. Shops can be added once the relationship is active again."
               : "This Retailer organization is not active. Shops can be added once the Retailer is active again."

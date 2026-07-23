@@ -8,6 +8,10 @@ import {
   type OnboardRetailerField,
   type OnboardRetailerState,
 } from "@/app/(admin)/retailers/new/onboard-state";
+import { SectionCard } from "@/components/ui/card";
+import { Alert } from "@/components/ui/alert";
+import { Button, buttonClasses } from "@/components/ui/button";
+import { inputClasses, Label } from "@/components/ui/field";
 
 /**
  * Retailer onboarding form.
@@ -29,14 +33,6 @@ import {
  * organization id, actor id, relationship id, role code, permission code, or
  * status — the database derives every one of those from the caller's own token.
  */
-
-/** Shared input styling, matching the sign-in form's fields exactly. */
-const INPUT_CLASSES =
-  "block w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 shadow-sm outline-none transition-colors placeholder:text-zinc-400 focus-visible:border-indigo-500 focus-visible:ring-2 focus-visible:ring-indigo-500 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-500";
-
-/** Applied on top of the shared styling when a field has been rejected. */
-const INPUT_ERROR_CLASSES =
-  "border-red-400 focus-visible:border-red-500 focus-visible:ring-red-500 dark:border-red-800";
 
 type FieldProps = {
   field: OnboardRetailerField;
@@ -80,20 +76,12 @@ function Field({
 
   return (
     <div className="space-y-2">
-      <label
-        htmlFor={field}
-        className="block text-sm font-medium text-zinc-900 dark:text-zinc-100"
-      >
+      <Label htmlFor={field} optional={!required}>
         {label}
-        {!required && (
-          <span className="ml-1 font-normal text-zinc-400 dark:text-zinc-500">
-            (optional)
-          </span>
-        )}
-      </label>
+      </Label>
 
       {hint && (
-        <p id={hintId} className="text-xs text-zinc-500 dark:text-zinc-400">
+        <p id={hintId} className="text-xs text-slate-500">
           {hint}
         </p>
       )}
@@ -116,38 +104,15 @@ function Field({
         disabled={pending}
         aria-invalid={error ? true : undefined}
         aria-describedby={describedBy}
-        className={`${INPUT_CLASSES}${error ? ` ${INPUT_ERROR_CLASSES}` : ""}`}
+        className={inputClasses(Boolean(error))}
       />
 
       {error && (
-        <p id={errorId} className="text-sm text-red-700 dark:text-red-400">
+        <p id={errorId} className="text-sm font-medium text-red-700">
           {error}
         </p>
       )}
     </div>
-  );
-}
-
-/** Groups the two sections, matching the admin panel styling used elsewhere. */
-function Section({
-  title,
-  description,
-  children,
-}: {
-  title: string;
-  description: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="rounded-xl border border-zinc-200 bg-white p-5 sm:p-6 dark:border-zinc-800 dark:bg-zinc-950">
-      <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-        {title}
-      </h3>
-      <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-        {description}
-      </p>
-      <div className="mt-5 space-y-5">{children}</div>
-    </section>
   );
 }
 
@@ -169,96 +134,83 @@ export function RetailerForm() {
         safe message from the action — never a database string.
       */}
       {state.formError && (
-        <div
-          id="onboard-error"
-          role="alert"
-          aria-live="polite"
-          className="flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300"
-        >
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={1.75}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className="mt-0.5 h-4 w-4 shrink-0"
-            aria-hidden="true"
-          >
-            <path d="M12 9v3.75m0 3.75h.008M10.34 3.94l-8.02 13.5A1.5 1.5 0 003.6 19.5h16.8a1.5 1.5 0 001.28-2.06l-8.02-13.5a1.5 1.5 0 00-2.58 0z" />
-          </svg>
-          <p>{state.formError}</p>
-        </div>
+        <Alert id="onboard-error" tone="error">
+          {state.formError}
+        </Alert>
       )}
 
-      <Section
+      <SectionCard
         title="Retailer details"
         description="The Retailer company this Vendor will manage. It is created as active."
       >
-        <Field
-          field="retailerName"
-          label="Retailer name"
-          required
-          autoComplete="organization"
-          state={state}
-          pending={pending}
-        />
+        <div className="space-y-5">
+          <Field
+            field="retailerName"
+            label="Retailer name"
+            required
+            autoComplete="organization"
+            state={state}
+            pending={pending}
+          />
 
-        <div className="grid gap-5 sm:grid-cols-2">
-          <Field
-            field="countryCode"
-            label="Country code"
-            hint="Two-letter ISO country code, such as AE."
-            autoComplete="off"
-            maxLength={2}
-            placeholder="AE"
-            state={state}
-            pending={pending}
-          />
-          <Field
-            field="defaultCurrency"
-            label="Default currency"
-            hint="Three-letter code, such as AED."
-            autoComplete="off"
-            maxLength={3}
-            placeholder="AED"
-            state={state}
-            pending={pending}
-          />
+          <div className="grid gap-5 sm:grid-cols-2">
+            <Field
+              field="countryCode"
+              label="Country code"
+              hint="Two-letter ISO country code, such as AE."
+              autoComplete="off"
+              maxLength={2}
+              placeholder="AE"
+              state={state}
+              pending={pending}
+            />
+            <Field
+              field="defaultCurrency"
+              label="Default currency"
+              hint="Three-letter code, such as AED."
+              autoComplete="off"
+              maxLength={3}
+              placeholder="AED"
+              state={state}
+              pending={pending}
+            />
+          </div>
         </div>
-      </Section>
+      </SectionCard>
 
-      <Section
+      <SectionCard
         title="First shop"
         description="Every Retailer starts with one shop location. More can be added later."
       >
-        <Field
-          field="shopName"
-          label="Shop name"
-          required
-          autoComplete="off"
-          state={state}
-          pending={pending}
-        />
-
-        <div className="grid gap-5 sm:grid-cols-2">
+        <div className="space-y-5">
           <Field
-            field="shopCode"
-            label="Shop code"
-            hint="Your own reference for this location, if you use one."
+            field="shopName"
+            label="Shop name"
+            required
             autoComplete="off"
             state={state}
             pending={pending}
           />
-          <Field
-            field="shopCity"
-            label="City"
-            autoComplete="address-level2"
-            state={state}
-            pending={pending}
-          />
+
+          <div className="grid gap-5 sm:grid-cols-2">
+            <Field
+              field="shopCode"
+              label="Shop code"
+              hint="Your own reference for this location, if you use one."
+              autoComplete="off"
+              state={state}
+              pending={pending}
+            />
+            <Field
+              field="shopCity"
+              label="City"
+              autoComplete="address-level2"
+              state={state}
+              pending={pending}
+            />
+          </div>
         </div>
-      </Section>
+      </SectionCard>
 
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-end">
         {/*
@@ -273,9 +225,10 @@ export function RetailerForm() {
           href="/retailers"
           aria-disabled={pending || undefined}
           tabIndex={pending ? -1 : undefined}
-          className={`inline-flex items-center justify-center rounded-md border border-zinc-300 bg-white px-4 py-2.5 text-sm font-semibold text-zinc-700 shadow-sm transition-colors hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:focus-visible:ring-offset-zinc-950 ${
-            pending ? "pointer-events-none opacity-60" : ""
-          }`}
+          className={buttonClasses(
+            { variant: "outline" },
+            pending ? "pointer-events-none opacity-60" : undefined,
+          )}
         >
           Cancel
         </Link>
@@ -285,36 +238,9 @@ export function RetailerForm() {
           is disabled for the whole round trip, and on success the action
           redirects, so there is no filled form left to resubmit.
         */}
-        <button
-          type="submit"
-          disabled={pending}
-          className="inline-flex items-center justify-center gap-2 rounded-md bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-70 dark:focus-visible:ring-offset-zinc-950"
-        >
-          {pending && (
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              className="h-4 w-4 animate-spin"
-              aria-hidden="true"
-            >
-              <circle
-                cx="12"
-                cy="12"
-                r="10"
-                stroke="currentColor"
-                strokeWidth={4}
-                className="opacity-25"
-              />
-              <path
-                d="M12 2a10 10 0 0110 10"
-                stroke="currentColor"
-                strokeWidth={4}
-                strokeLinecap="round"
-              />
-            </svg>
-          )}
-          {pending ? "Creating Retailer…" : "Create Retailer"}
-        </button>
+        <Button type="submit" loading={pending} loadingLabel="Creating Retailer…">
+          Create Retailer
+        </Button>
       </div>
     </form>
   );

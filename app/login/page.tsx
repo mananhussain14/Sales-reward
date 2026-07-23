@@ -3,6 +3,8 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { resolveSafeNextPath } from "@/lib/auth/safe-next-path";
 import { LoginForm } from "@/app/login/login-form";
+import { BrandLockup } from "@/components/ui/brand";
+import { AuthBrandPanel } from "@/components/ui/auth-brand-panel";
 
 export const metadata: Metadata = {
   title: "Sign in · SalesReward",
@@ -61,35 +63,36 @@ export default async function LoginPage({
   }
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-zinc-50 px-4 py-12 dark:bg-zinc-900">
-      <main className="w-full max-w-sm">
-        {/* Branding — mirrors the sidebar lockup so login and dashboard read as one product. */}
-        <div className="mb-8 flex flex-col items-center text-center">
-          <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-indigo-600 text-base font-bold text-white">
-            SR
-          </span>
-          <span className="mt-3 text-base font-semibold text-zinc-900 dark:text-zinc-50">
-            SalesReward
-          </span>
-        </div>
+    <div className="min-h-screen bg-white lg:grid lg:grid-cols-2">
+      {/* Marketing panel — wide screens only, role-neutral. */}
+      <AuthBrandPanel />
 
-        <div className="rounded-xl border border-zinc-200 bg-white p-6 shadow-sm sm:p-8 dark:border-zinc-800 dark:bg-zinc-950">
-          <div className="mb-6">
-            <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-              Sign in to SalesReward
-            </h1>
-            <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-              Enter your email and password to continue.
-            </p>
+      {/* Sign-in panel. On mobile it is the whole page; the form leads. */}
+      <div className="flex min-h-screen flex-col justify-center bg-slate-50 px-4 py-12 sm:px-6 lg:bg-white lg:px-12">
+        <main className="mx-auto w-full max-w-sm">
+          {/* Compact brand header — shown on mobile, where the panel is hidden. */}
+          <div className="mb-8 lg:hidden">
+            <BrandLockup size={40} idSuffix="-login-mobile" />
           </div>
 
-          <LoginForm next={safeNext} />
-        </div>
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-card sm:p-8 lg:border-0 lg:p-0 lg:shadow-none">
+            <div className="mb-6">
+              <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+                Welcome back
+              </h1>
+              <p className="mt-1.5 text-sm text-slate-500">
+                Sign in to your SalesReward account to continue.
+              </p>
+            </div>
 
-        <p className="mt-6 text-center text-xs text-zinc-400 dark:text-zinc-600">
-          SalesReward
-        </p>
-      </main>
+            <LoginForm next={safeNext} />
+          </div>
+
+          <p className="mt-8 text-center text-xs text-slate-400">
+            Secure sign-in · SalesReward
+          </p>
+        </main>
+      </div>
     </div>
   );
 }

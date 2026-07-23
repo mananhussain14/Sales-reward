@@ -12,6 +12,13 @@ import {
   StaffInvitationSignInPrompt,
   WrongAccountSwitch,
 } from "@/app/invitations/staff/accept-forms";
+import { InvitationShell } from "@/components/ui/invitation-shell";
+import {
+  InboxIcon,
+  KeyIcon,
+  MailIcon,
+  UsersIcon,
+} from "@/components/ui/icons";
 
 /**
  * The CLEAN staff invitation page — no token in the URL. It was exchanged for an
@@ -55,44 +62,18 @@ export const metadata: Metadata = {
  * DEFINER RPCs wrapped in @/lib/staff/staff-acceptance and @/lib/staff/staff-registration.
  */
 
-/** Centered card shell shared by every state below. */
-function Shell({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-zinc-50 px-4 py-12 dark:bg-zinc-900">
-      <main className="w-full max-w-md">
-        <div className="mb-8 flex flex-col items-center text-center">
-          <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-indigo-600 text-base font-bold text-white">
-            SR
-          </span>
-          <span className="mt-3 text-base font-semibold text-zinc-900 dark:text-zinc-50">
-            SalesReward
-          </span>
-        </div>
-        <div className="rounded-xl border border-zinc-200 bg-white p-6 shadow-sm sm:p-8 dark:border-zinc-800 dark:bg-zinc-950">
-          {children}
-        </div>
-      </main>
-    </div>
-  );
-}
-
-const headingClasses =
-  "text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50";
-const bodyClasses = "mt-2 text-sm text-zinc-500 dark:text-zinc-400";
-
 /**
  * The single generic screen for an unavailable invitation when the visitor is signed
  * OUT and there is nothing to offer. Reveals nothing; identical for a fabricated token.
  */
 function UnavailableScreen() {
   return (
-    <Shell>
-      <h1 className={headingClasses}>This invitation isn&rsquo;t available</h1>
-      <p className={bodyClasses}>
-        It may have expired, been withdrawn, already been accepted, or been sent to a
-        different email address. Ask the person who invited you to send a new one.
-      </p>
-    </Shell>
+    <InvitationShell
+      icon={<InboxIcon className="h-6 w-6" />}
+      iconTone="amber"
+      title="This invitation isn’t available"
+      description="It may have expired, been withdrawn, already been accepted, or been sent to a different email address. Ask the person who invited you to send a new one."
+    />
   );
 }
 
@@ -148,32 +129,30 @@ export default async function StaffInvitationPage() {
 
     if (view === "sign-in") {
       return (
-        <Shell>
-          <h1 className={headingClasses}>You already have a SalesReward account</h1>
-          <p className={bodyClasses}>
-            Sign in to continue. You&rsquo;ll come straight back here, and your
-            invitation will be accepted automatically.
-          </p>
-          <div className="mt-6">
-            <StaffInvitationSignInPrompt />
-          </div>
-        </Shell>
+        <InvitationShell
+          icon={<MailIcon className="h-6 w-6" />}
+          steps={["Invitation", "Sign in", "Done"]}
+          activeStep={1}
+          title="You already have a SalesReward account"
+          description="Sign in to continue. You’ll come straight back here, and your invitation will be accepted automatically."
+        >
+          <StaffInvitationSignInPrompt />
+        </InvitationShell>
       );
     }
 
     // view === "register": no account yet. Password and confirmation only — the address
     // is derived from the invitation on the server.
     return (
-      <Shell>
-        <h1 className={headingClasses}>Set your password</h1>
-        <p className={bodyClasses}>
-          You&rsquo;ve been invited to join a Retailer on SalesReward. Choose a password
-          to activate your account.
-        </p>
-        <div className="mt-6">
-          <ActivateStaffAccountForm />
-        </div>
-      </Shell>
+      <InvitationShell
+        icon={<KeyIcon className="h-6 w-6" />}
+        steps={["Invitation", "Set password", "Done"]}
+        activeStep={1}
+        title="Set your password"
+        description="You’ve been invited to join a Retailer on SalesReward. Choose a password to activate your account."
+      >
+        <ActivateStaffAccountForm />
+      </InvitationShell>
     );
   }
 
@@ -200,16 +179,14 @@ export default async function StaffInvitationPage() {
     // so neither does this. Offer the account switch, which is the remedy for the
     // common (wrong-account) case and harmless for the rare (dead) one.
     return (
-      <Shell>
-        <h1 className={headingClasses}>Continue with the invited account</h1>
-        <p className={bodyClasses}>
-          Another SalesReward account is currently signed in. Continuing will sign out
-          that account so you can use this invitation.
-        </p>
-        <div className="mt-6">
-          <WrongAccountSwitch />
-        </div>
-      </Shell>
+      <InvitationShell
+        icon={<UsersIcon className="h-6 w-6" />}
+        iconTone="amber"
+        title="Continue with the invited account"
+        description="Another SalesReward account is currently signed in. Continuing will sign out that account so you can use this invitation."
+      >
+        <WrongAccountSwitch />
+      </InvitationShell>
     );
   }
 
@@ -217,14 +194,15 @@ export default async function StaffInvitationPage() {
   // correct role landing. No Retailer, role, shop, email, token, hash or id is passed to
   // it — the acceptance action re-reads the cookie server-side.
   return (
-    <Shell>
-      <h1 className={headingClasses}>Joining your Retailer…</h1>
-      <p className={bodyClasses}>
-        Hold on a moment while we finish setting up your access.
-      </p>
-      <div className="mt-6">
-        <AcceptInvitationTransition />
-      </div>
-    </Shell>
+    <InvitationShell
+      icon={<InboxIcon className="h-6 w-6" />}
+      iconTone="emerald"
+      steps={["Invitation", "Set up", "Joining"]}
+      activeStep={2}
+      title="Joining your Retailer…"
+      description="Hold on a moment while we finish setting up your access."
+    >
+      <AcceptInvitationTransition />
+    </InvitationShell>
   );
 }

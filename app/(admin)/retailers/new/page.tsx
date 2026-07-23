@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getVendorSuperAdminAccess } from "@/lib/auth/vendor-admin-access";
 import { RetailerForm } from "@/app/(admin)/retailers/new/retailer-form";
+import { BackLink } from "@/components/ui/page-header";
 
 export const metadata: Metadata = {
   title: "Add Retailer · SalesReward Admin",
@@ -42,34 +42,15 @@ export default async function NewRetailerPage() {
     // to scan when its labels and inputs are stretched across a wide screen.
     <div className="mx-auto max-w-3xl space-y-6">
       <div>
-        <Link
-          href="/retailers"
-          className="inline-flex items-center gap-1.5 text-sm font-medium text-zinc-500 transition-colors hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 dark:text-zinc-400 dark:hover:text-zinc-100 dark:focus-visible:ring-offset-zinc-950"
-        >
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={1.75}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className="h-4 w-4"
-            aria-hidden="true"
-          >
-            <path d="M15.75 19.5L8.25 12l7.5-7.5" />
-          </svg>
-          Back to Retailers
-        </Link>
+        <BackLink href="/retailers">Back to Retailers</BackLink>
 
-        <h2 className="mt-3 text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+        <h2 className="mt-3 text-2xl font-semibold tracking-tight text-slate-900">
           Add Retailer
         </h2>
-        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+        <p className="mt-1.5 max-w-2xl text-sm text-slate-500">
           Create a Retailer organization managed by{" "}
-          <span className="font-medium text-zinc-700 dark:text-zinc-300">
-            {organizationName}
-          </span>
-          , together with its first shop. The Retailer, the relationship, and the
+          <span className="font-medium text-slate-700">{organizationName}</span>,
+          together with its first shop. The Retailer, the relationship, and the
           shop are all created as active, in a single step.
         </p>
       </div>

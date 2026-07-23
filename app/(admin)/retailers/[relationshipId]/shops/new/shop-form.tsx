@@ -8,6 +8,10 @@ import {
   type AddShopField,
   type AddShopState,
 } from "@/app/(admin)/retailers/[relationshipId]/shops/new/add-shop-state";
+import { SectionCard } from "@/components/ui/card";
+import { Alert } from "@/components/ui/alert";
+import { Button, buttonClasses } from "@/components/ui/button";
+import { inputClasses } from "@/components/ui/field";
 
 /**
  * Add Shop form.
@@ -45,14 +49,6 @@ import {
 type ShopFormProps = {
   relationshipId: string;
 };
-
-/** Shared input styling, matching the onboarding and sign-in forms exactly. */
-const INPUT_CLASSES =
-  "block w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 shadow-sm outline-none transition-colors placeholder:text-zinc-400 focus-visible:border-indigo-500 focus-visible:ring-2 focus-visible:ring-indigo-500 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-500";
-
-/** Applied on top of the shared styling when a field has been rejected. */
-const INPUT_ERROR_CLASSES =
-  "border-red-400 focus-visible:border-red-500 focus-visible:ring-red-500 dark:border-red-800";
 
 type FieldProps = {
   field: AddShopField;
@@ -97,24 +93,19 @@ function Field({
 
   return (
     <div className="space-y-2">
-      <label
-        htmlFor={field}
-        className="block text-sm font-medium text-zinc-900 dark:text-zinc-100"
-      >
+      <label htmlFor={field} className="block text-sm font-medium text-slate-800">
         {label}
         {required ? (
-          <span className="ml-1 text-red-600 dark:text-red-400" aria-hidden="true">
+          <span className="ml-1 text-red-600" aria-hidden="true">
             *
           </span>
         ) : (
-          <span className="ml-1 font-normal text-zinc-400 dark:text-zinc-500">
-            (optional)
-          </span>
+          <span className="ml-1 font-normal text-slate-400">(optional)</span>
         )}
       </label>
 
       {hint && (
-        <p id={hintId} className="text-xs text-zinc-500 dark:text-zinc-400">
+        <p id={hintId} className="text-xs text-slate-500">
           {hint}
         </p>
       )}
@@ -136,11 +127,11 @@ function Field({
         disabled={pending}
         aria-invalid={error ? true : undefined}
         aria-describedby={describedBy}
-        className={`${INPUT_CLASSES}${error ? ` ${INPUT_ERROR_CLASSES}` : ""}`}
+        className={inputClasses(Boolean(error))}
       />
 
       {error && (
-        <p id={errorId} className="text-sm text-red-700 dark:text-red-400">
+        <p id={errorId} className="text-sm font-medium text-red-700">
           {error}
         </p>
       )}
@@ -172,37 +163,13 @@ export function ShopForm({ relationshipId }: ShopFormProps) {
         message, which is what makes the announcement fire. This is the single
         safe message from the action — never a database string.
       */}
-      {state.formError && (
-        <div
-          role="alert"
-          aria-live="polite"
-          className="flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300"
-        >
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={1.75}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className="mt-0.5 h-4 w-4 shrink-0"
-            aria-hidden="true"
-          >
-            <path d="M12 9v3.75m0 3.75h.008M10.34 3.94l-8.02 13.5A1.5 1.5 0 003.6 19.5h16.8a1.5 1.5 0 001.28-2.06l-8.02-13.5a1.5 1.5 0 00-2.58 0z" />
-          </svg>
-          <p>{state.formError}</p>
-        </div>
-      )}
+      {state.formError && <Alert tone="error">{state.formError}</Alert>}
 
-      <section className="rounded-xl border border-zinc-200 bg-white p-5 sm:p-6 dark:border-zinc-800 dark:bg-zinc-950">
-        <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-          Shop details
-        </h3>
-        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-          The location is created as active. Only the name is required.
-        </p>
-
-        <div className="mt-5 space-y-5">
+      <SectionCard
+        title="Shop details"
+        description="The location is created as active. Only the name is required."
+      >
+        <div className="space-y-5">
           <Field
             field="shopName"
             label="Shop name"
@@ -243,7 +210,7 @@ export function ShopForm({ relationshipId }: ShopFormProps) {
             />
           </div>
         </div>
-      </section>
+      </SectionCard>
 
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-end">
         {/*
@@ -258,9 +225,10 @@ export function ShopForm({ relationshipId }: ShopFormProps) {
           href={`/retailers/${relationshipId}`}
           aria-disabled={pending || undefined}
           tabIndex={pending ? -1 : undefined}
-          className={`inline-flex items-center justify-center rounded-md border border-zinc-300 bg-white px-4 py-2.5 text-sm font-semibold text-zinc-700 shadow-sm transition-colors hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:focus-visible:ring-offset-zinc-950 ${
-            pending ? "pointer-events-none opacity-60" : ""
-          }`}
+          className={buttonClasses(
+            { variant: "outline" },
+            pending ? "pointer-events-none opacity-60" : undefined,
+          )}
         >
           Cancel
         </Link>
@@ -270,36 +238,9 @@ export function ShopForm({ relationshipId }: ShopFormProps) {
           is disabled for the whole round trip, and on success the action
           redirects, so there is no filled form left to resubmit.
         */}
-        <button
-          type="submit"
-          disabled={pending}
-          className="inline-flex items-center justify-center gap-2 rounded-md bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-70 dark:focus-visible:ring-offset-zinc-950"
-        >
-          {pending && (
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              className="h-4 w-4 animate-spin"
-              aria-hidden="true"
-            >
-              <circle
-                cx="12"
-                cy="12"
-                r="10"
-                stroke="currentColor"
-                strokeWidth={4}
-                className="opacity-25"
-              />
-              <path
-                d="M12 2a10 10 0 0110 10"
-                stroke="currentColor"
-                strokeWidth={4}
-                strokeLinecap="round"
-              />
-            </svg>
-          )}
-          {pending ? "Adding Shop…" : "Add Shop"}
-        </button>
+        <Button type="submit" loading={pending} loadingLabel="Adding Shop…">
+          Add Shop
+        </Button>
       </div>
     </form>
   );

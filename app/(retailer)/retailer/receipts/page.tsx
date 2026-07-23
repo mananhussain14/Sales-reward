@@ -12,6 +12,12 @@ import {
 import { formatFileSize } from "@/lib/receipts/receipt-file";
 import { formatOwnerTimestamp } from "@/lib/retailers/owner-status-normalization";
 import { SubmitReceiptForm } from "@/app/(retailer)/retailer/receipts/submit-receipt-form";
+import { PageHeader, SectionHeader } from "@/components/ui/page-header";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Alert } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { cardClasses } from "@/components/ui/card";
+import { InboxIcon, LocationIcon } from "@/components/ui/icons";
 
 export const metadata: Metadata = {
   title: "Receipts · Retailer Portal",
@@ -42,41 +48,27 @@ export const metadata: Metadata = {
  */
 
 const thClasses =
-  "px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400";
-const tdClasses = "px-5 py-3.5 text-sm text-zinc-600 dark:text-zinc-400";
+  "px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500";
+const tdClasses = "px-5 py-3.5 text-sm text-slate-600";
 
-/** Renders a submission status as a neutral pill. */
+/** Renders a submission status as a status pill. Meaning is carried by the label. */
 function StatusPill({ submission }: { submission: ReceiptSubmission }) {
   const tone =
     submission.status === "SUBMITTED"
-      ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-400"
+      ? "emerald"
       : submission.status === "UPLOAD_FAILED"
-        ? "bg-amber-50 text-amber-700 dark:bg-amber-950/50 dark:text-amber-400"
-        : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400";
+        ? "amber"
+        : "slate";
 
-  return (
-    <span
-      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${tone}`}
-    >
-      {receiptStatusLabel(submission.status)}
-    </span>
-  );
+  return <Badge tone={tone}>{receiptStatusLabel(submission.status)}</Badge>;
 }
 
 /** A generic, retry-safe panel for a read that failed. Never names a cause. */
 function ReadUnavailable({ heading }: { heading: string }) {
   return (
-    <div
-      role="alert"
-      className="rounded-xl border border-amber-200 bg-amber-50 px-5 py-4 dark:border-amber-900/60 dark:bg-amber-950/40"
-    >
-      <h3 className="text-sm font-semibold text-amber-900 dark:text-amber-200">
-        {heading}
-      </h3>
-      <p className="mt-1 text-sm text-amber-800 dark:text-amber-300">
-        Something went wrong while loading this. Please try again in a moment.
-      </p>
-    </div>
+    <Alert tone="warning" role="alert" title={heading}>
+      Something went wrong while loading this. Please try again in a moment.
+    </Alert>
   );
 }
 
@@ -110,43 +102,33 @@ export default async function RetailerReceiptsPage() {
   const shops = assigned.status === "ok" ? assigned.shops : [];
 
   return (
-    <div className="mx-auto w-full max-w-4xl">
-      <header>
-        <h2 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-          Receipts
-        </h2>
-        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-          Submit a customer receipt for one of your shops, and review what you have sent.
-        </p>
-      </header>
+    <div className="mx-auto w-full max-w-4xl space-y-8">
+      <PageHeader
+        eyebrow="Sales staff"
+        title="Receipts"
+        description="Submit a customer receipt for one of your shops, and review what you have sent."
+      />
 
       {/* ------------------------------------------------------------------ */}
       {/* Submit                                                              */}
       {/* ------------------------------------------------------------------ */}
-      <section aria-labelledby="submit-heading" className="mt-8">
-        <h3
-          id="submit-heading"
-          className="text-sm font-semibold text-zinc-900 dark:text-zinc-50"
-        >
-          Submit a receipt
-        </h3>
+      <section aria-labelledby="submit-heading" className="space-y-3">
+        <SectionHeader
+          title={<span id="submit-heading">Submit a receipt</span>}
+        />
 
-        <div className="mt-3 rounded-xl border border-zinc-200 bg-white p-5 shadow-sm sm:p-6 dark:border-zinc-800 dark:bg-zinc-950">
+        <div className={cardClasses("standard", "p-5 sm:p-6")}>
           {assigned.status !== "ok" ? (
             <ReadUnavailable heading="The submission form could not be loaded" />
           ) : shops.length === 0 ? (
             /* Authorized, but not assigned to any active shop yet. Worded so it cannot
                be mistaken for a permission problem — they ARE allowed to submit, there
                is simply nowhere to submit against until an owner assigns them. */
-            <div className="rounded-lg border border-dashed border-zinc-300 px-5 py-8 text-center dark:border-zinc-700">
-              <h4 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-                No shops assigned yet
-              </h4>
-              <p className="mx-auto mt-1 max-w-sm text-sm text-zinc-500 dark:text-zinc-400">
-                You&rsquo;ll be able to submit receipts once someone at your Retailer
-                assigns you to a shop.
-              </p>
-            </div>
+            <EmptyState
+              icon={<LocationIcon className="h-6 w-6" />}
+              title="No shops assigned yet"
+              description="You’ll be able to submit receipts once someone at your Retailer assigns you to a shop."
+            />
           ) : (
             <SubmitReceiptForm shops={shops} />
           )}
@@ -156,37 +138,30 @@ export default async function RetailerReceiptsPage() {
       {/* ------------------------------------------------------------------ */}
       {/* Personal history                                                    */}
       {/* ------------------------------------------------------------------ */}
-      <section aria-labelledby="history-heading" className="mt-10">
-        <h3
-          id="history-heading"
-          className="text-sm font-semibold text-zinc-900 dark:text-zinc-50"
-        >
-          Your submissions
-        </h3>
+      <section aria-labelledby="history-heading" className="space-y-3">
+        <SectionHeader
+          title={<span id="history-heading">Your submissions</span>}
+        />
 
         {history.status !== "ok" ? (
-          <div className="mt-3">
-            <ReadUnavailable heading="Your submissions could not be loaded" />
-          </div>
+          <ReadUnavailable heading="Your submissions could not be loaded" />
         ) : history.submissions.length === 0 ? (
-          <div className="mt-3 rounded-xl border border-dashed border-zinc-300 bg-white px-6 py-10 text-center dark:border-zinc-700 dark:bg-zinc-950">
-            <h4 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-              No receipts yet
-            </h4>
-            <p className="mx-auto mt-1 max-w-sm text-sm text-zinc-500 dark:text-zinc-400">
-              Receipts you submit will appear here, with their current status.
-            </p>
-          </div>
+          <EmptyState
+            icon={<InboxIcon className="h-6 w-6" />}
+            tone="indigo"
+            title="No receipts yet"
+            description="Receipts you submit will appear here, with their current status."
+          />
         ) : (
           <>
             {/* Desktop table. Horizontally scrollable rather than wrapping. */}
-            <div className="mt-3 hidden overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm sm:block dark:border-zinc-800 dark:bg-zinc-950">
+            <div className="hidden overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-card sm:block">
               <div className="overflow-x-auto">
-                <table className="min-w-full divide-y divide-zinc-200 dark:divide-zinc-800">
+                <table className="min-w-full divide-y divide-slate-100">
                   <caption className="sr-only">
                     Receipts you have submitted, newest first
                   </caption>
-                  <thead className="bg-zinc-50 dark:bg-zinc-900/50">
+                  <thead className="border-b border-slate-200 bg-slate-50">
                     <tr>
                       <th scope="col" className={thClasses}>
                         Submitted
@@ -205,12 +180,12 @@ export default async function RetailerReceiptsPage() {
                       </th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
+                  <tbody className="divide-y divide-slate-100">
                     {/* Rendered in the RPC's own order (newest first). Nothing is
                         re-sorted here — a second, locale-dependent ordering could
                         disagree with the database's. The submission id is the key. */}
                     {history.submissions.map((submission) => (
-                      <tr key={submission.submissionId}>
+                      <tr key={submission.submissionId} className="transition-colors hover:bg-slate-50">
                         <td className={`whitespace-nowrap ${tdClasses}`}>
                           {formatOwnerTimestamp(
                             submission.submittedAt ?? submission.createdAt,
@@ -221,7 +196,7 @@ export default async function RetailerReceiptsPage() {
                             ? `${submission.shopName} · ${submission.shopCode}`
                             : submission.shopName}
                         </td>
-                        <td className="max-w-xs truncate px-5 py-3.5 text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                        <td className="max-w-xs truncate px-5 py-3.5 text-sm font-medium text-slate-900">
                           {submission.originalFileName}
                         </td>
                         <td className={`whitespace-nowrap ${tdClasses}`}>
@@ -238,36 +213,36 @@ export default async function RetailerReceiptsPage() {
             </div>
 
             {/* Mobile: stacked cards. A five-column table is unreadable below `sm`. */}
-            <ul className="mt-3 flex flex-col gap-3 sm:hidden">
+            <ul className="flex flex-col gap-3 sm:hidden">
               {history.submissions.map((submission) => (
                 <li
                   key={submission.submissionId}
-                  className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-950"
+                  className="rounded-2xl border border-slate-200 bg-white p-4 shadow-card"
                 >
                   <div className="flex items-start justify-between gap-3">
-                    <p className="min-w-0 flex-1 truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                    <p className="min-w-0 flex-1 truncate text-sm font-medium text-slate-900">
                       {submission.originalFileName}
                     </p>
                     <StatusPill submission={submission} />
                   </div>
                   <dl className="mt-3 flex flex-col gap-1.5 text-sm">
                     <div className="flex justify-between gap-3">
-                      <dt className="text-zinc-500 dark:text-zinc-400">Shop</dt>
-                      <dd className="text-right text-zinc-700 dark:text-zinc-300">
+                      <dt className="text-slate-500">Shop</dt>
+                      <dd className="text-right text-slate-700">
                         {submission.shopName}
                       </dd>
                     </div>
                     <div className="flex justify-between gap-3">
-                      <dt className="text-zinc-500 dark:text-zinc-400">Submitted</dt>
-                      <dd className="text-right text-zinc-700 dark:text-zinc-300">
+                      <dt className="text-slate-500">Submitted</dt>
+                      <dd className="text-right text-slate-700">
                         {formatOwnerTimestamp(
                           submission.submittedAt ?? submission.createdAt,
                         )}
                       </dd>
                     </div>
                     <div className="flex justify-between gap-3">
-                      <dt className="text-zinc-500 dark:text-zinc-400">Size</dt>
-                      <dd className="text-right text-zinc-700 dark:text-zinc-300">
+                      <dt className="text-slate-500">Size</dt>
+                      <dd className="text-right text-slate-700">
                         {formatFileSize(submission.fileSizeBytes)}
                       </dd>
                     </div>

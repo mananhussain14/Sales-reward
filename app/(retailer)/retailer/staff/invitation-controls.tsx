@@ -6,6 +6,7 @@ import {
   revokeStaffInvitationAction,
 } from "@/app/(retailer)/retailer/staff/actions";
 import { INITIAL_INVITATION_ACTION_STATE } from "@/app/(retailer)/retailer/staff/invitation-action-state";
+import { Button } from "@/components/ui/button";
 
 /**
  * The per-invitation Resend and Revoke controls.
@@ -32,22 +33,14 @@ const feedbackClasses = "mt-1 text-xs";
 function Feedback({ error, success }: { error: string | null; success: string | null }) {
   if (error) {
     return (
-      <p
-        role="alert"
-        aria-live="polite"
-        className={`${feedbackClasses} text-red-600 dark:text-red-400`}
-      >
+      <p role="alert" aria-live="polite" className={`${feedbackClasses} text-red-600`}>
         {error}
       </p>
     );
   }
   if (success) {
     return (
-      <p
-        role="status"
-        aria-live="polite"
-        className={`${feedbackClasses} text-emerald-700 dark:text-emerald-400`}
-      >
+      <p role="status" aria-live="polite" className={`${feedbackClasses} text-emerald-700`}>
         {success}
       </p>
     );
@@ -71,14 +64,16 @@ export function ResendInvitationForm({
   return (
     <form action={formAction}>
       <input type="hidden" name="invitationId" value={invitationId} />
-      <button
+      <Button
         type="submit"
-        disabled={pending}
+        variant="outline"
+        size="sm"
         aria-label={`Resend invitation to ${recipientLabel}`}
-        className="inline-flex items-center justify-center rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-700 shadow-sm transition-colors hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:focus-visible:ring-offset-zinc-950"
+        loading={pending}
+        loadingLabel="Sending…"
       >
-        {pending ? "Sending…" : "Resend"}
-      </button>
+        Resend
+      </Button>
       <Feedback error={state.error} success={state.success} />
     </form>
   );
@@ -115,14 +110,16 @@ export function RevokeInvitationForm({
       }}
     >
       <input type="hidden" name="invitationId" value={invitationId} />
-      <button
+      <Button
         type="submit"
-        disabled={pending}
+        variant="danger"
+        size="sm"
         aria-label={`Revoke invitation for ${recipientLabel}`}
-        className="inline-flex items-center justify-center rounded-md border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 shadow-sm transition-colors hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:border-red-900/60 dark:bg-zinc-900 dark:text-red-400 dark:hover:bg-red-950/40 dark:focus-visible:ring-offset-zinc-950"
+        loading={pending}
+        loadingLabel="Revoking…"
       >
-        {pending ? "Revoking…" : "Revoke"}
-      </button>
+        Revoke
+      </Button>
       <Feedback error={state.error} success={state.success} />
     </form>
   );

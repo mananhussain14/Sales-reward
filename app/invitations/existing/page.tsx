@@ -6,6 +6,14 @@ import { readExistingUserInviteHash } from "@/lib/invitations/existing-user-cook
 import { resolveExistingUserInvitation } from "@/lib/invitations/existing-user-acceptance";
 import { AcceptExistingInvitationForm } from "@/app/invitations/existing/accept-form";
 import { SignOutMismatchForm } from "@/app/invitations/existing/sign-out-form";
+import { InvitationShell } from "@/components/ui/invitation-shell";
+import { buttonClasses } from "@/components/ui/button";
+import {
+  BuildingIcon,
+  InboxIcon,
+  MailIcon,
+  UsersIcon,
+} from "@/components/ui/icons";
 
 /**
  * The CLEAN existing-user acceptance page (no token in the URL — it was exchanged
@@ -19,27 +27,6 @@ export const metadata: Metadata = {
   referrer: "no-referrer",
   robots: { index: false, follow: false },
 };
-
-/** Centered card shell shared by every state below. */
-function Shell({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-zinc-50 px-4 py-12 dark:bg-zinc-900">
-      <main className="w-full max-w-md">
-        <div className="mb-8 flex flex-col items-center text-center">
-          <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-indigo-600 text-base font-bold text-white">
-            SR
-          </span>
-          <span className="mt-3 text-base font-semibold text-zinc-900 dark:text-zinc-50">
-            SalesReward
-          </span>
-        </div>
-        <div className="rounded-xl border border-zinc-200 bg-white p-6 shadow-sm sm:p-8 dark:border-zinc-800 dark:bg-zinc-950">
-          {children}
-        </div>
-      </main>
-    </div>
-  );
-}
 
 /**
  * The acceptance page.
@@ -64,36 +51,32 @@ export default async function ExistingUserInvitationPage() {
   // carries only the clean path, never the raw token.
   if (!signedIn) {
     return (
-      <Shell>
-        <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-          Sign in to accept your invitation
-        </h1>
-        <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
-          You&rsquo;ve been invited to become a Retailer Owner. Sign in to your existing
-          SalesReward account to accept.
-        </p>
+      <InvitationShell
+        icon={<MailIcon className="h-6 w-6" />}
+        steps={["Invitation", "Sign in", "Done"]}
+        activeStep={1}
+        title="Sign in to accept your invitation"
+        description="You’ve been invited to become a Retailer Owner. Sign in to your existing SalesReward account to accept."
+      >
         <Link
           href="/login?next=/invitations/existing"
-          className="mt-6 inline-flex w-full items-center justify-center rounded-md bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-zinc-950"
+          className={buttonClasses({ variant: "primary", size: "lg", fullWidth: true })}
         >
           Sign in
         </Link>
-      </Shell>
+      </InvitationShell>
     );
   }
 
   const tokenHash = await readExistingUserInviteHash();
   if (!tokenHash) {
     return (
-      <Shell>
-        <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-          Invitation link not found
-        </h1>
-        <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
-          This invitation link is no longer valid. Please open the most recent
-          invitation email again, or ask the person who invited you to send a new one.
-        </p>
-      </Shell>
+      <InvitationShell
+        icon={<InboxIcon className="h-6 w-6" />}
+        iconTone="amber"
+        title="Invitation link not found"
+        description="This invitation link is no longer valid. Please open the most recent invitation email again, or ask the person who invited you to send a new one."
+      />
     );
   }
 
@@ -101,15 +84,12 @@ export default async function ExistingUserInvitationPage() {
 
   if (resolved.status === "unavailable") {
     return (
-      <Shell>
-        <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-          This invitation can no longer be accepted
-        </h1>
-        <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
-          The invitation may have expired, been withdrawn, or already been accepted.
-          Please ask the person who invited you to send a new one.
-        </p>
-      </Shell>
+      <InvitationShell
+        icon={<InboxIcon className="h-6 w-6" />}
+        iconTone="amber"
+        title="This invitation can no longer be accepted"
+        description="The invitation may have expired, been withdrawn, or already been accepted. Please ask the person who invited you to send a new one."
+      />
     );
   }
 
@@ -117,42 +97,40 @@ export default async function ExistingUserInvitationPage() {
     // A valid invitation, but this is the wrong (or unverified) account. Reveal
     // NOTHING about the invited address or Retailer.
     return (
-      <Shell>
-        <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-          This invitation is for a different account
-        </h1>
-        <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
-          You&rsquo;re signed in as a different account than the one this invitation was
-          sent to. Sign out and sign in as the invited email address to accept it.
-        </p>
-        <div className="mt-6">
-          <SignOutMismatchForm />
-        </div>
-      </Shell>
+      <InvitationShell
+        icon={<UsersIcon className="h-6 w-6" />}
+        iconTone="amber"
+        title="This invitation is for a different account"
+        description="You’re signed in as a different account than the one this invitation was sent to. Sign out and sign in as the invited email address to accept it."
+      >
+        <SignOutMismatchForm />
+      </InvitationShell>
     );
   }
 
   // Match: the caller&rsquo;s verified email matches the invitation.
   return (
-    <Shell>
-      <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-        Accept ownership of {resolved.retailerName}
-      </h1>
-      <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
-        Accepting makes you the Retailer Owner of{" "}
-        <span className="font-medium text-zinc-700 dark:text-zinc-300">
-          {resolved.retailerName}
-        </span>{" "}
-        on SalesReward.
-      </p>
+    <InvitationShell
+      icon={<BuildingIcon className="h-6 w-6" />}
+      steps={["Invitation", "Review", "Done"]}
+      activeStep={1}
+      title={`Accept ownership of ${resolved.retailerName}`}
+      description={
+        <>
+          Accepting makes you the Retailer Owner of{" "}
+          <span className="font-medium text-slate-700">
+            {resolved.retailerName}
+          </span>{" "}
+          on SalesReward.
+        </>
+      }
+    >
       {resolved.expiresAt && (
-        <p className="mt-2 text-xs text-zinc-400 dark:text-zinc-500">
+        <p className="mb-4 text-center text-xs text-slate-400">
           This invitation is valid until {formatOwnerTimestamp(resolved.expiresAt)}.
         </p>
       )}
-      <div className="mt-6">
-        <AcceptExistingInvitationForm />
-      </div>
-    </Shell>
+      <AcceptExistingInvitationForm />
+    </InvitationShell>
   );
 }

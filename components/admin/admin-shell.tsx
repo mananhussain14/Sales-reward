@@ -34,7 +34,7 @@ export function AdminShell({
   }, [sidebarOpen]);
 
   return (
-    <div className="min-h-screen bg-zinc-50 dark:bg-zinc-900">
+    <div className="min-h-screen bg-slate-50">
       <a
         href="#main-content"
         className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-[60] focus:rounded-md focus:bg-indigo-600 focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-white"
@@ -50,7 +50,7 @@ export function AdminShell({
           type="button"
           aria-label="Close navigation menu"
           onClick={closeSidebar}
-          className="fixed inset-0 z-40 bg-zinc-900/50 lg:hidden"
+          className="fixed inset-0 z-40 bg-slate-900/40 backdrop-blur-[2px] lg:hidden"
         />
       )}
 
@@ -62,7 +62,10 @@ export function AdminShell({
           onToggleSidebar={() => setSidebarOpen((prev) => !prev)}
         />
 
-        <main id="main-content" className="flex-1 px-4 py-6 sm:px-6 lg:px-8">
+        <main
+          id="main-content"
+          className="sr-animate-fade-in flex-1 px-4 py-6 sm:px-6 lg:px-8"
+        >
           {children}
         </main>
       </div>
