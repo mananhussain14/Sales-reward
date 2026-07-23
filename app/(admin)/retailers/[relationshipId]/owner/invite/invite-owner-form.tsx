@@ -11,7 +11,8 @@ import {
 import { Alert } from "@/components/ui/alert";
 import { Button, buttonClasses } from "@/components/ui/button";
 import { cardClasses } from "@/components/ui/card";
-import { FieldHint, inputClasses, Label } from "@/components/ui/field";
+import { TextField } from "@/components/ui/field";
+import { UsersIcon } from "@/components/ui/icons";
 
 /**
  * Invite Retailer Owner form.
@@ -58,35 +59,22 @@ function Field({
   error?: string;
   disabled: boolean;
 }) {
-  const errorId = `${name}-error`;
-  const hintId = `${name}-hint`;
-
+  // Delegates to the shared TextField so the hint/error render BELOW the input and
+  // every owner field lines up with the two-column pair (first name / last name).
+  // The value is retained so a rejected submission does not clear the form — these
+  // are the admin's own canonicalized inputs, never a database value.
   return (
-    <div className="space-y-2">
-      <Label htmlFor={name}>{label}</Label>
-      <input
-        id={name}
-        name={name}
-        type={type}
-        autoComplete={autoComplete}
-        required
-        // Retained so a rejected submission does not clear the form. These are
-        // the admin's own inputs after canonicalization — never a database value.
-        defaultValue={value}
-        disabled={disabled}
-        aria-invalid={error ? true : undefined}
-        aria-describedby={error ? errorId : hint ? hintId : undefined}
-        className={inputClasses(Boolean(error))}
-      />
-      {error ? (
-        // role="alert" so the message is announced when it appears after submit.
-        <p id={errorId} role="alert" className="text-sm font-medium text-red-700">
-          {error}
-        </p>
-      ) : (
-        hint && <FieldHint id={hintId}>{hint}</FieldHint>
-      )}
-    </div>
+    <TextField
+      name={name}
+      label={label}
+      type={type}
+      autoComplete={autoComplete}
+      hint={hint}
+      defaultValue={value}
+      error={error}
+      disabled={disabled}
+      required
+    />
   );
 }
 
@@ -118,6 +106,21 @@ export function InviteOwnerForm({ relationshipId, model }: InviteOwnerFormProps)
     <form action={formAction} className="space-y-5" noValidate>
       {/* The single routing address. See the component docblock. */}
       <input type="hidden" name="relationshipId" value={relationshipId} />
+
+      <div className="flex items-center gap-3 border-b border-slate-100 pb-4">
+        <span
+          aria-hidden="true"
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600"
+        >
+          <UsersIcon className="h-5 w-5" />
+        </span>
+        <div>
+          <p className="text-sm font-semibold text-slate-900">Owner details</p>
+          <p className="text-xs text-slate-500">
+            Who should receive this invitation.
+          </p>
+        </div>
+      </div>
 
       {/*
         Prior recipient shown as read-only context for an expiry replacement, so an
@@ -186,29 +189,17 @@ export function InviteOwnerForm({ relationshipId, model }: InviteOwnerFormProps)
         // did nothing. Mirrors the accessible error pattern in <Field>: role=alert
         // on appearance, aria-invalid on the input, and aria-describedby pointing at
         // the error when present and the hint otherwise.
-        <div className="space-y-2">
-          <Label htmlFor="email">Email address</Label>
-          <input
-            id="email"
-            name="email"
-            type="email"
-            value={model.lockedEmail ?? ""}
-            readOnly
-            aria-invalid={state.fieldErrors.email ? true : undefined}
-            aria-describedby={state.fieldErrors.email ? "email-error" : "email-hint"}
-            className={inputClasses(Boolean(state.fieldErrors.email), "cursor-not-allowed opacity-70")}
-          />
-          {state.fieldErrors.email ? (
-            <p id="email-error" role="alert" className="text-sm font-medium text-red-700">
-              {state.fieldErrors.email}
-            </p>
-          ) : (
-            <FieldHint id="email-hint">
-              The invitation will be re-sent to this address. To invite a different
-              person, wait for this invitation to expire.
-            </FieldHint>
-          )}
-        </div>
+        <TextField
+          name="email"
+          label="Email address"
+          type="email"
+          value={model.lockedEmail ?? ""}
+          readOnly
+          optional={false}
+          error={state.fieldErrors.email}
+          hint="The invitation will be re-sent to this address. To invite a different person, wait for this invitation to expire."
+          inputClassName="cursor-not-allowed opacity-70"
+        />
       ) : (
         <Field
           name="email"

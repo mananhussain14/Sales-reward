@@ -8,10 +8,11 @@ import {
   type AddShopField,
   type AddShopState,
 } from "@/app/(admin)/retailers/[relationshipId]/shops/new/add-shop-state";
-import { SectionCard } from "@/components/ui/card";
 import { Alert } from "@/components/ui/alert";
 import { Button, buttonClasses } from "@/components/ui/button";
-import { inputClasses } from "@/components/ui/field";
+import { TextField } from "@/components/ui/field";
+import { SectionCard } from "@/components/ui/card";
+import { InfoPanel } from "@/components/ui/form-section";
 
 /**
  * Add Shop form.
@@ -64,16 +65,12 @@ type FieldProps = {
 };
 
 /**
- * One labelled input with its hint and its error.
- *
- * The error and hint are wired through aria-describedby, and aria-invalid marks
- * the field itself, so a screen reader announces both the rejection and the
- * guidance rather than leaving the message as unassociated red text. Ids are
- * derived from the field name, which is unique per form.
- *
- * The required field is marked twice over: `required` for assistive technology
- * and a visible asterisk for everyone else, since colour and placement alone do
- * not communicate a requirement.
+ * One labelled input, delegating to the shared {@link TextField} so its hint and
+ * error render BELOW the input — which keeps the two-column pair (shop code / city)
+ * aligned even though only shop code carries a hint. See the layout note on
+ * TextField. A required field is marked twice over (the `required` attribute for
+ * assistive technology and a visible asterisk for everyone else), and the submitted
+ * value is echoed back as the default so a rejected submission comes back filled in.
  */
 function Field({
   field,
@@ -86,56 +83,19 @@ function Field({
   state,
   pending,
 }: FieldProps) {
-  const error = state.fieldErrors[field];
-  const hintId = hint ? `${field}-hint` : undefined;
-  const errorId = error ? `${field}-error` : undefined;
-  const describedBy = [errorId, hintId].filter(Boolean).join(" ") || undefined;
-
   return (
-    <div className="space-y-2">
-      <label htmlFor={field} className="block text-sm font-medium text-slate-800">
-        {label}
-        {required ? (
-          <span className="ml-1 text-red-600" aria-hidden="true">
-            *
-          </span>
-        ) : (
-          <span className="ml-1 font-normal text-slate-400">(optional)</span>
-        )}
-      </label>
-
-      {hint && (
-        <p id={hintId} className="text-xs text-slate-500">
-          {hint}
-        </p>
-      )}
-
-      <input
-        id={field}
-        name={field}
-        type="text"
-        // The submitted value is rendered back as the default. React resets an
-        // uncontrolled form after a form action completes, so the reset picks up
-        // this updated attribute — which is what makes a rejected submission come
-        // back filled in rather than blank. The value is the admin's own
-        // canonicalized input; nothing here is read from the database.
-        defaultValue={state.values[field]}
-        required={required}
-        autoComplete={autoComplete}
-        maxLength={maxLength}
-        placeholder={placeholder}
-        disabled={pending}
-        aria-invalid={error ? true : undefined}
-        aria-describedby={describedBy}
-        className={inputClasses(Boolean(error))}
-      />
-
-      {error && (
-        <p id={errorId} className="text-sm font-medium text-red-700">
-          {error}
-        </p>
-      )}
-    </div>
+    <TextField
+      name={field}
+      label={label}
+      hint={hint}
+      required={required}
+      autoComplete={autoComplete}
+      maxLength={maxLength}
+      placeholder={placeholder}
+      defaultValue={state.values[field]}
+      error={state.fieldErrors[field]}
+      disabled={pending}
+    />
   );
 }
 
@@ -211,6 +171,10 @@ export function ShopForm({ relationshipId }: ShopFormProps) {
           </div>
         </div>
       </SectionCard>
+
+      {/* Accurate to current behaviour: Sales Staff are assigned to shops when a
+          Retailer Owner invites them from the Retailer portal. */}
+      <InfoPanel>Staff can later be assigned to this shop.</InfoPanel>
 
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-end">
         {/*

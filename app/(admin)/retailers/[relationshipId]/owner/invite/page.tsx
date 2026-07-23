@@ -20,7 +20,13 @@ import { SendExistingUserForm } from "@/app/(admin)/retailers/[relationshipId]/o
 import { BackLink } from "@/components/ui/page-header";
 import { cardClasses } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
-import { MailIcon } from "@/components/ui/icons";
+import { InfoPanel } from "@/components/ui/form-section";
+import {
+  CheckIcon,
+  MailIcon,
+  ShieldIcon,
+  UserPlusIcon,
+} from "@/components/ui/icons";
 
 /**
  * Static, and deliberately generic — the same reasoning as the Retailer detail
@@ -50,6 +56,87 @@ function BackToRetailerLink({ relationshipId }: { relationshipId: string }) {
 function NoticePanel({ title, body }: { title: string; body: string }) {
   return (
     <EmptyState icon={<MailIcon className="h-6 w-6" />} title={title} description={body} />
+  );
+}
+
+/**
+ * The supporting information card shown beside the invitation form.
+ *
+ * STATIC, PRODUCT-ACCURATE COPY ONLY. It describes what a Retailer Owner can
+ * already do in this milestone and how the invitation flow works, so the admin
+ * understands what they are granting. It contains no invitation data, no id, no
+ * token, no status, and no per-Retailer detail — nothing here comes from the
+ * database, so there is nothing to leak.
+ */
+const OWNER_CAPABILITIES = [
+  "Manage Retailer shops",
+  "Invite Managers and Sales Staff",
+  "Assign staff to shops",
+  "Access the Retailer operations portal",
+];
+
+const INVITATION_STEPS = [
+  "Invitation email is sent",
+  "Owner creates or accesses their SalesReward account",
+  "Retailer access is activated after secure acceptance",
+];
+
+function OwnerAccessCard() {
+  return (
+    <aside className={cardClasses("standard", "space-y-6 p-6")}>
+      <div>
+        <h3 className="text-sm font-semibold text-slate-900">Retailer Owner access</h3>
+        <ul className="mt-3 space-y-2">
+          {OWNER_CAPABILITIES.map((capability) => (
+            <li key={capability} className="flex items-start gap-2.5 text-sm text-slate-600">
+              <span
+                aria-hidden="true"
+                className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-50 text-emerald-600"
+              >
+                <CheckIcon className="h-3 w-3" />
+              </span>
+              {capability}
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <div className="border-t border-slate-100 pt-5">
+        <h3 className="text-sm font-semibold text-slate-900">How the invitation works</h3>
+        <ol className="mt-3 space-y-3">
+          {INVITATION_STEPS.map((step, index) => (
+            <li key={step} className="flex items-start gap-3 text-sm text-slate-600">
+              <span
+                aria-hidden="true"
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-indigo-50 text-xs font-semibold text-indigo-700"
+              >
+                {index + 1}
+              </span>
+              <span className="pt-0.5">{step}</span>
+            </li>
+          ))}
+        </ol>
+      </div>
+
+      <InfoPanel tone="slate" icon={<ShieldIcon className="h-4 w-4" />}>
+        The invitation can only be completed by the invited email address.
+      </InfoPanel>
+    </aside>
+  );
+}
+
+/**
+ * Two-column layout for the FORM states: the invitation form beside the static
+ * "Retailer Owner access" context card. Stacks (form first) below `lg`.
+ */
+function FormWithOwnerAccess({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="grid gap-6 lg:grid-cols-3">
+      <div className="lg:col-span-2">
+        <div className={cardClasses("standard", "p-6")}>{children}</div>
+      </div>
+      <OwnerAccessCard />
+    </div>
   );
 }
 
@@ -236,24 +323,30 @@ export default async function InviteRetailerOwnerPage({ params }: PageProps) {
                   };
 
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
+    <div className="mx-auto max-w-4xl space-y-6">
       <BackToRetailerLink relationshipId={relationshipId} />
 
-      <div>
-        <h2 className="text-2xl font-semibold tracking-tight text-slate-900">
-          {heading.title}
-        </h2>
-        <p className="mt-1 text-sm text-slate-500">
-          For{" "}
-          <span className="font-medium text-slate-700">
-            {retailer.retailerName}
-          </span>
-          , managed by{" "}
-          <span className="font-medium text-slate-700">
-            {organizationName}
-          </span>
-          . {heading.lead}
-        </p>
+      <div className="flex items-start gap-4">
+        <span
+          aria-hidden="true"
+          className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600"
+        >
+          <UserPlusIcon className="h-6 w-6" />
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-2xl font-semibold tracking-tight text-slate-900">
+            {heading.title}
+          </h2>
+          <p className="mt-1.5 max-w-2xl text-sm text-slate-500">
+            For{" "}
+            <span className="font-medium text-slate-700">
+              {retailer.retailerName}
+            </span>
+            , managed by{" "}
+            <span className="font-medium text-slate-700">{organizationName}</span>
+            . {heading.lead}
+          </p>
+        </div>
       </div>
 
       {!canInvite ? (
@@ -287,14 +380,14 @@ export default async function InviteRetailerOwnerPage({ params }: PageProps) {
         // canonical email (plan.email), shown read-only; the Server Action re-derives
         // it and refuses any drifted state, so a hand-crafted POST cannot substitute
         // a recipient or act on the wrong state.
-        <div className={cardClasses("standard", "p-6")}>
+        <FormWithOwnerAccess>
           <SendExistingUserForm
             relationshipId={relationshipId}
             lockedEmail={existingPlan!.email}
             submitLabel={existingLabels.submit}
             pendingLabel={existingLabels.pending}
           />
-        </div>
+        </FormWithOwnerAccess>
       ) : isExistingAction ? (
         // An existing-user action exists but the flow is paused by its own flag. No
         // confirm form is rendered; the Server Action refuses independently, so a
@@ -309,12 +402,12 @@ export default async function InviteRetailerOwnerPage({ params }: PageProps) {
         <NoticePanel title={view!.heading} body={view!.description} />
       ) : (
         // NEW-USER flow: invite-new / resend-new / retry-new.
-        <div className={cardClasses("standard", "p-6")}>
+        <FormWithOwnerAccess>
           <InviteOwnerForm
             relationshipId={relationshipId}
             model={buildInviteFormModel(okStatus)}
           />
-        </div>
+        </FormWithOwnerAccess>
       )}
     </div>
   );

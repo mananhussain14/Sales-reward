@@ -107,17 +107,29 @@ export default async function AddShopPage({ params }: PageProps) {
       <div>
         <BackLink href={`/retailers/${relationshipId}`}>Back to Retailer</BackLink>
 
-        <h2 className="mt-3 text-2xl font-semibold tracking-tight text-slate-900">
-          Add Shop
-        </h2>
-        <p className="mt-1.5 max-w-2xl text-sm text-slate-500">
-          Add one more shop location to{" "}
-          <span className="font-medium text-slate-700">{retailer.retailerName}</span>,
-          the Retailer managed by{" "}
-          <span className="font-medium text-slate-700">{organizationName}</span>.
-          This creates a single additional shop and does not change anything else
-          about the Retailer.
-        </p>
+        <div className="mt-3 flex items-start gap-4">
+          <span
+            aria-hidden="true"
+            className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600"
+          >
+            <ShopIcon className="h-6 w-6" />
+          </span>
+          <div className="min-w-0">
+            <h2 className="text-2xl font-semibold tracking-tight text-slate-900">
+              Add Shop
+            </h2>
+            <p className="mt-1.5 max-w-2xl text-sm text-slate-500">
+              Add one more shop location to{" "}
+              <span className="font-medium text-slate-700">
+                {retailer.retailerName}
+              </span>
+              , the Retailer managed by{" "}
+              <span className="font-medium text-slate-700">{organizationName}</span>
+              . This creates a single additional shop and does not change anything
+              else about the Retailer.
+            </p>
+          </div>
+        </div>
       </div>
 
       {canAddShop ? (

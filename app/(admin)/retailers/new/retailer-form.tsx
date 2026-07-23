@@ -10,7 +10,7 @@ import {
 } from "@/app/(admin)/retailers/new/onboard-state";
 import { Alert } from "@/components/ui/alert";
 import { Button, buttonClasses } from "@/components/ui/button";
-import { inputClasses, Label } from "@/components/ui/field";
+import { TextField } from "@/components/ui/field";
 import { FormStep, InfoPanel } from "@/components/ui/form-section";
 import { BuildingIcon, StoreIcon } from "@/components/ui/icons";
 import { cn } from "@/components/ui/cn";
@@ -52,12 +52,13 @@ type FieldProps = {
 };
 
 /**
- * One labelled input with its hint and its error.
- *
- * The error and hint are wired through aria-describedby, and aria-invalid marks
- * the field itself, so a screen reader announces both the rejection and the
- * guidance rather than leaving the message as unassociated red text. Ids are
- * derived from the field name, which is unique per form.
+ * One labelled input, delegating to the shared {@link TextField} so its hint and
+ * error render BELOW the input — which is what keeps the two-column pairs (country
+ * code / currency, shop code / city) aligned even when only one of them carries a
+ * hint. See the layout note on TextField. The submitted value is echoed back as
+ * the default: React resets an uncontrolled form after a form action completes, so
+ * a rejected submission comes back filled in rather than blank. The value is the
+ * admin's own canonicalized input; nothing here is read from the database.
  */
 function Field({
   field,
@@ -71,50 +72,20 @@ function Field({
   state,
   pending,
 }: FieldProps) {
-  const error = state.fieldErrors[field];
-  const hintId = hint ? `${field}-hint` : undefined;
-  const errorId = error ? `${field}-error` : undefined;
-  const describedBy = [errorId, hintId].filter(Boolean).join(" ") || undefined;
-
   return (
-    <div className="space-y-2">
-      <Label htmlFor={field} optional={!required}>
-        {label}
-      </Label>
-
-      {hint && (
-        <p id={hintId} className="text-xs text-slate-500">
-          {hint}
-        </p>
-      )}
-
-      <input
-        id={field}
-        name={field}
-        type="text"
-        // The submitted value is rendered back as the default. React resets an
-        // uncontrolled form after a form action completes, so the reset picks up
-        // this updated attribute — which is what makes a rejected submission
-        // come back filled in rather than blank. The value is the admin's own
-        // canonicalized input; nothing here is read from the database.
-        defaultValue={state.values[field]}
-        required={required}
-        autoComplete={autoComplete}
-        inputMode={inputMode}
-        maxLength={maxLength}
-        placeholder={placeholder}
-        disabled={pending}
-        aria-invalid={error ? true : undefined}
-        aria-describedby={describedBy}
-        className={inputClasses(Boolean(error))}
-      />
-
-      {error && (
-        <p id={errorId} className="text-sm font-medium text-red-700">
-          {error}
-        </p>
-      )}
-    </div>
+    <TextField
+      name={field}
+      label={label}
+      hint={hint}
+      required={required}
+      autoComplete={autoComplete}
+      inputMode={inputMode}
+      maxLength={maxLength}
+      placeholder={placeholder}
+      defaultValue={state.values[field]}
+      error={state.fieldErrors[field]}
+      disabled={pending}
+    />
   );
 }
 
