@@ -24,7 +24,22 @@ import { cardClasses } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Alert } from "@/components/ui/alert";
 import { buttonClasses } from "@/components/ui/button";
-import { PlusIcon, RetailersIcon, ShopIcon, UsersIcon } from "@/components/ui/icons";
+import {
+  CalendarIcon,
+  CheckCircleIcon,
+  LocationIcon,
+  MailIcon,
+  PlusIcon,
+  RetailersIcon,
+  ShopIcon,
+  UsersIcon,
+} from "@/components/ui/icons";
+import { DetailStat } from "@/components/ui/detail-stat";
+import { Badge } from "@/components/ui/badge";
+import { StatusCard, WarningState } from "@/components/ui/status-card";
+import { ProfileSummaryCard } from "@/components/ui/profile-summary-card";
+import { LifecycleTimeline, type LifecycleStep } from "@/components/ui/lifecycle-timeline";
+import { InfoPanel } from "@/components/ui/form-section";
 
 /**
  * Static, and deliberately generic. Naming the Retailer in the title would mean
@@ -70,47 +85,58 @@ function OptionalValue({ value }: { value: string | null }) {
   return value === null ? <NotRecorded /> : <>{value}</>;
 }
 
-/** One labelled fact in the summary list. */
-function SummaryItem({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div>
-      <dt className="text-xs font-medium text-slate-500">{label}</dt>
-      <dd className="mt-1 text-sm text-slate-900">{children}</dd>
-    </div>
-  );
-}
-
 /**
- * The Retailer's own facts, as a description list: each value is genuinely a
- * term/definition pair, which a table would only imitate.
+ * The Retailer's own facts, as a row of metric/information cards. Each value is a
+ * separate fact with its own icon.
  *
- * The two statuses are separate facts and are labelled as such — a Retailer
- * company can be Active while this Vendor has Suspended its relationship with
- * it, and one badge could not say that.
+ * The two statuses are separate facts and are shown as such — a Retailer company
+ * can be Active while this Vendor has Suspended its relationship with it, and one
+ * badge could not say that. Shop count and currency/country are read straight
+ * from the loaded detail; nothing is fetched or invented for these cards.
  */
 function RetailerSummary({ retailer }: { retailer: VendorRetailerDetail }) {
+  const shopCount = retailer.shops.length;
+
   return (
-    <section aria-label="Retailer summary" className={cardClasses("standard", "p-6")}>
-      <dl className="grid grid-cols-1 gap-x-6 gap-y-5 sm:grid-cols-2 lg:grid-cols-4">
-        <SummaryItem label="Retailer status">
-          <StatusBadge status={retailer.retailerStatus} />
-        </SummaryItem>
-        <SummaryItem label="Relationship status">
-          <StatusBadge status={retailer.relationshipStatus} />
-        </SummaryItem>
-        <SummaryItem label="Country code">
-          <OptionalValue value={retailer.countryCode} />
-        </SummaryItem>
-        <SummaryItem label="Default currency">
-          <OptionalValue value={retailer.defaultCurrency} />
-        </SummaryItem>
-      </dl>
+    <section aria-label="Retailer summary">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <DetailStat
+          icon={<RetailersIcon className="h-5 w-5" />}
+          tone="indigo"
+          label="Retailer status"
+          value={<StatusBadge status={retailer.retailerStatus} />}
+        />
+        <DetailStat
+          icon={<UsersIcon className="h-5 w-5" />}
+          tone="emerald"
+          label="Relationship status"
+          value={<StatusBadge status={retailer.relationshipStatus} />}
+        />
+        <DetailStat
+          icon={<ShopIcon className="h-5 w-5" />}
+          tone="amber"
+          label="Shops on record"
+          value={
+            <span className="tabular-nums">
+              {shopCount} {shopCount === 1 ? "shop" : "shops"}
+            </span>
+          }
+        />
+        <DetailStat
+          icon={<LocationIcon className="h-5 w-5" />}
+          tone="slate"
+          label="Country · Currency"
+          value={
+            <span>
+              <OptionalValue value={retailer.countryCode} />
+              <span aria-hidden="true" className="mx-1 text-slate-300">
+                ·
+              </span>
+              <OptionalValue value={retailer.defaultCurrency} />
+            </span>
+          }
+        />
+      </div>
     </section>
   );
 }
@@ -186,7 +212,15 @@ function ShopCards({ shops }: { shops: VendorRetailerShopDetail[] }) {
         // fixed and server-rendered.
         <li key={index} className={cardClasses("standard", "p-4")}>
           <div className="flex items-start justify-between gap-3">
-            <p className="font-medium text-slate-900">{shop.name}</p>
+            <div className="flex min-w-0 items-start gap-3">
+              <span
+                aria-hidden="true"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600"
+              >
+                <LocationIcon className="h-4 w-4" />
+              </span>
+              <p className="min-w-0 flex-1 font-medium text-slate-900">{shop.name}</p>
+            </div>
             <StatusBadge status={shop.status} />
           </div>
           <dl className="mt-3 space-y-1.5 text-sm">
@@ -364,17 +398,6 @@ function OwnerActionPaused() {
   );
 }
 
-/** One labelled fact inside the owner card. Hidden when the value is absent. */
-function OwnerDetail({ label, value }: { label: string; value: string | null }) {
-  if (value === null) return null;
-  return (
-    <div>
-      <dt className="text-xs font-medium text-slate-500">{label}</dt>
-      <dd className="mt-0.5 text-sm text-slate-900">{value}</dd>
-    </div>
-  );
-}
-
 /**
  * The owner-management card — the single, state-aware home for everything about
  * this Retailer's owner. It replaces the previous generic "Invite Retailer Owner"
@@ -430,7 +453,17 @@ function OwnerManagementCard({
   );
 }
 
-/** The card body for a successfully read owner status. */
+/**
+ * The card body for a successfully read owner status.
+ *
+ * Renders one of several polished, state-aware surfaces — an onboarding card, a
+ * pending lifecycle timeline, a warning panel, or a completed owner profile — but
+ * the DECISION of what to show and whether to offer an action is unchanged. The
+ * action is still gated exactly as before: offered only when the database would
+ * accept it (`view.action && canInvite`) and, when the feature is paused, replaced
+ * by the same non-interactive stand-in. No new owner data is surfaced beyond the
+ * name, email, and the sent/expires/accepted timestamps the page already showed.
+ */
 function OwnerManagementBody({
   ownerStatus,
   relationshipId,
@@ -461,68 +494,138 @@ function OwnerManagementBody({
   );
   const hasName = ownerStatus.firstName !== null || ownerStatus.lastName !== null;
 
-  // Which recipient/owner facts to surface per state. Absent values render nothing
-  // (OwnerDetail returns null), so a state with no accepted date simply omits it.
-  const showRecipient = ownerStatus.state !== "NONE";
-  const showSentAt =
-    ownerStatus.state === "PENDING" || ownerStatus.state === "EXPIRED";
-  const showExpiresAt =
-    ownerStatus.state === "DELIVERY_FAILED" ||
-    ownerStatus.state === "PENDING" ||
-    ownerStatus.state === "EXPIRED";
-  const showAcceptedAt = ownerStatus.state === "ACTIVE";
+  // The single action node, computed exactly as before: offered only when the DB
+  // would accept it; the paused stand-in otherwise; null when there is no action.
+  const actionNode =
+    view.action && canInvite
+      ? featureEnabled
+        ? <OwnerActionLink relationshipId={relationshipId} label={view.action.label} />
+        : <OwnerActionPaused />
+      : null;
 
+  const recipientLabel = ownerStatus.state === "ACTIVE" ? "Owner" : "Recipient";
+
+  // ---- ACTIVE: a completed owner profile. ---------------------------------
+  if (ownerStatus.state === "ACTIVE") {
+    const details = [
+      { label: "Role", value: "Retailer Owner" },
+      ...(ownerStatus.email ? [{ label: "Email", value: ownerStatus.email }] : []),
+      { label: "Accepted", value: formatOwnerTimestamp(ownerStatus.acceptedAt) },
+    ];
+    return (
+      <ProfileSummaryCard
+        name={displayName}
+        avatarTone="emerald"
+        badge={<StatusBadge status="ACTIVE" />}
+        accent={
+          <span className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
+            <CheckCircleIcon className="h-5 w-5" />
+          </span>
+        }
+        details={details}
+      />
+    );
+  }
+
+  // Shared recipient/email details for the non-onboarding states.
+  const recipientDetails = [
+    ...(hasName ? [{ label: recipientLabel, value: displayName }] : []),
+    ...(ownerStatus.email ? [{ label: "Email", value: ownerStatus.email }] : []),
+  ];
+
+  // ---- NONE: onboarding invite card. --------------------------------------
+  if (ownerStatus.state === "NONE") {
+    return (
+      <StatusCard
+        icon={<UsersIcon className="h-5 w-5" />}
+        iconTone="indigo"
+        heading={view.heading}
+        description={view.description}
+        action={actionNode}
+      >
+        <InfoPanel icon={<MailIcon className="h-4 w-4" />}>
+          The Retailer Owner manages the organization&apos;s shops and staff. The
+          invitation is sent to the recipient&apos;s email address.
+        </InfoPanel>
+      </StatusCard>
+    );
+  }
+
+  // ---- PENDING: a lifecycle timeline of what is proven so far. -------------
+  if (ownerStatus.state === "PENDING") {
+    const isExistingUser = ownerStatus.invitationKind === "EXISTING_USER";
+    // Only stages the status data PROVES: the invitation is sent (state is PENDING),
+    // acceptance is awaited now, and "active" is still ahead. No activation sub-stage
+    // is inferred — the data cannot distinguish it, so it is not shown.
+    const steps: LifecycleStep[] = [
+      {
+        label: "Invitation sent",
+        state: "complete",
+        hint: ownerStatus.sentAt ? formatOwnerTimestamp(ownerStatus.sentAt) : undefined,
+      },
+      {
+        label: isExistingUser ? "Awaiting sign-in and acceptance" : "Awaiting acceptance",
+        state: "current",
+        hint: ownerStatus.expiresAt
+          ? `Expires ${formatOwnerTimestamp(ownerStatus.expiresAt)}`
+          : undefined,
+      },
+      { label: "Owner active", state: "upcoming" },
+    ];
+    return (
+      <StatusCard
+        icon={<MailIcon className="h-5 w-5" />}
+        iconTone="amber"
+        heading={view.heading}
+        description={view.description}
+        badge={<StatusBadge status="PENDING" />}
+        details={recipientDetails}
+        action={actionNode}
+      >
+        <LifecycleTimeline steps={steps} />
+      </StatusCard>
+    );
+  }
+
+  // ---- DELIVERY_FAILED: a warning panel (no guessed timeline). -------------
+  if (ownerStatus.state === "DELIVERY_FAILED") {
+    const details = [
+      ...recipientDetails,
+      ...(ownerStatus.expiresAt
+        ? [{ label: "Expires", value: formatOwnerTimestamp(ownerStatus.expiresAt) }]
+        : []),
+    ];
+    return (
+      <WarningState
+        heading={view.heading}
+        description={view.description}
+        badge={<StatusBadge status="FAILED" />}
+        details={details}
+        action={actionNode}
+      />
+    );
+  }
+
+  // ---- EXPIRED (and any remaining state): a neutral status card. ----------
+  const expiredDetails = [
+    ...recipientDetails,
+    ...(ownerStatus.sentAt
+      ? [{ label: "Sent", value: formatOwnerTimestamp(ownerStatus.sentAt) }]
+      : []),
+    ...(ownerStatus.expiresAt
+      ? [{ label: "Expired", value: formatOwnerTimestamp(ownerStatus.expiresAt) }]
+      : []),
+  ];
   return (
-    <div className={cardClasses("standard", "p-6")}>
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <p className="text-sm font-semibold text-slate-900">{view.heading}</p>
-          <p className="mt-1 text-sm text-slate-500">{view.description}</p>
-        </div>
-
-        {/*
-          The action is offered only when the database would accept it: an ACTIVE
-          owner offers none (view.action is null), an inactive Retailer/relationship
-          offers none (canInvite is false — the reserve RPC would refuse), and a
-          paused feature shows the non-interactive stand-in. Direct-URL entry to the
-          route is still gated server-side by the invite page and the Server Action.
-        */}
-        {view.action &&
-          canInvite &&
-          (featureEnabled ? (
-            <OwnerActionLink relationshipId={relationshipId} label={view.action.label} />
-          ) : (
-            <OwnerActionPaused />
-          ))}
-      </div>
-
-      {(showRecipient || showAcceptedAt) && (
-        <dl className="mt-5 grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
-          {showRecipient && (
-            <OwnerDetail
-              label={ownerStatus.state === "ACTIVE" ? "Owner" : "Recipient"}
-              value={hasName ? displayName : null}
-            />
-          )}
-          {showRecipient && <OwnerDetail label="Email" value={ownerStatus.email} />}
-          {showSentAt && (
-            <OwnerDetail label="Sent" value={formatOwnerTimestamp(ownerStatus.sentAt)} />
-          )}
-          {showExpiresAt && (
-            <OwnerDetail
-              label={ownerStatus.state === "EXPIRED" ? "Expired" : "Expires"}
-              value={formatOwnerTimestamp(ownerStatus.expiresAt)}
-            />
-          )}
-          {showAcceptedAt && (
-            <OwnerDetail
-              label="Accepted"
-              value={formatOwnerTimestamp(ownerStatus.acceptedAt)}
-            />
-          )}
-        </dl>
-      )}
-    </div>
+    <StatusCard
+      icon={<CalendarIcon className="h-5 w-5" />}
+      iconTone="slate"
+      heading={view.heading}
+      description={view.description}
+      badge={<StatusBadge status="EXPIRED" />}
+      details={expiredDetails}
+      action={actionNode}
+    />
   );
 }
 
@@ -672,14 +775,26 @@ export default async function RetailerDetailPage({
       {justCreatedShop && <ShopCreatedBanner />}
       {ownerInvitedMessage && <OwnerInvitedBanner message={ownerInvitedMessage} />}
 
-      <div className="flex flex-col gap-4">
-        <h2 className="text-2xl font-semibold tracking-tight text-slate-900">
-          {retailer.retailerName}
-        </h2>
-        <p className="mt-1.5 max-w-2xl text-sm text-slate-500">
-          A read-only view of this Retailer organization and its shops, as managed
-          by <span className="font-medium text-slate-700">{organizationName}</span>.
-        </p>
+      <div className="flex items-start gap-4">
+        <span
+          aria-hidden="true"
+          className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-sm"
+        >
+          <RetailersIcon className="h-6 w-6" />
+        </span>
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-3">
+            <h2 className="text-2xl font-semibold tracking-tight text-slate-900">
+              {retailer.retailerName}
+            </h2>
+            <StatusBadge status={retailer.retailerStatus} />
+          </div>
+          <p className="mt-1.5 max-w-2xl text-sm text-slate-500">
+            A read-only view of this Retailer organization and its shops, as
+            managed by{" "}
+            <span className="font-medium text-slate-700">{organizationName}</span>.
+          </p>
+        </div>
       </div>
 
       <RetailerSummary retailer={retailer} />
@@ -701,9 +816,20 @@ export default async function RetailerDetailPage({
 
       <section aria-labelledby="shops-heading" className="space-y-3">
         <div className="flex items-center justify-between gap-4">
-          <h3 id="shops-heading" className="text-lg font-semibold tracking-tight text-slate-900">
-            Shops
-          </h3>
+          <div className="flex items-center gap-2.5">
+            <h3 id="shops-heading" className="text-lg font-semibold tracking-tight text-slate-900">
+              Shops
+            </h3>
+            {retailer.shops.length > 0 && (
+              <Badge tone="slate">
+                {retailer.shops.length}
+                <span className="sr-only">
+                  {" "}
+                  {retailer.shops.length === 1 ? "shop" : "shops"}
+                </span>
+              </Badge>
+            )}
+          </div>
 
           {/*
             Only when there ARE shops. With none, the empty panel below carries

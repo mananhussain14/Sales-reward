@@ -1,5 +1,5 @@
 import { BrandMark } from "@/components/ui/brand";
-import { CheckIcon } from "@/components/ui/icons";
+import { CheckIcon, ShieldIcon } from "@/components/ui/icons";
 
 /**
  * The marketing panel shown beside the sign-in form on wide screens.
@@ -9,6 +9,11 @@ import { CheckIcon } from "@/components/ui/icons";
  * from inline SVG (no asset, no request), and three concise benefits. It is
  * role-neutral by design: the sign-in page cannot know who is signing in, so
  * nothing here names a role. Hidden below `lg`, where the form stands alone.
+ *
+ * Motion is decorative and OPT-IN to movement: the sales line draws once and the
+ * reward spark floats gently, both gated on `motion-safe` / the global
+ * reduced-motion rule so a reader who prefers reduced motion sees the finished,
+ * still artwork.
  */
 const BENEFITS = [
   "Track verified sales",
@@ -19,14 +24,32 @@ const BENEFITS = [
 export function AuthBrandPanel() {
   return (
     <div className="relative hidden overflow-hidden bg-gradient-to-br from-indigo-600 via-indigo-700 to-violet-800 lg:flex lg:flex-col lg:justify-between lg:p-12">
-      {/* Soft ambient glows behind the artwork. */}
+      {/* Subtle grid, faded toward the edges for depth. */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 opacity-[0.15]"
+        style={{
+          backgroundImage:
+            "linear-gradient(to right, rgba(255,255,255,0.6) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,0.6) 1px, transparent 1px)",
+          backgroundSize: "44px 44px",
+          maskImage:
+            "radial-gradient(ellipse 80% 80% at 50% 40%, black 40%, transparent 100%)",
+          WebkitMaskImage:
+            "radial-gradient(ellipse 80% 80% at 50% 40%, black 40%, transparent 100%)",
+        }}
+      />
+      {/* Ambient glows behind the artwork, layered for depth. */}
       <div
         aria-hidden="true"
         className="pointer-events-none absolute -right-24 -top-24 h-72 w-72 rounded-full bg-violet-400/30 blur-3xl"
       />
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute -bottom-16 -left-10 h-64 w-64 rounded-full bg-indigo-400/25 blur-3xl"
+        className="pointer-events-none absolute -bottom-20 -left-12 h-72 w-72 rounded-full bg-indigo-400/25 blur-3xl"
+      />
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute right-1/4 top-1/3 h-40 w-40 rounded-full bg-fuchsia-400/20 blur-3xl"
       />
 
       <div className="relative flex items-center gap-3">
@@ -55,6 +78,7 @@ export function AuthBrandPanel() {
             fill="url(#sr-auth-area)"
           />
           <path
+            className="sr-draw-line"
             d="M12 170 L70 140 L120 150 L170 96 L220 110 L280 44 L308 30"
             stroke="#FFFFFF"
             strokeWidth="3"
@@ -68,8 +92,10 @@ export function AuthBrandPanel() {
           ].map(([cx, cy]) => (
             <circle key={`${cx}`} cx={cx} cy={cy} r="5" fill="#FFFFFF" />
           ))}
-          {/* Reward spark near the peak */}
+          {/* Reward spark near the peak — floats gently. */}
           <path
+            className="sr-animate-float"
+            style={{ transformOrigin: "300px 30px" }}
             d="M300 18 L303 27 L312 30 L303 33 L300 42 L297 33 L288 30 L297 27 Z"
             fill="#FBBF24"
           />
@@ -91,9 +117,13 @@ export function AuthBrandPanel() {
         </ul>
       </div>
 
-      <p className="relative text-xs text-indigo-200/80">
-        © SalesReward · Secure multi-tenant platform
-      </p>
+      {/* Trust indicator — a small, neutral reassurance, not a marketing claim. */}
+      <div className="relative flex items-center gap-2">
+        <span className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 text-xs font-medium text-indigo-50 ring-1 ring-inset ring-white/15">
+          <ShieldIcon className="h-3.5 w-3.5" />
+          Secure multi-tenant platform
+        </span>
+      </div>
     </div>
   );
 }

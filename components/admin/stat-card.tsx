@@ -40,7 +40,7 @@ export function StatCard({ stat }: { stat: DashboardStat }) {
           <span
             aria-hidden="true"
             className={cn(
-              "flex h-9 w-9 items-center justify-center rounded-xl",
+              "flex h-10 w-10 items-center justify-center rounded-xl",
               DISC_TONES[tone],
             )}
           >
