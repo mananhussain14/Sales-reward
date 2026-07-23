@@ -4,12 +4,21 @@ import { getVendorSuperAdminAccess } from "@/lib/auth/vendor-admin-access";
 import { SignOutButton } from "@/components/auth/sign-out-button";
 
 export const metadata: Metadata = {
-  title: "Access denied · SalesReward Admin",
-  description: "This account does not have Vendor Super Admin access.",
+  title: "Access denied · SalesReward",
+  description: "This account does not have access to this page.",
 };
 
 /**
- * Shown to an authenticated user who is not an active Vendor Super Admin.
+ * The shared, role-neutral "you are signed in but this page is not yours" screen.
+ *
+ * It is reached by the Vendor Admin layout for a non-Vendor, and by the
+ * authenticated-landing resolver for any signed-in account that qualifies for no
+ * role at all. The wording therefore names no specific role or portal: doing so
+ * would be wrong for whichever roles it is NOT talking about, and would hint at
+ * what an unauthorized account should acquire next.
+ *
+ * A Vendor Super Admin who somehow lands here is bounced to the dashboard below, so
+ * this only ever renders for an account that genuinely has no Vendor access.
  *
  * The access check runs again at this server boundary rather than trusting the
  * fact that the layout redirected here — this page is directly addressable, so
@@ -77,13 +86,13 @@ export default async function AccessDeniedPage() {
             </h1>
 
             <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
-              You are signed in, but this account does not have active Vendor
-              Super Admin access to the SalesReward admin.
+              You are signed in, but this account does not have access to this
+              page.
             </p>
 
             <p className="mt-3 text-sm text-zinc-500 dark:text-zinc-400">
-              If you believe this is a mistake, please contact your system
-              administrator.
+              Use the navigation available to your account, or sign in with a
+              different account.
             </p>
 
             {/* Lets the user sign out and return to /login with another account. */}
@@ -93,9 +102,6 @@ export default async function AccessDeniedPage() {
           </div>
         </div>
 
-        <p className="mt-6 text-center text-xs text-zinc-400 dark:text-zinc-600">
-          Vendor Admin · v0.1
-        </p>
       </main>
     </div>
   );
