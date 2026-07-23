@@ -121,14 +121,28 @@ describe("the activation form is password-only", () => {
     assert.ok(!/type="hidden"/.test(rendered), "the staff forms introduce a hidden field");
   });
 
-  test("9. the account-creation form offers no Sign in button", () => {
-    // Someone with no account cannot sign in, and offering it would hint that their
-    // address might already be registered.
+  test("9. the password-entry branch offers no Sign in control", () => {
+    // Someone with no account cannot sign in, and offering it alongside the password
+    // fields would hint that their address might already be registered. The sign-in
+    // prompt appears ONLY on the already-registered branch, which is a different
+    // screen — so the assertion is scoped to the <form> the password fields live in.
     const start = forms.indexOf("export function ActivateStaffAccountForm");
     const end = forms.indexOf("export function StaffInvitationSignInPrompt");
     assert.ok(start >= 0 && end > start, "the two components must both exist");
+
     const activation = forms.slice(start, end);
-    assert.ok(!/Sign in/.test(activation), "the activation form offers a Sign in control");
+    const formStart = activation.indexOf("<form");
+    assert.ok(formStart >= 0, "the activation form must render a <form>");
+
+    const passwordBranch = activation.slice(formStart);
+    assert.ok(
+      !/Sign in/.test(passwordBranch),
+      "the password-entry branch offers a Sign in control",
+    );
+    assert.ok(
+      !/StaffInvitationSignInPrompt/.test(passwordBranch),
+      "the password-entry branch renders the sign-in prompt",
+    );
   });
 
   test("10. minLength comes from the shared policy, not a literal", () => {
@@ -138,7 +152,7 @@ describe("the activation form is password-only", () => {
 });
 
 describe("the invited email is server-only", () => {
-  test("11. the registration module is the only place the context RPC is named", () => {
+  test("11. the registration registration is the only place the context RPC is named", () => {
     assert.ok(
       read(REGISTRATION_MODULE).includes('"get_retailer_staff_registration_context"'),
     );
@@ -162,30 +176,38 @@ describe("the invited email is server-only", () => {
     assert.ok(!/invitedEmail/.test(page), "the page references an invited email");
   });
 
-  test("13. only the ACTION obtains the credentials", () => {
+  test("13. the ACTION never sees an email at all", () => {
+    // Stronger than the previous arrangement: the address is resolved, used for both
+    // Auth calls, and discarded entirely inside the registration registration. The action
+    // passes a token hash and a password and receives one status word back.
     const actions = stripComments(read(STAFF_ACTIONS));
-    assert.ok(actions.includes("getStaffRegistrationCredentials"));
+    assert.ok(actions.includes("activateInvitedStaffAccount"));
     assert.ok(!actions.includes("getStaffRegistrationView"));
-  });
-
-  test("14. signup uses the CANONICAL invitation email, not form input", () => {
-    const actions = stripComments(read(STAFF_ACTIONS));
+    assert.ok(!/invitedEmail/.test(actions), "the action references an invited email");
     assert.ok(
-      /email:\s*credentials\.invitedEmail/.test(actions),
-      "signUp must use the server-derived canonical address",
-    );
-    // No email is read from the submitted form anywhere in this module.
-    assert.ok(
-      !/formData\.get\(\s*["']email["']\s*\)/.test(actions),
+      !/formData\.get\(\s*.email.\s*\)/.test(actions),
       "the action reads an email from the form",
     );
   });
 
-  test("15. no Client Component imports the registration module", () => {
+  test("14. both Auth calls use the CANONICAL invitation email, never form input", () => {
+    const registration = stripComments(read(REGISTRATION_MODULE));
+    assert.ok(
+      /email:\s*context\.invitedEmail/.test(registration),
+      "createUser must use the server-derived canonical address",
+    );
+    assert.ok(
+      /signInWithPassword\(\{\s*email:\s*context\.invitedEmail/.test(registration),
+      "sign-in must use the same server-derived address",
+    );
+    assert.ok(!/formData/.test(registration), "the registration registration must never read form data");
+  });
+
+  test("15. no Client Component imports the registration registration", () => {
     for (const path of [STAFF_FORMS]) {
       assert.ok(
         !read(path).includes("@/lib/staff/staff-registration"),
-        `${path} imports the server-only registration module`,
+        `${path} imports the server-only registration registration`,
       );
     }
   });
@@ -218,14 +240,21 @@ describe("an existing account is offered sign-in, not account creation", () => {
 });
 
 describe("confirmation returns to the invitation", () => {
-  test("19. emailRedirectTo points back at the acceptance route", () => {
+  test("19. activation returns to the invitation directly — no confirmation round trip", () => {
     const actions = stripComments(read(STAFF_ACTIONS));
-    assert.ok(actions.includes("emailRedirectTo"), "no confirmation return path");
-    assert.ok(actions.includes("RETURN_PATH"), "the return path must be the shared constant");
+    const registration = stripComments(read(REGISTRATION_MODULE));
+
+    // The account is created already-confirmed, so there is no confirmation email and
+    // therefore no redirect target for one.
+    assert.ok(!actions.includes("emailRedirectTo"), "a confirmation redirect remains");
+    assert.ok(!registration.includes("emailRedirectTo"), "a confirmation redirect remains");
+
+    // The person is sent straight back to the invitation instead.
     assert.ok(
       actions.includes('const RETURN_PATH = "/invitations/staff"'),
       "the return path must be the invitation page",
     );
+    assert.ok(/redirect\(RETURN_PATH\)/.test(actions), "activation must return to the invitation");
   });
 
   test("20. acceptance calls only the acceptance RPC and writes no table", () => {
@@ -334,5 +363,219 @@ describe("the password minimum is 6 everywhere", () => {
         `${path} does not use the shared constant`,
       );
     }
+  });
+});
+
+describe("activation creates a confirmed account — it does not sign up", () => {
+  const registration = stripComments(read(REGISTRATION_MODULE));
+  const actions = stripComments(read(STAFF_ACTIONS));
+  const forms = stripComments(read(STAFF_FORMS));
+  const page = stripComments(read(STAFF_PAGE));
+
+  test("A1. no supabase.auth.signUp call remains anywhere in the staff activation path", () => {
+    // Public signup is disabled on the hosted project and stays that way. A signUp
+    // call here would silently create nothing and strand the person behind a
+    // confirmation email that is never sent.
+    for (const [label, source] of [
+      ["registration module", registration],
+      ["staff actions", actions],
+      ["staff forms", forms],
+      ["staff page", page],
+    ] as const) {
+      assert.ok(!/\.signUp\s*\(/.test(source), `${label} still calls signUp`);
+    }
+  });
+
+  test("A2. the account is created through the Auth Admin API", () => {
+    assert.ok(
+      /admin\.auth\.admin\.createUser\s*\(/.test(registration),
+      "activation must use auth.admin.createUser",
+    );
+  });
+
+  test("A3. createUser sets email_confirm: true", () => {
+    // The invitation link was delivered to the invited inbox and the person opened it.
+    // That is the same proof a confirmation email would gather, so the account is
+    // confirmed at creation and no second round trip is required.
+    assert.ok(
+      /email_confirm:\s*true/.test(registration),
+      "the created account must be confirmed at creation",
+    );
+  });
+
+  test("A4. createUser is reachable only from the server-only registration registration", () => {
+    // The Auth Admin API needs the service-role key. Anywhere else — and especially in
+    // a Client Component — it would be a credential leak.
+    const OTHERS = [STAFF_ACTIONS, STAFF_FORMS, STAFF_PAGE, LOGIN_PAGE, LOGIN_FORM];
+    for (const path of OTHERS) {
+      const source = stripComments(read(path));
+      assert.ok(!/createUser/.test(source), `${path} references createUser`);
+      assert.ok(
+        !source.includes("@/lib/supabase/admin"),
+        `${path} imports the service-role client`,
+      );
+    }
+    assert.ok(registration.includes("createAdminClient"), "the registration module must build the admin client");
+  });
+
+  test("A5. no client component imports the registration registration", () => {
+    assert.ok(
+      /^\s*["']use client["']/m.test(read(STAFF_FORMS)),
+      "the forms file must be a Client Component for this check to mean anything",
+    );
+    assert.ok(
+      !read(STAFF_FORMS).includes("@/lib/staff/staff-registration"),
+      "a Client Component imports the server-only registration module",
+    );
+  });
+
+  test("A6. nothing in the flow depends on public signup being enabled", () => {
+    // Neither the code nor its comments require the project setting to change: the
+    // Admin API works regardless, which is the whole point of this fix.
+    for (const source of [registration, actions, forms, page]) {
+      assert.ok(!/signUp/.test(source), "a signUp reference remains in code");
+    }
+  });
+});
+
+describe("activation signs the person in and returns to the invitation", () => {
+  const registration = stripComments(read(REGISTRATION_MODULE));
+  const actions = stripComments(read(STAFF_ACTIONS));
+
+  test("A7. a successful creation is followed by a cookie-aware sign-in", () => {
+    assert.ok(
+      /signInWithPassword\s*\(/.test(registration),
+      "activation must establish a session",
+    );
+    // The session must be written to THIS request's cookies, so the ordinary server
+    // client is required — the admin client has sessions disabled entirely.
+    assert.ok(
+      registration.includes('from "@/lib/supabase/server"'),
+      "sign-in must use the cookie-aware server client",
+    );
+    // Order matters: create, then sign in.
+    assert.ok(
+      registration.indexOf("createUser") < registration.indexOf("signInWithPassword"),
+      "sign-in must follow account creation",
+    );
+  });
+
+  test("A8. there is no 'check your email' success state left", () => {
+    for (const path of [STAFF_ACTIONS, STAFF_FORMS, STAFF_PAGE, "app/invitations/staff/accept-state.ts"]) {
+      const source = stripComments(read(path));
+      assert.ok(
+        !/check your email/i.test(source),
+        `${path} still renders a confirmation-email notice`,
+      );
+    }
+    // The state type carries no success channel at all.
+    assert.ok(
+      !/\bnotice\b/.test(stripComments(read("app/invitations/staff/accept-state.ts"))),
+      "the state still carries a success notice field",
+    );
+  });
+
+  test("A9. activation ends by redirecting back to the invitation", () => {
+    assert.ok(/redirect\(RETURN_PATH\)/.test(actions));
+    assert.ok(actions.includes('const RETURN_PATH = "/invitations/staff"'));
+  });
+
+  test("A10. an existing account is sent to the universal login, creating nothing", () => {
+    // Both the page's up-front branch and the action's concurrency branch land on the
+    // same prompt, which targets /login with a validated internal return path.
+    assert.ok(stripComments(read(STAFF_PAGE)).includes('view === "sign-in"'));
+    assert.ok(/mode:\s*"sign-in"/.test(actions), "no already-registered screen switch");
+    assert.ok(
+      read(STAFF_FORMS).includes('href="/login?next=/invitations/staff"'),
+      "the prompt must return through the universal login",
+    );
+    // The already-registered branch returns before any Auth write.
+    assert.ok(
+      registration.indexOf('if (context.hasAuthAccount) return { status: "already-registered" }') <
+        registration.indexOf("createUser"),
+      "the existing-account check must precede account creation",
+    );
+  });
+
+  test("A11. a concurrent creation conflict becomes the sign-in screen, not an error", () => {
+    // GoTrue refuses a duplicate address; matched on code with a narrow status
+    // fallback, never on message text.
+    assert.ok(registration.includes('code === "email_exists"'));
+    assert.ok(registration.includes('code === "user_already_exists"'));
+    assert.ok(registration.includes("status === 422"));
+    assert.ok(
+      /return \{ status: "already-registered" \}/.test(registration),
+      "a conflict must map to the already-registered outcome",
+    );
+  });
+});
+
+describe("activation returns and logs nothing sensitive", () => {
+  const registration = stripComments(read(REGISTRATION_MODULE));
+  const actions = stripComments(read(STAFF_ACTIONS));
+
+  test("A12. the activation result carries a status and nothing else", () => {
+    // No email, no user id, no Auth error, no token.
+    for (const forbidden of ["invitedEmail:", "userId", "user.id", "error:"]) {
+      assert.ok(
+        !new RegExp(`status: "(activated|already-registered|unavailable)"[^}]*${forbidden.replace(".", "\\\\.")}`).test(
+          registration,
+        ),
+        `the activation result leaks ${forbidden}`,
+      );
+    }
+  });
+
+  test("A13. no Auth error object is ever bound, returned or logged", () => {
+    // Only the discriminating CODE and STATUS are read, and only to classify.
+    assert.ok(
+      !/console\.\w+\([^)]*\b(created|signedIn)\b/.test(registration),
+      "an Auth result reaches a log line",
+    );
+    assert.ok(!/return[^;]*created\.error/.test(registration), "an Auth error is returned");
+  });
+
+  test("A14. the password never leaves the registration except to Supabase Auth", () => {
+    assert.ok(!/console\.\w+\([^)]*password/.test(registration), "a password reaches a log line");
+    assert.ok(!/console\.\w+\([^)]*password/.test(actions), "a password reaches a log line");
+    assert.ok(!/return[^;]*password/.test(registration), "a password is returned");
+    // It is passed to createUser and signInWithPassword, and to the shared validator.
+    assert.ok(/password,/.test(registration) || /password:/.test(registration));
+  });
+
+  test("A15. the token hash is never logged", () => {
+    for (const source of [registration, actions]) {
+      assert.ok(!/console\.\w+\([^)]*tokenHash/.test(source), "a token hash reaches a log line");
+    }
+  });
+});
+
+describe("acceptance is unchanged", () => {
+  test("A16. acceptance still calls only the acceptance RPC", () => {
+    const actions = stripComments(read(STAFF_ACTIONS));
+    assert.ok(actions.includes("acceptStaffInvitation"));
+    assert.ok(!/\.from\s*\(\s*["'`]/.test(actions), "the action touches a table directly");
+    for (const forbidden of [
+      "accept_retailer_staff_invitation",
+      "organization_members",
+      "member_roles",
+      "retailer_shop_members",
+      "profiles",
+    ]) {
+      assert.ok(
+        !actions.includes(forbidden),
+        `the action names ${forbidden} — membership logic must stay in SQL`,
+      );
+    }
+  });
+
+  test("A17. Retailer Owner activation is untouched by this flow", () => {
+    // A different route, a different action, and it must not have acquired the Admin
+    // API or a sign-in step.
+    const owner = stripComments(read("app/invitations/complete/actions.ts"));
+    assert.ok(!/createUser/.test(owner), "Owner activation now calls createUser");
+    assert.ok(!owner.includes("@/lib/supabase/admin"), "Owner activation gained the admin client");
+    assert.ok(!/signInWithPassword/.test(owner), "Owner activation now signs in");
+    assert.ok(owner.includes("updateUser"), "Owner activation must still set its password");
   });
 });

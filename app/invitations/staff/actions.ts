@@ -9,7 +9,7 @@ import {
   readStaffInviteHash,
 } from "@/lib/staff/staff-invite-cookie";
 import { acceptStaffInvitation } from "@/lib/staff/staff-acceptance";
-import { getStaffRegistrationCredentials } from "@/lib/staff/staff-registration";
+import { activateInvitedStaffAccount } from "@/lib/staff/staff-registration";
 import { resolveAuthenticatedLanding } from "@/lib/auth/authenticated-landing";
 import { validatePassword } from "@/lib/auth/password-policy";
 import type { StaffAcceptState } from "@/app/invitations/staff/accept-state";
@@ -62,7 +62,7 @@ export async function acceptStaffInvitationAction(
   // The hash is read server-side from the HttpOnly cookie. No FormData is consulted.
   const tokenHash = await readStaffInviteHash();
   if (!tokenHash) {
-    return { error: GENERIC_ERROR, notice: null };
+    return { error: GENERIC_ERROR };
   }
 
   // Require a verified session for clean UX; the RPC also fails closed without one.
@@ -85,10 +85,10 @@ export async function acceptStaffInvitationAction(
   const result = await acceptStaffInvitation(tokenHash);
 
   if (result.status === "unavailable") {
-    return { error: RETRY_ERROR, notice: null };
+    return { error: RETRY_ERROR };
   }
   if (result.status === "refused") {
-    return { error: GENERIC_ERROR, notice: null };
+    return { error: GENERIC_ERROR };
   }
 
   // Accepted. The caller is now an ACTIVE member of the Retailer with exactly one
@@ -147,9 +147,9 @@ export async function signOutForStaffInvitationAction(
   const supabase = await createClient();
   try {
     const { error } = await supabase.auth.signOut({ scope: "local" });
-    if (error) return { error: RETRY_ERROR, notice: null };
+    if (error) return { error: RETRY_ERROR };
   } catch {
-    return { error: RETRY_ERROR, notice: null };
+    return { error: RETRY_ERROR };
   }
 
   revalidatePath("/", "layout");
@@ -163,33 +163,37 @@ export async function signOutForStaffInvitationAction(
 /**
  * Activates an invited staff member's account — PASSWORD ONLY.
  *
- * THE INVITED EMAIL IS NEVER ASKED FOR AND NEVER SHOWN. It is derived, server-side,
- * from the invitation token: the HttpOnly cookie carries the token's SHA-256 hash, the
- * service-role RPC maps that hash to the invitation's own canonical address, and that
- * address goes straight to Supabase Auth. The form has two fields — password and
- * confirmation — and no email input at all, so there is nothing for a person to mistype
- * and nothing for a stranger to substitute.
+ * THE INVITED EMAIL IS NEVER ASKED FOR, SHOWN, OR EVEN SEEN BY THIS MODULE. The
+ * HttpOnly cookie carries the invitation token's SHA-256 hash; everything else happens
+ * inside @/lib/staff/staff-registration, which resolves the canonical address through
+ * a service-role RPC, creates the account, signs the person in, and returns a status.
+ * This action passes a hash and a password and receives one word back.
  *
  * WHY THE COOKIE HOLDS THE HASH RATHER THAN THE RAW TOKEN. /invitations/staff/enter
  * hashes the raw token the moment it arrives and stores only the digest, so the raw
  * token exists for exactly one redirect hop and never at rest. Reading the hash here is
- * therefore both what the cookie contains and the stronger arrangement: storing the raw
- * token so it could be re-hashed later would keep a live credential in a cookie for an
- * hour to no benefit. The shape is validated before use, and the value is never logged.
+ * therefore both what the cookie contains and the stronger arrangement.
  *
- * THIS IS NOT A SECOND AUTHENTICATION SYSTEM. It calls the project's existing Supabase
- * Auth through the ordinary publishable-key server client — the same client the sign-in
- * action uses — and creates nothing else. No bespoke session, no bespoke password
+ * NO CONFIRMATION EMAIL, AND NO "CHECK YOUR EMAIL" SCREEN. The person opened an
+ * invitation link that was delivered to the invited inbox — that IS proof of control of
+ * the address, and it is the same proof a confirmation email would gather. The account
+ * is created already-confirmed and the person is signed straight in, so activation ends
+ * on the invitation itself rather than in a mailbox. Public Supabase signup stays
+ * disabled throughout; nothing here uses it.
+ *
+ * THIS IS NOT A SECOND AUTHENTICATION SYSTEM. It creates a Supabase Auth user and
+ * establishes a Supabase session through the project's ordinary cookie-aware client —
+ * the same client the sign-in action uses. No bespoke session, no bespoke password
  * store, no parallel login route. Signing in remains /login for everyone.
  *
- * IT GRANTS NOTHING. The new account is unconfirmed, and even once confirmed it carries
- * no membership, role or profile: acceptance still requires the invitation's canonical
- * email to equal this account's CONFIRMED address, decided in SQL. Creating an account
- * is not a way to reach an invitation — only a way to have an identity to accept one
- * with.
+ * IT GRANTS NOTHING. The new account carries no membership, role or profile:
+ * acceptance still requires the invitation's canonical email to equal this account's
+ * confirmed address, decided in SQL by accept_retailer_staff_invitation. Creating an
+ * account is not a way to reach an invitation — only a way to have an identity to
+ * accept one with.
  *
  * NOTHING IS LOGGED. Not the email, the raw token, the token hash, the password, or any
- * Auth error. Every refusal returns one of two fixed strings.
+ * Auth error.
  */
 
 /** Shown for every refusal on this path. Names nothing about the invitation. */
@@ -197,12 +201,12 @@ const ACTIVATION_ERROR =
   "This invitation can no longer be used. Please ask the person who invited you to send a new one.";
 
 /**
- * The one success notice. Identical whether the address was newly registered or Auth
- * declined for a reason we deliberately do not inspect, so this cannot become an
- * account-existence oracle.
+ * Shown when the invited address turns out to already have an account — including when
+ * a concurrent submission created one a moment ago. The form switches to the sign-in
+ * prompt, so a race is invisible rather than an error.
  */
-const ACTIVATION_NOTICE =
-  "Check your email to confirm your account, then return to this invitation.";
+const ALREADY_REGISTERED_MESSAGE =
+  "You already have a SalesReward account. Sign in to continue.";
 
 export async function activateStaffAccountAction(
   _prevState: StaffAcceptState,
@@ -212,7 +216,7 @@ export async function activateStaffAccountAction(
   //    carries it, so a hand-crafted POST cannot supply one.
   const tokenHash = await readStaffInviteHash();
   if (!tokenHash) {
-    return { error: ACTIVATION_ERROR, notice: null };
+    return { error: ACTIVATION_ERROR, mode: null };
   }
 
   // 2. The password and its confirmation — the only two values this form submits.
@@ -226,42 +230,33 @@ export async function activateStaffAccountAction(
   if (!passwordCheck.ok) {
     // Describes the INPUT, never the account or the invitation, so it carries no
     // enumeration risk.
-    return { error: passwordCheck.message, notice: null };
+    return { error: passwordCheck.message, mode: null };
   }
 
-  // 3. The canonical invited email — server-side, service-role, never rendered.
-  const credentials = await getStaffRegistrationCredentials(tokenHash);
+  // 3. Create the account (already confirmed) and sign them in. The address is
+  //    resolved, used and discarded inside that call; it never reaches this module.
+  const result = await activateInvitedStaffAccount(
+    tokenHash,
+    typeof password === "string" ? password : "",
+  );
 
-  // An unavailable invitation and one whose address already has an account are
-  // reported identically: the page would not have rendered this form for the latter,
-  // so reaching it means the state changed underneath or the request was forged.
-  if (credentials.status !== "ok") {
-    return { error: ACTIVATION_ERROR, notice: null };
+  if (result.status === "already-registered") {
+    // Not an error — a different screen. The form swaps its password fields for the
+    // universal sign-in button, which is the one useful thing to offer.
+    return { error: null, mode: "sign-in", message: ALREADY_REGISTERED_MESSAGE };
   }
 
-  const supabase = await createClient();
-
-  try {
-    // emailRedirectTo brings the confirmed visitor back to this same acceptance page,
-    // where the invitation cookie is still waiting. It must also be present in the
-    // project's allowed redirect URLs — see .env.example.
-    const appOrigin = process.env.APP_ORIGIN;
-    await supabase.auth.signUp({
-      email: credentials.invitedEmail,
-      password: typeof password === "string" ? password : "",
-      options:
-        typeof appOrigin === "string" && appOrigin.trim().length > 0
-          ? { emailRedirectTo: `${appOrigin.trim()}${RETURN_PATH}` }
-          : undefined,
-    });
-  } catch {
-    // The thrown value is deliberately not bound, inspected, or logged: a
-    // transport-level exception can carry the request body, which here includes the
-    // password AND the invited address.
-    return { error: RETRY_ERROR, notice: null };
+  if (result.status !== "activated") {
+    return { error: ACTIVATION_ERROR, mode: null };
   }
 
-  // The Supabase result is deliberately NOT inspected, and nothing about it is
-  // returned. The visitor is told the same thing either way.
-  return { error: null, notice: ACTIVATION_NOTICE };
+  // 4. Signed in. Drop any cached render produced while signed out, then return to the
+  //    invitation — where the authenticated recipient RPC now resolves it and offers
+  //    Accept. Redirecting rather than reporting success is what removes the old,
+  //    false "check your email" state: there is nothing to wait for.
+  //
+  //    A FIXED internal literal. redirect() signals by throwing NEXT_REDIRECT, so it
+  //    sits outside every try/catch.
+  revalidatePath("/", "layout");
+  redirect(RETURN_PATH);
 }

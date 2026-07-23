@@ -29,30 +29,24 @@ const secondaryButton =
 const inputClasses =
   "block w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 shadow-sm outline-none transition-colors placeholder:text-zinc-400 focus-visible:border-indigo-500 focus-visible:ring-2 focus-visible:ring-indigo-500 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-500";
 
-function Alert({ error, notice }: { error: string | null; notice: string | null }) {
-  if (error) {
-    return (
-      <div
-        role="alert"
-        aria-live="polite"
-        className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300"
-      >
-        <p>{error}</p>
-      </div>
-    );
-  }
-  if (notice) {
-    return (
-      <div
-        role="status"
-        aria-live="polite"
-        className="rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-800 dark:border-indigo-900/60 dark:bg-indigo-950/40 dark:text-indigo-300"
-      >
-        <p>{notice}</p>
-      </div>
-    );
-  }
-  return null;
+/**
+ * The error banner.
+ *
+ * Errors only. There is deliberately no success variant on this page: activation ends
+ * by signing the person in and redirecting them back to the invitation, so there is
+ * nothing to announce and nothing to wait for.
+ */
+function Alert({ error }: { error: string | null }) {
+  if (!error) return null;
+  return (
+    <div
+      role="alert"
+      aria-live="polite"
+      className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300"
+    >
+      <p>{error}</p>
+    </div>
+  );
 }
 
 /** The Accept button. Posts no fields at all. */
@@ -64,7 +58,7 @@ export function AcceptStaffInvitationForm() {
 
   return (
     <form action={formAction} className="space-y-4">
-      <Alert error={state.error} notice={state.notice} />
+      <Alert error={state.error} />
       <button type="submit" disabled={pending} className={primaryButton}>
         {pending ? "Accepting…" : "Accept invitation"}
       </button>
@@ -81,7 +75,7 @@ export function SignOutForStaffInvitationForm() {
 
   return (
     <form action={formAction} className="space-y-4">
-      <Alert error={state.error} notice={state.notice} />
+      <Alert error={state.error} />
       <button type="submit" disabled={pending} className={secondaryButton}>
         {pending ? "Signing out…" : "Sign out and use a different account"}
       </button>
@@ -110,9 +104,24 @@ export function ActivateStaffAccountForm() {
     INITIAL_STAFF_ACCEPT_STATE,
   );
 
+  // The invited address turned out to have an account already — either it always did,
+  // or a concurrent submission created one. Swap the password fields for the sign-in
+  // button rather than reporting an error: the remedy is the same, and a race the
+  // person did not cause should not read as a failure.
+  if (state.mode === "sign-in") {
+    return (
+      <div className="space-y-4">
+        <p className="text-sm text-zinc-500 dark:text-zinc-400">
+          {state.message ?? "You already have a SalesReward account. Sign in to continue."}
+        </p>
+        <StaffInvitationSignInPrompt />
+      </div>
+    );
+  }
+
   return (
     <form action={formAction} className="space-y-4" noValidate>
-      <Alert error={state.error} notice={state.notice} />
+      <Alert error={state.error} />
 
       <div className="space-y-2">
         <label
