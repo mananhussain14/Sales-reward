@@ -8,10 +8,12 @@ import {
   type OnboardRetailerField,
   type OnboardRetailerState,
 } from "@/app/(admin)/retailers/new/onboard-state";
-import { SectionCard } from "@/components/ui/card";
 import { Alert } from "@/components/ui/alert";
 import { Button, buttonClasses } from "@/components/ui/button";
 import { inputClasses, Label } from "@/components/ui/field";
+import { FormStep, InfoPanel } from "@/components/ui/form-section";
+import { BuildingIcon, StoreIcon } from "@/components/ui/icons";
+import { cn } from "@/components/ui/cn";
 
 /**
  * Retailer onboarding form.
@@ -139,7 +141,9 @@ export function RetailerForm() {
         </Alert>
       )}
 
-      <SectionCard
+      <FormStep
+        step={1}
+        icon={<BuildingIcon className="h-5 w-5" />}
         title="Retailer details"
         description="The Retailer company this Vendor will manage. It is created as active."
       >
@@ -176,9 +180,11 @@ export function RetailerForm() {
             />
           </div>
         </div>
-      </SectionCard>
+      </FormStep>
 
-      <SectionCard
+      <FormStep
+        step={2}
+        icon={<StoreIcon className="h-5 w-5" />}
         title="First shop"
         description="Every Retailer starts with one shop location. More can be added later."
       >
@@ -210,9 +216,22 @@ export function RetailerForm() {
             />
           </div>
         </div>
-      </SectionCard>
+      </FormStep>
 
-      <div className="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-end">
+      {/* Explains the single-submit workflow without changing it — one action
+          creates the Retailer, its relationship, and this first shop together. */}
+      <InfoPanel>
+        <span className="font-medium">Both the Retailer and its first shop will be created together.</span>{" "}
+        Everything is set up as active in a single step.
+      </InfoPanel>
+
+      {/*
+        The action area is visually separated from the form content and sticks to
+        the bottom of the viewport on desktop so the primary action stays reachable
+        on a long form. On mobile it stays in normal flow and the buttons go
+        full-width for easy tapping.
+      */}
+      <div className="flex flex-col-reverse gap-3 rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-card backdrop-blur sm:sticky sm:bottom-4 sm:flex-row sm:items-center sm:justify-end">
         {/*
           Cancel is disabled along with the inputs while the action runs. It is a
           link rather than a button, so `disabled` does not apply — aria-disabled
@@ -227,7 +246,7 @@ export function RetailerForm() {
           tabIndex={pending ? -1 : undefined}
           className={buttonClasses(
             { variant: "outline" },
-            pending ? "pointer-events-none opacity-60" : undefined,
+            cn("w-full sm:w-auto", pending ? "pointer-events-none opacity-60" : undefined),
           )}
         >
           Cancel
@@ -238,7 +257,12 @@ export function RetailerForm() {
           is disabled for the whole round trip, and on success the action
           redirects, so there is no filled form left to resubmit.
         */}
-        <Button type="submit" loading={pending} loadingLabel="Creating Retailer…">
+        <Button
+          type="submit"
+          className="w-full sm:w-auto"
+          loading={pending}
+          loadingLabel="Creating Retailer…"
+        >
           Create Retailer
         </Button>
       </div>

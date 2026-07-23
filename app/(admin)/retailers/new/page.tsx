@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { getVendorSuperAdminAccess } from "@/lib/auth/vendor-admin-access";
 import { RetailerForm } from "@/app/(admin)/retailers/new/retailer-form";
 import { BackLink } from "@/components/ui/page-header";
+import { RetailersIcon } from "@/components/ui/icons";
 
 export const metadata: Metadata = {
   title: "Add Retailer · SalesReward Admin",
@@ -44,15 +45,25 @@ export default async function NewRetailerPage() {
       <div>
         <BackLink href="/retailers">Back to Retailers</BackLink>
 
-        <h2 className="mt-3 text-2xl font-semibold tracking-tight text-slate-900">
-          Add Retailer
-        </h2>
-        <p className="mt-1.5 max-w-2xl text-sm text-slate-500">
-          Create a Retailer organization managed by{" "}
-          <span className="font-medium text-slate-700">{organizationName}</span>,
-          together with its first shop. The Retailer, the relationship, and the
-          shop are all created as active, in a single step.
-        </p>
+        <div className="mt-3 flex items-start gap-4">
+          <span
+            aria-hidden="true"
+            className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600"
+          >
+            <RetailersIcon className="h-6 w-6" />
+          </span>
+          <div>
+            <h2 className="text-2xl font-semibold tracking-tight text-slate-900">
+              Add Retailer
+            </h2>
+            <p className="mt-1.5 max-w-2xl text-sm text-slate-500">
+              Create a Retailer organization managed by{" "}
+              <span className="font-medium text-slate-700">{organizationName}</span>
+              , together with its first shop. The Retailer, the relationship, and
+              the shop are all created as active, in a single step.
+            </p>
+          </div>
+        </div>
       </div>
 
       <RetailerForm />

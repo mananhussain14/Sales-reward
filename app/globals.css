@@ -114,6 +114,37 @@ body {
   }
 }
 
+/* Gentle vertical float for the login artwork's reward spark. */
+@keyframes sr-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+/* One-time draw of the login sales line. */
+@keyframes sr-draw-line {
+  from {
+    stroke-dashoffset: 620;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.sr-animate-float {
+  animation: sr-float 4.5s ease-in-out infinite;
+}
+
+.sr-draw-line {
+  stroke-dasharray: 620;
+  stroke-dashoffset: 620;
+  animation: sr-draw-line 1.6s ease-out 0.15s forwards;
+}
+
 .sr-animate-fade-in {
   animation: sr-fade-in 220ms ease-out both;
 }
@@ -163,7 +194,8 @@ body {
     display: none;
   }
 
-  .sr-check-draw {
+  .sr-check-draw,
+  .sr-draw-line {
     stroke-dashoffset: 0;
   }
 }

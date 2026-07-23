@@ -33,7 +33,14 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Alert } from "@/components/ui/alert";
 import { cardClasses } from "@/components/ui/card";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
-import { InboxIcon, StaffIcon } from "@/components/ui/icons";
+import {
+  CheckIcon,
+  ClockIcon,
+  InboxIcon,
+  LocationIcon,
+  StaffIcon,
+} from "@/components/ui/icons";
+import { InitialsAvatar } from "@/components/ui/avatar";
 
 export const metadata: Metadata = {
   title: "Staff · Retailer Portal",
@@ -69,7 +76,11 @@ function invitationName(invitation: StaffInvitation): string {
   return `${invitation.firstName} ${invitation.lastName}`;
 }
 
-/** Renders a state label as a neutral pill. Not StatusBadge — different vocabulary. */
+/**
+ * Renders a state label as a status pill. Not StatusBadge — different vocabulary.
+ * The label comes from the single centralized map (staffInvitationStateLabel); the
+ * tone and icon are presentation only and nothing branches on them.
+ */
 function InvitationStateBadge({ invitation }: { invitation: StaffInvitation }) {
   const tone: BadgeTone =
     invitation.state === "ACCEPTED"
@@ -80,11 +91,27 @@ function InvitationStateBadge({ invitation }: { invitation: StaffInvitation }) {
           ? "indigo"
           : "slate";
 
-  return <Badge tone={tone}>{staffInvitationStateLabel(invitation.state)}</Badge>;
+  const icon =
+    invitation.state === "ACCEPTED" ? (
+      <CheckIcon className="h-3 w-3" />
+    ) : invitation.state === "PENDING" || invitation.state === "RESERVED" ? (
+      <ClockIcon className="h-3 w-3" />
+    ) : undefined;
+
+  return (
+    <Badge tone={tone} icon={icon}>
+      {staffInvitationStateLabel(invitation.state)}
+    </Badge>
+  );
 }
 
-/** The shops a roster row is assigned to, or an em dash. */
-function ShopList({ names }: { names: string[] }) {
+/** A role shown as a subtle pill. Presentation only — nothing branches on it. */
+function RoleBadge({ label }: { label: string }) {
+  return <Badge tone="indigo">{label}</Badge>;
+}
+
+/** The shops a roster row is assigned to, rendered as chips, or an em dash. */
+function ShopBadges({ names }: { names: string[] }) {
   if (names.length === 0) {
     return (
       <span className="text-slate-400" aria-label="No shops assigned">
@@ -92,7 +119,16 @@ function ShopList({ names }: { names: string[] }) {
       </span>
     );
   }
-  return <>{names.join(", ")}</>;
+  return (
+    <span className="flex flex-wrap gap-1.5">
+      {names.map((name, index) => (
+        <Badge key={`${name}-${index}`} tone="slate">
+          <LocationIcon className="h-3 w-3" />
+          {name}
+        </Badge>
+      ))}
+    </span>
+  );
 }
 
 /** A generic, retry-safe panel for a read that failed. Never names a cause. */
@@ -169,7 +205,16 @@ export default async function RetailerStaffPage() {
       {/* Active staff                                                      */}
       {/* ---------------------------------------------------------------- */}
       <section aria-labelledby="roster-heading" className="mt-8">
-        <SectionHeader title={<span id="roster-heading">Active staff</span>} />
+        <SectionHeader
+          title={
+            <span id="roster-heading" className="inline-flex items-center gap-2.5">
+              Active staff
+              {members.status === "ok" && members.members.length > 0 && (
+                <Badge tone="slate">{members.members.length}</Badge>
+              )}
+            </span>
+          }
+        />
 
         {members.status !== "ok" ? (
           <div className="mt-3">
@@ -221,14 +266,21 @@ export default async function RetailerStaffPage() {
                         database's. The membership id is the stable key. */}
                     {members.members.map((member) => (
                       <tr key={member.membershipId} className="transition-colors hover:bg-slate-50">
-                        <td className="whitespace-nowrap px-4 py-3 font-medium text-slate-900">
-                          {memberName(member)}
+                        <td className="whitespace-nowrap px-4 py-3">
+                          <span className="flex items-center gap-3">
+                            <InitialsAvatar name={memberName(member)} size="sm" />
+                            <span className="font-medium text-slate-900">
+                              {memberName(member)}
+                            </span>
+                          </span>
                         </td>
-                        <td className={`whitespace-nowrap ${tdClasses}`}>
-                          {retailerRoleDisplayName(member.roleCode, member.roleName)}
+                        <td className="whitespace-nowrap px-4 py-3">
+                          <RoleBadge
+                            label={retailerRoleDisplayName(member.roleCode, member.roleName)}
+                          />
                         </td>
                         <td className={tdClasses}>
-                          <ShopList names={member.shopNames} />
+                          <ShopBadges names={member.shopNames} />
                         </td>
                         <td className="whitespace-nowrap px-4 py-3">
                           <StatusBadge status={member.membershipStatus} />
@@ -248,22 +300,27 @@ export default async function RetailerStaffPage() {
               {members.members.map((member) => (
                 <li key={member.membershipId} className={cardClasses("standard", "p-4")}>
                   <div className="flex items-start justify-between gap-3">
-                    <p className="min-w-0 flex-1 text-sm font-medium text-slate-900">
-                      {memberName(member)}
-                    </p>
+                    <div className="flex min-w-0 items-center gap-3">
+                      <InitialsAvatar name={memberName(member)} size="md" />
+                      <p className="min-w-0 flex-1 text-sm font-medium text-slate-900">
+                        {memberName(member)}
+                      </p>
+                    </div>
                     <StatusBadge status={member.membershipStatus} />
                   </div>
-                  <dl className="mt-3 flex flex-col gap-1.5 text-sm">
-                    <div className="flex justify-between gap-3">
+                  <dl className="mt-3 flex flex-col gap-2 text-sm">
+                    <div className="flex items-center justify-between gap-3">
                       <dt className="text-slate-500">Role</dt>
-                      <dd className="text-slate-700">
-                        {retailerRoleDisplayName(member.roleCode, member.roleName)}
+                      <dd>
+                        <RoleBadge
+                          label={retailerRoleDisplayName(member.roleCode, member.roleName)}
+                        />
                       </dd>
                     </div>
-                    <div className="flex justify-between gap-3">
+                    <div className="flex items-start justify-between gap-3">
                       <dt className="text-slate-500">Shops</dt>
-                      <dd className="text-right text-slate-700">
-                        <ShopList names={member.shopNames} />
+                      <dd className="flex justify-end text-right">
+                        <ShopBadges names={member.shopNames} />
                       </dd>
                     </div>
                     <div className="flex justify-between gap-3">
@@ -285,7 +342,16 @@ export default async function RetailerStaffPage() {
       {/* ---------------------------------------------------------------- */}
       {showsInvitationSection(invitations.status) && (
         <section aria-labelledby="invitations-heading" className="mt-10">
-          <SectionHeader title={<span id="invitations-heading">Invitations</span>} />
+          <SectionHeader
+            title={
+              <span id="invitations-heading" className="inline-flex items-center gap-2.5">
+                Invitations
+                {invitations.status === "ok" && invitations.invitations.length > 0 && (
+                  <Badge tone="amber">{invitations.invitations.length}</Badge>
+                )}
+              </span>
+            }
+          />
 
           {invitations.status !== "ok" ? (
             <div className="mt-3">
