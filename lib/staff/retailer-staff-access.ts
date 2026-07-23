@@ -16,11 +16,14 @@
 // existing, independently-authorized questions in order and reports which one
 // answered:
 //
-//   1. getRetailerOwnerPortalAccess()  -> "owner"  (RETAILER_PORTAL_READ, owner role)
-//   2. getRetailerStaffMembers()       -> "reader" (RETAILER_STAFF_READ)
+//   1. getRetailerOwnerPortalAccess()  -> "owner"     (RETAILER_PORTAL_READ + owner role)
+//   2. getRetailerStaffMembers()       -> "reader"    (RETAILER_STAFF_READ)
+//   3. getMyAssignedReceiptShops()     -> "submitter" (RECEIPT_SUBMIT)
 //
-// A SALES_STAFF member holds neither mapping, so both answer no and they are
-// unauthorized — enforced by SQL, not by a list of role names here.
+// Each permission is mapped to exactly the roles that should have it, and no role name
+// appears here — a mapping change in SQL changes who gets which experience without this
+// file being edited. RECEIPT_SUBMIT is mapped to SALES_STAFF alone, which is precisely
+// why an Owner or a Manager never resolves as a submitter.
 //
 // WHY THE ROSTER READ IS THE PROBE, rather than a new "am I staff?" call: it is the
 // exact read the staff page needs anyway, it is request-cached, and using the real
@@ -38,9 +41,11 @@
 import { cache } from "react";
 import { getRetailerOwnerPortalAccess } from "@/lib/retailer-portal/retailer-owner-portal";
 import { getRetailerStaffMembers } from "@/lib/staff/retailer-staff-data";
+import { getMyAssignedReceiptShops } from "@/lib/receipts/receipt-data";
 import {
   selectPortalAccess,
   shouldProbeRoster,
+  shouldProbeSubmitter,
 } from "@/lib/staff/portal-access-decision";
 
 /**
@@ -51,7 +56,7 @@ import {
  *   reader  the staff roster only. No invitation list, no management controls, no shop
  *           ids — each refused by the database, not merely hidden.
  */
-export type RetailerPortalAccessKind = "owner" | "reader";
+export type RetailerPortalAccessKind = "owner" | "reader" | "submitter";
 
 export type RetailerPortalAccess =
   | {
@@ -64,6 +69,12 @@ export type RetailerPortalAccess =
       status: "authorized";
       kind: "reader";
       /** Always null. See the module note above. */
+      retailerName: null;
+    }
+  | {
+      status: "authorized";
+      kind: "submitter";
+      /** Always null, for the same reason as a reader. */
       retailerName: null;
     }
   | { status: "unauthenticated" }
@@ -82,7 +93,13 @@ async function resolveRetailerPortalAccess(): Promise<RetailerPortalAccess> {
     ? (await getRetailerStaffMembers()).status
     : ("denied" as const);
 
-  const decision = selectPortalAccess(owner.status, roster);
+  // The receipt probe is issued only when neither earlier read authorized the caller,
+  // so a Manager's request never touches a Sales-Staff-only RPC at all.
+  const submitter = shouldProbeSubmitter(owner.status, roster)
+    ? (await getMyAssignedReceiptShops()).status
+    : ("denied" as const);
+
+  const decision = selectPortalAccess(owner.status, roster, submitter);
 
   switch (decision.kind) {
     case "owner":
@@ -97,6 +114,8 @@ async function resolveRetailerPortalAccess(): Promise<RetailerPortalAccess> {
       };
     case "reader":
       return { status: "authorized", kind: "reader", retailerName: null };
+    case "submitter":
+      return { status: "authorized", kind: "submitter", retailerName: null };
     case "unauthenticated":
       return { status: "unauthenticated" };
     case "unauthorized":

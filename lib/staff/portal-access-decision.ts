@@ -40,11 +40,24 @@ export type OwnerAccessStatus =
 export type RosterReadStatus = "ok" | "denied" | "unavailable";
 
 /**
+ * The assigned-receipt-shop read's three states. `denied` means the caller holds no
+ * RECEIPT_SUBMIT mapping for a single qualifying Retailer. That permission is mapped to
+ * SALES_STAFF alone, so a Retailer Owner and a Retailer Manager both land here — which
+ * is why neither can reach the submission experience.
+ *
+ * `ok` includes the zero-shops case: a Sales Staff member with no live assignment is
+ * authorized but has nothing to submit against, and the page tells them so rather than
+ * refusing them.
+ */
+export type SubmitterReadStatus = "ok" | "denied" | "unavailable";
+
+/**
  * The outcome.
  *
  *   owner           the full portal: overview, shops, staff roster, invitations, and
  *                   the invite / resend / revoke controls.
  *   reader          the staff roster only.
+ *   submitter       receipt submission and personal history only.
  *   unauthenticated no verified session.
  *   unauthorized    a verified identity that qualifies for neither.
  *   unavailable     a read failed. NOT a denial, and never presented as one.
@@ -52,6 +65,7 @@ export type RosterReadStatus = "ok" | "denied" | "unavailable";
 export type PortalAccessDecision =
   | { kind: "owner" }
   | { kind: "reader" }
+  | { kind: "submitter" }
   | { kind: "unauthenticated" }
   | { kind: "unauthorized" }
   | { kind: "unavailable" };
@@ -69,6 +83,21 @@ export function shouldProbeRoster(owner: OwnerAccessStatus): boolean {
 }
 
 /**
+ * Whether the assigned-shop read is worth issuing, given the two earlier results.
+ *
+ * Only when the roster did not already authorize the caller. A Retailer Manager is
+ * settled by the roster read, so their receipt probe is skipped — which matters beyond
+ * saving a round trip: it means the Manager path never calls a Sales-Staff-only RPC at
+ * all.
+ */
+export function shouldProbeSubmitter(
+  owner: OwnerAccessStatus,
+  roster: RosterReadStatus,
+): boolean {
+  return shouldProbeRoster(owner) && roster !== "ok";
+}
+
+/**
  * Resolve the portal decision from the two read statuses.
  *
  * OWNER-FIRST PRECEDENCE:
@@ -78,7 +107,10 @@ export function shouldProbeRoster(owner: OwnerAccessStatus): boolean {
  *   3. otherwise             -> consult the roster read:
  *        ok            -> reader
  *        unavailable   -> unavailable (the roster read itself broke)
- *        denied        -> unauthorized, UNLESS the owner read was itself
+ *        denied        -> consult the assigned-shop read:
+ *          ok          -> submitter
+ *          unavailable -> unavailable
+ *          denied      -> unauthorized, UNLESS the owner read was itself
  *                         "unavailable" — in which case we never actually established
  *                         that they are not an owner, so the honest answer is
  *                         "unavailable". Telling an owner they lack access because of
@@ -88,6 +120,7 @@ export function shouldProbeRoster(owner: OwnerAccessStatus): boolean {
 export function selectPortalAccess(
   owner: OwnerAccessStatus,
   roster: RosterReadStatus,
+  submitter: SubmitterReadStatus,
 ): PortalAccessDecision {
   if (owner === "authorized") {
     return { kind: "owner" };
@@ -97,9 +130,19 @@ export function selectPortalAccess(
     return { kind: "unauthenticated" };
   }
 
-  switch (roster) {
+  if (roster === "ok") {
+    return { kind: "reader" };
+  }
+
+  if (roster === "unavailable") {
+    return { kind: "unavailable" };
+  }
+
+  // roster === "denied": not an owner and not a roster reader. The last question is
+  // whether they are a Sales Staff member who may submit receipts.
+  switch (submitter) {
     case "ok":
-      return { kind: "reader" };
+      return { kind: "submitter" };
     case "unavailable":
       return { kind: "unavailable" };
     case "denied":
