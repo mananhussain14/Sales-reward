@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { getRetailerOwnerPortalAccess } from "@/lib/retailer-portal/retailer-owner-portal";
+import { getRetailerPortalAccess } from "@/lib/staff/retailer-staff-access";
 import { RetailerShell } from "@/components/retailer-portal/retailer-shell";
 
 /**
@@ -27,15 +27,24 @@ import { RetailerShell } from "@/components/retailer-portal/retailer-shell";
  * solution. Because this layout runs as part of rendering, no portal route can
  * render around it.
  *
- * Scope: authentication AND authorization. A verified identity is not
- * sufficient — the caller must resolve to exactly one qualifying active Retailer
- * Owner. That decision is delegated entirely to the portal access function,
- * which delegates it in turn to SQL. Neither the conditions nor the permission
- * codes are repeated here, so this layout and every page beneath it enforce
- * exactly the same rule as the database.
+ * Scope: authentication AND "may this person use the Retailer portal at all".
+ * That decision is delegated entirely to @/lib/staff/retailer-staff-access, which
+ * delegates it in turn to SQL. Neither the conditions nor the permission codes
+ * are repeated here.
+ *
+ * WHY THIS GATE IS BROADER THAN "IS AN OWNER" SINCE THE STAFF MILESTONE.
+ * The portal now serves two kinds of member: a RETAILER_OWNER, and anyone who can
+ * read the staff roster (today a RETAILER_MANAGER). A layout cannot see the
+ * requested pathname, so it cannot apply a per-page rule; making it the union and
+ * letting each page apply its own is the only correct split. That costs nothing,
+ * because the two owner-only pages beneath it ALREADY re-resolve owner access at
+ * their own boundary and redirect — they are directly addressable and never
+ * depended on this layout. A Manager therefore reaches /retailer/staff and is
+ * redirected away from /retailer and /retailer/shops exactly as before, and an
+ * owner's experience is unchanged in every respect.
  *
  * This layout is deliberately parallel to app/(admin)/layout.tsx and shares
- * nothing with it. A Retailer Owner never passes the Vendor check and a Vendor
+ * nothing with it. A Retailer member never passes the Vendor check and a Vendor
  * Super Admin never passes this one, so the two groups cannot admit each other's
  * users — and Vendor Admin behaviour is untouched by this milestone.
  */
@@ -44,7 +53,7 @@ export default async function RetailerPortalLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const access = await getRetailerOwnerPortalAccess();
+  const access = await getRetailerPortalAccess();
 
   // Unverifiable identity (expired, tampered, absent, or an Auth server the
   // client could not reach): back to sign-in. This matches the existing Vendor
@@ -60,10 +69,11 @@ export default async function RetailerPortalLayout({
     redirect("/login");
   }
 
-  // Verified identity, but not a single qualifying active Retailer Owner. Every
-  // denial lands here identically — including the ambiguous multi-retailer case,
-  // which fails closed in SQL. The destination page never reveals which
-  // condition failed.
+  // Verified identity, but neither an owner nor a staff-roster reader for a
+  // single qualifying active Retailer. Every denial lands here identically —
+  // including a Sales Staff member (who holds neither permission mapping) and
+  // the ambiguous multi-retailer case, which fails closed in SQL. The
+  // destination page never reveals which condition failed.
   //
   // Note this does NOT redirect to the Vendor Admin's /access-denied: that page
   // re-runs the Vendor check and would tell a Retailer Owner they lack "Vendor
@@ -88,11 +98,15 @@ export default async function RetailerPortalLayout({
     throw new Error("Retailer portal context is temporarily unavailable.");
   }
 
-  // Past this point `access.status` is "authorized". The retailer name is the
-  // only value handed to the client shell, and it came from the authorized
-  // context — the only source it may come from.
+  // Past this point `access.status` is "authorized". The retailer name (which is
+  // null for a non-owner — see the access module) and the access kind are the
+  // only values handed to the client shell, and both came from the authorized
+  // resolution — the only source they may come from.
   return (
-    <RetailerShell retailerName={access.context.retailerName}>
+    <RetailerShell
+      retailerName={access.retailerName}
+      accessKind={access.kind}
+    >
       {children}
     </RetailerShell>
   );
