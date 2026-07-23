@@ -5,12 +5,16 @@ import { signIn } from "@/app/login/actions";
 import { INITIAL_LOGIN_STATE } from "@/app/login/login-state";
 
 /**
- * Sign-in form for the Vendor Admin.
+ * The universal sign-in form — used by every role.
  *
  * This is a Client Component only so it can surface pending/error state via
- * useActionState. The credential itself is posted straight to the `signIn`
- * Server Action — the browser Supabase client is never involved, and nothing is
- * persisted client-side.
+ * useActionState. The credential itself is posted straight to the `signIn` Server
+ * Action — the browser Supabase client is never involved, and nothing is persisted
+ * client-side.
+ *
+ * It renders no role text and makes no authorization decision. Where the person lands
+ * afterwards is resolved on the server from their verified session; this component
+ * never learns which role they hold.
  */
 export function LoginForm({ next }: { next?: string | null }) {
   const [state, formAction, pending] = useActionState(signIn, INITIAL_LOGIN_STATE);

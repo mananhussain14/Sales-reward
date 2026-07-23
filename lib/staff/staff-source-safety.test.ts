@@ -301,12 +301,36 @@ describe("secrets stay in their owning modules", () => {
 });
 
 describe("the service-role client has exactly one caller here", () => {
-  test("17. only the invitation orchestration module constructs it", () => {
+  test("17. exactly two modules construct it, each for a documented reason", () => {
+    // retailer-staff-invitations.ts  — prepare / record sent / record failure are
+    //                                  granted to service_role only.
+    // staff-registration.ts          — get_retailer_staff_registration_context maps an
+    //                                  invitation token to the invited EMAIL, so it is
+    //                                  service_role only by design; reachable by a
+    //                                  browser it would disclose who was invited.
+    // Any third caller is a regression and fails here.
     const callers = STAFF_FILES.filter((file) =>
       /createAdminClient/.test(stripComments(file.source)),
-    ).map((file) => file.path);
+    )
+      .map((file) => file.path)
+      .sort();
 
-    assert.deepEqual(callers, ["lib/staff/retailer-staff-invitations.ts"]);
+    assert.deepEqual(callers, [
+      "lib/staff/retailer-staff-invitations.ts",
+      "lib/staff/staff-registration.ts",
+    ]);
+  });
+
+  test("17b. the registration-context RPC is named only in its own module", () => {
+    // It returns the invited email. Nothing else in the feature may call it, and in
+    // particular no page may — see the module's two-export split.
+    for (const file of STAFF_FILES) {
+      if (file.path === "lib/staff/staff-registration.ts") continue;
+      assert.ok(
+        !stripComments(file.source).includes('"get_retailer_staff_registration_context"'),
+        `${file.path} calls the registration-context RPC`,
+      );
+    }
   });
 
   test("18. the three service-role RPCs are named only in that module", () => {
