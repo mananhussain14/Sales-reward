@@ -280,3 +280,77 @@ describe("decideProxyRoute — no arbitrary redirect destination", () => {
     assert.equal(destinationOf(d), LOGIN_PATH);
   });
 });
+
+describe("decideProxyRoute — staff invitation public routes", () => {
+  const STAFF_ENTER = "/invitations/staff/enter";
+  const STAFF_CLEAN = "/invitations/staff";
+
+  test("S1. both staff paths are in the public allow-set", () => {
+    assert.ok(PUBLIC_PATHS.has(STAFF_ENTER), `${STAFF_ENTER} must be public`);
+    assert.ok(PUBLIC_PATHS.has(STAFF_CLEAN), `${STAFF_CLEAN} must be public`);
+  });
+
+  test("S2. signed-out GET the intake route continues (it sets the cookie, no session)", () => {
+    const d = decideProxyRoute(
+      input({ method: "GET", pathname: STAFF_ENTER, hasVerifiedClaims: false }),
+    );
+    assert.equal(d.kind, "continue");
+    assert.equal(destinationOf(d), undefined);
+  });
+
+  test("S3. signed-out GET the clean acceptance page continues, so it can render the sign-in prompt", () => {
+    // The whole point: a signed-out visitor must REACH the page — being 307'd to
+    // /login here would drop the page's ability to preserve next=/invitations/staff,
+    // and would lose the hash cookie's page context.
+    const d = decideProxyRoute(
+      input({ method: "GET", pathname: STAFF_CLEAN, hasVerifiedClaims: false }),
+    );
+    assert.equal(d.kind, "continue");
+    assert.equal(destinationOf(d), undefined);
+  });
+
+  test("S4. a signed-in visitor is NOT bounced off either staff route", () => {
+    for (const pathname of [STAFF_ENTER, STAFF_CLEAN]) {
+      const d = decideProxyRoute(
+        input({ method: "GET", pathname, hasVerifiedClaims: true }),
+      );
+      assert.equal(d.kind, "continue", `${pathname} must render for a signed-in visitor`);
+    }
+  });
+
+  test("S5. the acceptance Server Actions (POST) are never redirected", () => {
+    for (const isServerAction of [true, false]) {
+      const d = decideProxyRoute(
+        input({
+          method: "POST",
+          pathname: STAFF_CLEAN,
+          hasVerifiedClaims: false,
+          isServerAction,
+        }),
+      );
+      assert.equal(d.kind, "continue");
+    }
+  });
+
+  test("S6. adding the staff routes opened NOTHING under /retailer", () => {
+    // The allow-set is exact paths, never a prefix — so the staff MANAGEMENT page
+    // (which is a portal route, not an invitation route) stays behind the session
+    // pre-filter and its own server-side authorization.
+    assert.ok(!PUBLIC_PATHS.has("/retailer/staff"));
+    const d = decideProxyRoute(
+      input({ method: "GET", pathname: "/retailer/staff", hasVerifiedClaims: false }),
+    );
+    assert.equal(destinationOf(d), LOGIN_PATH);
+  });
+
+  test("S7. a near-miss staff path is not public", () => {
+    for (const pathname of [
+      "/invitations/staff/",
+      "/invitations/staff/accept",
+      "/invitations/staffx",
+      "/invitations/staff/enter/extra",
+    ]) {
+      assert.ok(!PUBLIC_PATHS.has(pathname), `${pathname} must not be public`);
+    }
+  });
+});

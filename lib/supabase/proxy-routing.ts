@@ -75,6 +75,20 @@ export const PUBLIC_PATHS = new Set<string>([
   // matching email, and the accept action fails closed without a session.
   "/invitations/existing",
   "/invitations/existing/enter",
+  // The STAFF invitation intake and acceptance page. Same shape and same reasoning as
+  // the two entries above: the intake carries a one-time token and NO session (it
+  // exchanges the token for an HttpOnly hash cookie, then redirects), and the
+  // acceptance page renders a "please sign in" prompt for a signed-out visitor rather
+  // than being bounced to /login by the Proxy, which would drop the hash cookie's page
+  // context.
+  //
+  // Neither grants anything. The signed-out acceptance screen reveals NOTHING about
+  // the invitation — it does not even read the cookie — and both recipient RPCs
+  // (get_retailer_staff_invitation_for_recipient, accept_retailer_staff_invitation)
+  // resolve auth.uid() and require a CONFIRMED matching email, so a signed-out visitor
+  // who reaches either route learns and gains nothing.
+  "/invitations/staff",
+  "/invitations/staff/enter",
 ]);
 
 /**
