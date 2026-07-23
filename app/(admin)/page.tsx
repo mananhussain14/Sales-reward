@@ -4,6 +4,7 @@ import Link from "next/link";
 import { StatCard, type DashboardStat } from "@/components/admin/stat-card";
 import { getVendorAdminDashboardSummary } from "@/lib/dashboard/vendor-admin-summary";
 import { PageHeader } from "@/components/ui/page-header";
+import { NavProgressReporter } from "@/components/ui/nav-progress";
 import {
   ArrowUpRightIcon,
   AuditIcon,
@@ -149,6 +150,7 @@ export default async function DashboardPage() {
               <p className="mt-0.5 text-sm text-slate-500">
                 {shortcut.description}
               </p>
+              <NavProgressReporter />
             </Link>
           ))}
         </div>

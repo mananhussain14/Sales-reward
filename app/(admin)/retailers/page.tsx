@@ -11,6 +11,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Alert } from "@/components/ui/alert";
 import { buttonClasses } from "@/components/ui/button";
 import { ChevronRightIcon, PlusIcon, RetailersIcon } from "@/components/ui/icons";
+import { NavProgressReporter } from "@/components/ui/nav-progress";
 
 export const metadata: Metadata = {
   title: "Retailers · SalesReward Admin",
@@ -48,6 +49,7 @@ function RetailerNameLink({ retailer }: { retailer: VendorRetailer }) {
       className="rounded-sm font-semibold text-slate-900 underline-offset-4 transition-colors hover:text-indigo-600 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2"
     >
       {retailer.retailerName}
+      <NavProgressReporter />
     </Link>
   );
 }
@@ -76,6 +78,7 @@ function ViewDetailsLink({
     >
       {block ? "View Retailer" : "View details"}
       <ChevronRightIcon className="h-4 w-4" />
+      <NavProgressReporter />
     </Link>
   );
 }

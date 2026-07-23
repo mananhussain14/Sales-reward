@@ -7,6 +7,11 @@ import { SignOutButton } from "@/components/auth/sign-out-button";
 import { retailerNavItems } from "@/components/retailer-portal/retailer-nav-items";
 import { BrandLockup } from "@/components/ui/brand";
 import { cn } from "@/components/ui/cn";
+import {
+  NavPendingSpinner,
+  NavProgressProvider,
+  NavProgressReporter,
+} from "@/components/ui/nav-progress";
 
 /**
  * Retailer Portal application shell.
@@ -112,7 +117,8 @@ export function RetailerShell({
   const initials = getRetailerInitials(retailerName);
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <NavProgressProvider>
+      <div className="min-h-screen bg-slate-50">
       <a
         href="#main-content"
         className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-[60] focus:rounded-lg focus:bg-indigo-600 focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-white"
@@ -170,6 +176,10 @@ export function RetailerShell({
                       {item.icon}
                     </svg>
                     {item.label}
+                    {/* Immediate per-item feedback while this route loads, plus a
+                        report into the global top bar. Uses Next's useLinkStatus. */}
+                    <NavPendingSpinner className="ml-auto h-4 w-4 shrink-0 animate-spin text-indigo-500" />
+                    <NavProgressReporter />
                   </Link>
                 </li>
               );
@@ -260,6 +270,7 @@ export function RetailerShell({
           {children}
         </main>
       </div>
-    </div>
+      </div>
+    </NavProgressProvider>
   );
 }
