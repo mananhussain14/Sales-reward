@@ -10,7 +10,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Alert } from "@/components/ui/alert";
 import { buttonClasses } from "@/components/ui/button";
-import { PlusIcon, RetailersIcon } from "@/components/ui/icons";
+import { ChevronRightIcon, PlusIcon, RetailersIcon } from "@/components/ui/icons";
 
 export const metadata: Metadata = {
   title: "Retailers · SalesReward Admin",
@@ -45,9 +45,37 @@ function RetailerNameLink({ retailer }: { retailer: VendorRetailer }) {
   return (
     <Link
       href={`/retailers/${retailer.relationshipId}`}
-      className="rounded-sm font-medium text-slate-900 underline-offset-4 transition-colors hover:text-indigo-600 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 dark:text-slate-50 dark:hover:text-indigo-400 dark:focus-visible:ring-offset-slate-950"
+      className="rounded-sm font-semibold text-slate-900 underline-offset-4 transition-colors hover:text-indigo-600 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2"
     >
       {retailer.retailerName}
+    </Link>
+  );
+}
+
+/**
+ * The explicit "open this Retailer" action, so discovering the detail page never
+ * depends on guessing that the name is clickable. It targets the SAME existing
+ * detail route as the name — two separate, non-nested links in one row, both
+ * keyboard-focusable, neither wrapping the status badges. `block` renders the
+ * full-width mobile-card variant with its own visible label.
+ */
+function ViewDetailsLink({
+  relationshipId,
+  block = false,
+}: {
+  relationshipId: string;
+  block?: boolean;
+}) {
+  return (
+    <Link
+      href={`/retailers/${relationshipId}`}
+      className={buttonClasses(
+        { variant: block ? "outline" : "ghost", size: "sm" },
+        block ? "w-full" : "text-indigo-600 hover:bg-indigo-50 hover:text-indigo-700",
+      )}
+    >
+      {block ? "View Retailer" : "View details"}
+      <ChevronRightIcon className="h-4 w-4" />
     </Link>
   );
 }
@@ -71,6 +99,9 @@ function RetailerTable({ retailers }: { retailers: VendorRetailer[] }) {
             <th scope="col" className="px-4 py-3 font-semibold">
               Shops
             </th>
+            <th scope="col" className="px-4 py-3 text-right font-semibold">
+              Action
+            </th>
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-100">
@@ -87,6 +118,11 @@ function RetailerTable({ retailers }: { retailers: VendorRetailer[] }) {
               </td>
               <td className="px-4 py-3 text-slate-600">
                 <ShopCount shopCount={retailer.shopCount} />
+              </td>
+              <td className="px-4 py-3 text-right">
+                <div className="flex justify-end">
+                  <ViewDetailsLink relationshipId={retailer.relationshipId} />
+                </div>
               </td>
             </tr>
           ))}
@@ -134,6 +170,11 @@ function RetailerCards({ retailers }: { retailers: VendorRetailer[] }) {
           <p className="mt-2 text-sm text-slate-600">
             <ShopCount shopCount={retailer.shopCount} />
           </p>
+          {/* An always-visible action, not a hover affordance, so opening the
+              Retailer is obvious on touch. Same route as the name above. */}
+          <div className="mt-4">
+            <ViewDetailsLink relationshipId={retailer.relationshipId} block />
+          </div>
         </li>
       ))}
     </ul>
@@ -247,7 +288,7 @@ export default async function RetailersPage({
           icon={<RetailersIcon className="h-6 w-6" />}
           tone="indigo"
           title="No Retailers yet"
-          description="This Vendor has no Retailer organizations on record."
+          description="Add your first Retailer to begin managing shops, Owners and products."
           action={
             <Link href="/retailers/new" className={buttonClasses({ variant: "primary" })}>
               <PlusIcon className="h-4 w-4" />

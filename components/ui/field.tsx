@@ -69,11 +69,14 @@ export function Label({
   htmlFor,
   children,
   optional = false,
+  required = false,
   className,
 }: {
   htmlFor: string;
   children: React.ReactNode;
   optional?: boolean;
+  /** Renders a visible required marker, so a requirement is not left to color/placement. */
+  required?: boolean;
   className?: string;
 }) {
   return (
@@ -82,6 +85,11 @@ export function Label({
       className={cn("block text-sm font-medium text-slate-800", className)}
     >
       {children}
+      {required && (
+        <span className="ml-1 text-red-600" aria-hidden="true">
+          *
+        </span>
+      )}
       {optional && (
         <span className="ml-1 font-normal text-slate-400">(optional)</span>
       )}
@@ -138,6 +146,101 @@ export function Field({
       {hint && <FieldHint id={hintId}>{hint}</FieldHint>}
       {children}
       {error && <FieldError id={errorId}>{error}</FieldError>}
+    </div>
+  );
+}
+
+/**
+ * The standard single-line text field, used across every form.
+ *
+ * CRITICAL LAYOUT RULE: the label sits on top, the input directly beneath it, and
+ * the hint OR error is rendered BELOW the input. Keeping the guidance under the
+ * control — never between the label and the input — is what makes two fields in a
+ * `grid sm:grid-cols-2` line up: a field with a hint and a field without one still
+ * present their inputs on the same row, because nothing of variable height sits
+ * above the input. This survives a hint wrapping to two lines, an error appearing,
+ * a longer label, and every viewport, since the message only ever grows downward.
+ *
+ * It renders a real, connected control: `htmlFor`/`id` tie the label to the input,
+ * `aria-describedby` points at whichever message is shown, and `aria-invalid`
+ * marks a rejected field. It carries no logic — the caller owns the value, the
+ * error text, and the submit — so it changes no form behavior or field name.
+ */
+export function TextField({
+  name,
+  label,
+  id,
+  type = "text",
+  defaultValue,
+  value,
+  readOnly = false,
+  required = false,
+  optional,
+  hint,
+  error,
+  autoComplete,
+  inputMode,
+  maxLength,
+  placeholder,
+  disabled = false,
+  inputClassName,
+}: {
+  name: string;
+  label: string;
+  /** Defaults to `name`. Set when two forms on one page could collide. */
+  id?: string;
+  type?: "text" | "email";
+  /** Uncontrolled initial value (the common case — forms reset on action completion). */
+  defaultValue?: string;
+  /** Controlled value (used with `readOnly` for a locked, still-submitted field). */
+  value?: string;
+  readOnly?: boolean;
+  required?: boolean;
+  /** Shows the "(optional)" marker. Defaults to the inverse of `required`. */
+  optional?: boolean;
+  hint?: React.ReactNode;
+  error?: React.ReactNode;
+  autoComplete?: string;
+  inputMode?: React.ComponentProps<"input">["inputMode"];
+  maxLength?: number;
+  placeholder?: string;
+  disabled?: boolean;
+  inputClassName?: string;
+}) {
+  const controlId = id ?? name;
+  const showOptional = optional ?? !required;
+  const hintId = hint ? `${controlId}-hint` : undefined;
+  const errorId = error ? `${controlId}-error` : undefined;
+  // Only the rendered message is referenced — error XOR hint below.
+  const describedBy = error ? errorId : hintId;
+
+  return (
+    <div className="space-y-2">
+      <Label htmlFor={controlId} required={required} optional={showOptional}>
+        {label}
+      </Label>
+      <input
+        id={controlId}
+        name={name}
+        type={type}
+        defaultValue={defaultValue}
+        value={value}
+        readOnly={readOnly || undefined}
+        required={required}
+        autoComplete={autoComplete}
+        inputMode={inputMode}
+        maxLength={maxLength}
+        placeholder={placeholder}
+        disabled={disabled}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={describedBy}
+        className={inputClasses(Boolean(error), inputClassName)}
+      />
+      {error ? (
+        <FieldError id={errorId}>{error}</FieldError>
+      ) : hint ? (
+        <FieldHint id={hintId}>{hint}</FieldHint>
+      ) : null}
     </div>
   );
 }
