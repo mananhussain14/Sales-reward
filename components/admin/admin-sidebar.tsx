@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { NAV_ITEMS, type NavItem } from "@/components/admin/nav-items";
 import { BrandLockup } from "@/components/ui/brand";
 import { cn } from "@/components/ui/cn";
+import { NavPendingSpinner, NavProgressReporter } from "@/components/ui/nav-progress";
 
 type AdminSidebarProps = {
   /** Whether the off-canvas drawer is open (mobile only). */
@@ -94,6 +95,11 @@ export function AdminSidebar({ open, onNavigate }: AdminSidebarProps) {
                 />
                 <NavIcon>{item.icon}</NavIcon>
                 <span className="flex-1">{item.label}</span>
+                {/* Immediate per-item feedback while this route loads, plus a
+                    report into the global top bar. Both use Next's own
+                    useLinkStatus — no DOM interception. */}
+                <NavPendingSpinner />
+                <NavProgressReporter />
               </Link>
             </li>
           );

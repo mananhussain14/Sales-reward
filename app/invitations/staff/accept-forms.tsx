@@ -162,6 +162,7 @@ function ContinueAsInvitedStaffButton({ label }: { label: string }) {
     <form action={formAction} className="space-y-3">
       <Alert error={state.error} />
       <button type="submit" disabled={pending} className={primaryButton}>
+        {pending && <SpinnerIcon className="h-4 w-4 animate-spin" />}
         {pending ? "Switching…" : label}
       </button>
     </form>
@@ -179,6 +180,7 @@ function StaySignedInButton() {
     <form action={formAction} className="space-y-3">
       <Alert error={state.error} />
       <button type="submit" disabled={pending} className={secondaryButton}>
+        {pending && <SpinnerIcon className="h-4 w-4 animate-spin" />}
         {pending ? "One moment…" : "Stay signed in"}
       </button>
     </form>
@@ -257,6 +259,7 @@ export function ActivateStaffAccountForm() {
       </div>
 
       <button type="submit" disabled={pending} className={primaryButton}>
+        {pending && <SpinnerIcon className="h-4 w-4 animate-spin" />}
         {pending ? "Creating your account…" : "Activate account"}
       </button>
     </form>

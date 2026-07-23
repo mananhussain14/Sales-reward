@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { AdminHeader } from "@/components/admin/admin-header";
 import { AdminSidebar } from "@/components/admin/admin-sidebar";
+import { NavProgressProvider } from "@/components/ui/nav-progress";
 
 type AdminShellProps = {
   /** Organization name from the authorized server-side access result. */
@@ -34,9 +35,10 @@ export function AdminShell({
   }, [sidebarOpen]);
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      <a
-        href="#main-content"
+    <NavProgressProvider>
+      <div className="min-h-screen bg-slate-50">
+        <a
+          href="#main-content"
         className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-[60] focus:rounded-md focus:bg-indigo-600 focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-white"
       >
         Skip to main content
@@ -69,6 +71,7 @@ export function AdminShell({
           {children}
         </main>
       </div>
-    </div>
+      </div>
+    </NavProgressProvider>
   );
 }

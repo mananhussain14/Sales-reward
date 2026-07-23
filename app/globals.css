@@ -139,6 +139,34 @@ body {
   animation: sr-float 4.5s ease-in-out infinite;
 }
 
+/* Global navigation progress bar: an indeterminate sliver sliding across the top. */
+@keyframes sr-nav-indeterminate {
+  0% {
+    left: -35%;
+    width: 35%;
+  }
+  50% {
+    left: 30%;
+    width: 45%;
+  }
+  100% {
+    left: 100%;
+    width: 35%;
+  }
+}
+
+.sr-nav-progress {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 35%;
+  border-radius: 0 9999px 9999px 0;
+  background: linear-gradient(90deg, #4f46e5, #7c3aed);
+  box-shadow: 0 0 8px 0 rgb(79 70 229 / 0.5);
+  animation: sr-nav-indeterminate 1.15s ease-in-out infinite;
+}
+
 .sr-draw-line {
   stroke-dasharray: 620;
   stroke-dashoffset: 620;
@@ -197,5 +225,13 @@ body {
   .sr-check-draw,
   .sr-draw-line {
     stroke-dashoffset: 0;
+  }
+
+  /* No sliding motion: a calm static bar still signals "navigating". */
+  .sr-nav-progress {
+    left: 0;
+    width: 100%;
+    animation: none;
+    opacity: 0.85;
   }
 }

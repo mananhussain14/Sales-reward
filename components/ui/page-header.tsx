@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { cn } from "@/components/ui/cn";
 import { ChevronLeftIcon } from "@/components/ui/icons";
+import { NavProgressReporter } from "@/components/ui/nav-progress";
 
 /**
  * A back link rendered above a page header. A real `<Link>`, so it navigates
@@ -27,6 +28,7 @@ export function BackLink({
     >
       <ChevronLeftIcon className="h-4 w-4" />
       {children}
+      <NavProgressReporter />
     </Link>
   );
 }
