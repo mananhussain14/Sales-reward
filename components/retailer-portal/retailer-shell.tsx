@@ -38,7 +38,7 @@ type RetailerShellProps = {
    */
   retailerName: string | null;
   /** Which portal experience the server authorized. Presentation only. */
-  accessKind: "owner" | "reader";
+  accessKind: "owner" | "reader" | "submitter";
   children: React.ReactNode;
 };
 
@@ -49,6 +49,7 @@ const FALLBACK_INITIALS = "SR";
 const ACCESS_CAPTIONS: Record<RetailerShellProps["accessKind"], string> = {
   owner: "Retailer Owner",
   reader: "Retailer staff",
+  submitter: "Sales staff",
 };
 
 /**

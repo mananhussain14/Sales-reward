@@ -52,18 +52,40 @@ const STAFF_ITEM: RetailerNavItem = {
   ),
 };
 
+const RECEIPTS_ITEM: RetailerNavItem = {
+  label: "Receipts",
+  href: "/retailer/receipts",
+  icon: (
+    <path d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+  ),
+};
+
 /**
  * The navigation for a given portal access kind.
  *
- *   owner   the whole portal.
- *   reader  Staff only. The Overview and Shops pages are backed by
- *           get_retailer_owner_portal_context() and
- *           list_retailer_owner_portal_shops(), whose resolver requires the
- *           RETAILER_OWNER role — a Manager would be redirected by those pages and
- *           would receive no rows from those RPCs. Linking them would advertise two
- *           dead ends.
+ *   owner      the whole portal, minus Receipts. Submitting a receipt is a Sales Staff
+ *              act: RECEIPT_SUBMIT is mapped to SALES_STAFF alone, so an Owner would
+ *              be refused by every receipt RPC. Showing them the entry would advertise
+ *              a capability the database will not give them — which is exactly the
+ *              "Owner navigation accidentally exposes a Sales-Staff-only action"
+ *              mistake this milestone must avoid.
+ *   reader     Staff only. Overview and Shops are backed by RPCs whose resolver
+ *              requires the RETAILER_OWNER role, so a Manager would be redirected by
+ *              those pages; and Receipts is refused for the same reason as for an
+ *              Owner. Linking any of them would advertise dead ends.
+ *   submitter  Receipts only. A Sales Staff member holds neither RETAILER_PORTAL_READ
+ *              through the owner role nor RETAILER_STAFF_READ, so the other three
+ *              pages are not theirs to see.
+ *
+ * Which items appear is presentation, never protection: each page re-resolves its own
+ * access on the server, and every RPC behind every read and write decides again in SQL.
  */
-export function retailerNavItems(kind: "owner" | "reader"): RetailerNavItem[] {
+export function retailerNavItems(
+  kind: "owner" | "reader" | "submitter",
+): RetailerNavItem[] {
+  if (kind === "submitter") {
+    return [RECEIPTS_ITEM];
+  }
   if (kind === "reader") {
     return [STAFF_ITEM];
   }
