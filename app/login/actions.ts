@@ -8,7 +8,7 @@ import { resolveSafeNextPath } from "@/lib/auth/safe-next-path";
 import type { LoginState } from "@/app/login/login-state";
 
 /**
- * Server Action backing the Vendor Admin sign-in form.
+ * Server Action backing the UNIVERSAL sign-in form — every role signs in through it.
  *
  * The password is only ever handled here, on the server: the form posts to this
  * action, so the credential travels in the request body and never touches the
@@ -131,13 +131,18 @@ export async function signIn(
     redirect(safeNext);
   }
 
-  // Where the user lands is no longer hardcoded to the Vendor route. The
-  // server-only resolver reads the just-established session and decides:
-  //   * Vendor Super Admin      -> "/"          (existing Vendor landing, first
-  //                                              priority — dual-role users keep it)
-  //   * Retailer Owner only     -> "/retailer"
-  //   * authenticated, neither  -> "/access-denied" (the generic denial route;
-  //                                              NOT /retailer-access-denied)
+  // Where the user lands is decided by the server-only resolver, which reads the
+  // just-established session and reports what they are actually authorized for:
+  //   * Vendor Super Admin      -> "/"                  (Vendor dashboard; first
+  //                                                      priority, so dual-role
+  //                                                      users keep it)
+  //   * Retailer Owner          -> "/retailer"          (portal overview)
+  //   * Retailer Manager        -> "/retailer/staff"    (the roster they may read;
+  //                                                      /retailer would bounce them)
+  //   * Sales Staff             -> "/retailer/receipts" (submission + own history)
+  //   * authenticated, none of the above -> "/access-denied" (the generic denial
+  //                                                      route; NOT
+  //                                                      /retailer-access-denied)
   //   * operationally unavailable -> a retry-safe message, session preserved
   //
   // The resolver derives everything from auth.uid() via the two existing secure

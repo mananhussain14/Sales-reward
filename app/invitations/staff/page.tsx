@@ -1,15 +1,15 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { formatOwnerTimestamp } from "@/lib/retailers/owner-status-normalization";
-import { isRetailerStaffRegistrationEnabled } from "@/lib/features/retailer-staff-invitations";
 import { readStaffInviteHash } from "@/lib/staff/staff-invite-cookie";
 import { resolveStaffInvitation } from "@/lib/staff/staff-acceptance";
+import { getStaffRegistrationView } from "@/lib/staff/staff-registration";
 import { retailerRoleDisplayName } from "@/lib/staff/staff-roles";
 import {
   AcceptStaffInvitationForm,
-  RegisterForStaffInvitationForm,
+  ActivateStaffAccountForm,
   SignOutForStaffInvitationForm,
+  StaffInvitationSignInPrompt,
 } from "@/app/invitations/staff/accept-forms";
 
 /**
@@ -28,11 +28,13 @@ export const metadata: Metadata = {
 /**
  * WHAT THIS PAGE MAY REVEAL, AND WHEN.
  *
- *   Signed OUT      nothing at all. Not the Retailer, not the role, not the invited
- *                   email, not the shops, not even whether the token names a real
- *                   invitation — the resolver cannot be called without auth.uid(), and
- *                   this page does not try. The signed-out screen is byte-identical
- *                   for a valid token, an expired one, and a fabricated one.
+ *   Signed OUT      one bit only, and it is decided on the server: does the invited
+ *                   address already have an account? That chooses between a
+ *                   password-only activation form and a sign-in prompt. NOTHING else
+ *                   is revealed — not the Retailer, the role, the shops, the expiry,
+ *                   or the invited email itself, which never leaves the server. An
+ *                   unknown, malformed, expired, revoked, accepted or stale token, and
+ *                   a visitor with no cookie, all render one identical screen.
  *   Signed IN       the resolver decides, in SQL. It returns rows ONLY when the
  *                   caller's Auth email is CONFIRMED and exactly equals the
  *                   invitation's canonical address; every other case — wrong account,
@@ -113,55 +115,58 @@ export default async function StaffInvitationPage() {
   }
 
   // ---------------------------------------------------------------------------
-  // Signed out — reveal nothing whatsoever about the invitation.
+  // Signed out — decide between activation and sign-in, revealing nothing else.
   // ---------------------------------------------------------------------------
-  // The hash cookie is NOT read here and the resolver is NOT called: neither could
-  // return anything useful without a session, and reading the cookie to decide what to
-  // render would make this screen vary with whether a token was presented.
+  // The ONLY thing established here is which of two screens to show, and it is
+  // established on the SERVER: the hash cookie goes to a service-role RPC that reports
+  // "register", "sign-in" or "unavailable" — a discriminant with no email attached, by
+  // construction (see @/lib/staff/staff-registration). The invited address therefore
+  // cannot reach a prop, the HTML, the RSC payload, client JavaScript, a URL or a log.
   //
-  // The `next` value is the constant "/invitations/staff" — never a raw token, never a
-  // caller-supplied path. The login page re-validates it through resolveSafeNextPath
-  // and the sign-in action validates it again on receipt, so an open redirect is
-  // impossible even if this literal were somehow altered.
+  // Neither screen names the Retailer, the role, the shops, the expiry or the address.
+  // All of that appears only AFTER sign-in, once the authenticated recipient RPC has
+  // verified that the caller's CONFIRMED email matches the invitation exactly.
+  //
+  // An unknown, malformed, expired, revoked, accepted or stale token — and a visitor
+  // with no cookie at all — land on one identical "not available" screen.
   if (!signedIn) {
-    const registrationEnabled = isRetailerStaffRegistrationEnabled();
+    const tokenHash = await readStaffInviteHash();
+    const view = tokenHash ? await getStaffRegistrationView(tokenHash) : "unavailable";
 
+    if (view === "unavailable") {
+      return <UnavailableScreen signedIn={false} />;
+    }
+
+    if (view === "sign-in") {
+      // The invited address already has a SalesReward account. No password fields:
+      // they have a password already, and offering to set another would be a
+      // password-reset flow this milestone does not build.
+      return (
+        <Shell>
+          <h1 className={headingClasses}>You already have a SalesReward account</h1>
+          <p className={bodyClasses}>
+            Sign in to continue. You&rsquo;ll come straight back here to accept your
+            invitation.
+          </p>
+          <div className="mt-6">
+            <StaffInvitationSignInPrompt />
+          </div>
+        </Shell>
+      );
+    }
+
+    // view === "register": no account yet. Password and confirmation only — the
+    // address is derived from the invitation on the server.
     return (
       <Shell>
-        <h1 className={headingClasses}>Sign in to accept your invitation</h1>
+        <h1 className={headingClasses}>Set your password</h1>
         <p className={bodyClasses}>
-          You&rsquo;ve been invited to join a Retailer on SalesReward. Sign in with the
-          email address the invitation was sent to.
+          You&rsquo;ve been invited to join a Retailer on SalesReward. Choose a password
+          to activate your account.
         </p>
-
-        <Link
-          href="/login?next=/invitations/staff"
-          className="mt-6 inline-flex w-full items-center justify-center rounded-md bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-zinc-950"
-        >
-          Sign in
-        </Link>
-
-        {registrationEnabled ? (
-          <div className="mt-8 border-t border-zinc-200 pt-6 dark:border-zinc-800">
-            <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-              Don&rsquo;t have an account yet?
-            </h2>
-            <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-              Create one with the invited email address, confirm it, then open your
-              invitation link again.
-            </p>
-            <div className="mt-4">
-              <RegisterForStaffInvitationForm />
-            </div>
-          </div>
-        ) : (
-          /* The honest state while self-service registration is off. It does not
-             offer a button that cannot work, and it names no configuration detail. */
-          <p className="mt-6 text-xs text-zinc-400 dark:text-zinc-500">
-            If you don&rsquo;t have a SalesReward account yet, ask the person who
-            invited you to set one up for you.
-          </p>
-        )}
+        <div className="mt-6">
+          <ActivateStaffAccountForm />
+        </div>
       </Shell>
     );
   }

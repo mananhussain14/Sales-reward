@@ -1,5 +1,5 @@
 /**
- * Unit tests for the two Retailer staff invitation feature flags.
+ * Unit tests for the Retailer staff invitation SEND feature flag.
  *
  * Run with:  npm test
  *
@@ -12,35 +12,28 @@
  * disabled, so a deployment typo cannot silently arm a service-role + email path, or
  * open an account-creation surface.
  *
- * The two flags must also be INDEPENDENT: sending invitations and allowing an invited
- * person to self-register are separate decisions with separate blast radii, and
- * enabling one must never enable the other.
+ * Only SENDING is gated. Reading the roster, reading the invitation list, REVOKING an
+ * invitation, ACCEPTING one and ACTIVATING an account from one are all deliberately
+ * ungated — a kill switch must not be able to strand a recipient mid-flow.
  */
 import { test, describe, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import {
   isRetailerStaffInvitationsEnabled,
-  isRetailerStaffRegistrationEnabled,
   RETAILER_STAFF_INVITATIONS_FLAG_VAR,
-  RETAILER_STAFF_REGISTRATION_FLAG_VAR,
   RETAILER_STAFF_INVITATIONS_PAUSED_MESSAGE,
 } from "./retailer-staff-invitations.ts";
 
 const SEND_VAR = "RETAILER_STAFF_INVITATIONS_ENABLED";
-const REGISTER_VAR = "RETAILER_STAFF_REGISTRATION_ENABLED";
 
 const ORIGINAL_SEND = process.env[SEND_VAR];
-const ORIGINAL_REGISTER = process.env[REGISTER_VAR];
 
 function set(name: string, value: string | undefined): void {
   if (value === undefined) delete process.env[name];
   else process.env[name] = value;
 }
 
-afterEach(() => {
-  set(SEND_VAR, ORIGINAL_SEND);
-  set(REGISTER_VAR, ORIGINAL_REGISTER);
-});
+afterEach(() => set(SEND_VAR, ORIGINAL_SEND));
 
 const DISABLED_SPELLINGS = [
   "false",
@@ -85,49 +78,11 @@ describe("isRetailerStaffInvitationsEnabled — sending", () => {
   });
 });
 
-describe("isRetailerStaffRegistrationEnabled — new-user registration", () => {
-  test('5. enabled ONLY for the exact string "true"', () => {
-    set(REGISTER_VAR, "true");
-    assert.equal(isRetailerStaffRegistrationEnabled(), true);
-  });
-
-  test("6. disabled when unset — the default, and the current deployment state", () => {
-    // The hosted project has disable_signup=true, so this must default OFF: the page
-    // then offers sign-in only rather than a button Auth would refuse.
-    set(REGISTER_VAR, undefined);
-    assert.equal(isRetailerStaffRegistrationEnabled(), false);
-  });
-
-  for (const value of DISABLED_SPELLINGS) {
-    test(`7. disabled for ${JSON.stringify(value)} (exact-match, fail-closed)`, () => {
-      set(REGISTER_VAR, value);
-      assert.equal(isRetailerStaffRegistrationEnabled(), false);
-    });
-  }
-});
-
-describe("the two flags are independent", () => {
-  test("8. enabling sending does NOT enable registration", () => {
-    set(SEND_VAR, "true");
-    set(REGISTER_VAR, undefined);
-    assert.equal(isRetailerStaffInvitationsEnabled(), true);
-    assert.equal(isRetailerStaffRegistrationEnabled(), false);
-  });
-
-  test("9. enabling registration does NOT enable sending", () => {
-    set(SEND_VAR, undefined);
-    set(REGISTER_VAR, "true");
-    assert.equal(isRetailerStaffInvitationsEnabled(), false);
-    assert.equal(isRetailerStaffRegistrationEnabled(), true);
-  });
-
-  test("10. the two variable names are distinct and are the ones documented", () => {
+describe("the flag's variable name is the documented one", () => {
+  test("10. the exported name matches the environment variable it reads", () => {
+    // .env.example documents this exact name; a drift here would silently disarm the
+    // gate, because an unset variable reads as disabled.
     assert.equal(RETAILER_STAFF_INVITATIONS_FLAG_VAR, SEND_VAR);
-    assert.equal(RETAILER_STAFF_REGISTRATION_FLAG_VAR, REGISTER_VAR);
-    assert.notEqual(
-      RETAILER_STAFF_INVITATIONS_FLAG_VAR,
-      RETAILER_STAFF_REGISTRATION_FLAG_VAR,
-    );
   });
 });
 

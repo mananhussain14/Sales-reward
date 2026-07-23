@@ -6,7 +6,7 @@
 // @/lib/auth/landing-decision, which has no such import and is what the tests
 // exercise.
 import { getVendorSuperAdminAccess } from "@/lib/auth/vendor-admin-access";
-import { getRetailerOwnerPortalAccess } from "@/lib/retailer-portal/retailer-owner-portal";
+import { getRetailerPortalAccess } from "@/lib/staff/retailer-staff-access";
 import {
   selectLanding,
   type LandingDecision,
@@ -27,11 +27,14 @@ import {
  * request, and calling them together is safe: neither takes input, neither
  * mutates, and each can only ever report on the one caller.
  *
- * The Retailer resolver is consulted ONLY when the Vendor result is
+ * The Retailer portal resolver is consulted ONLY when the Vendor result is
  * "unauthorized" — a verified-but-not-Vendor identity. When the caller is a
- * Vendor Super Admin, or has no verified session at all, the Retailer RPC is not
- * called, which both preserves Vendor-first precedence and avoids a needless
- * round trip.
+ * Vendor Super Admin, or has no verified session at all, it is not called, which
+ * both preserves Vendor-first precedence and avoids a needless round trip.
+ *
+ * NO ROLE NAME APPEARS HERE. The portal resolver reports "owner", "reader" or
+ * "submitter" — which authorized READ succeeded — and a permission-mapping change
+ * in SQL therefore changes where someone lands without this file being edited.
  *
  * FAIL-CLOSED AND FAIL-SAFE. Neither resolver throws by contract — each catches
  * its own failures and returns a status (Vendor collapses operational failures
@@ -53,10 +56,16 @@ export async function resolveAuthenticatedLanding(): Promise<LandingDecision> {
     }
 
     // vendor.status === "unauthorized": verified identity, not a Vendor. Now — and
-    // only now — resolve Retailer Owner access, whose "unavailable" is the single
+    // only now — resolve Retailer PORTAL access. It reports which experience the
+    // caller qualifies for — owner, roster reader (a Retailer Manager) or receipt
+    // submitter (Sales Staff) — each decided in SQL by a different permission
+    // mapping, and each landing on a different page. Its "unavailable" is the single
     // operational-failure signal the decision can observe.
-    const retailer = await getRetailerOwnerPortalAccess();
-    return selectLanding("unauthorized", retailer.status);
+    const portal = await getRetailerPortalAccess();
+    return selectLanding(
+      "unauthorized",
+      portal.status === "authorized" ? portal.kind : portal.status,
+    );
   } catch {
     // Unreachable under the resolvers' contracts; handled anyway. An operational
     // failure must never masquerade as a denial, so it becomes "unavailable" —

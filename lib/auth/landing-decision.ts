@@ -25,6 +25,11 @@
  *                 served at "/". This is deliberately NOT "/dashboard": the repo
  *                 has no such route.
  *   retailer      the Retailer Owner Portal overview.
+ *   retailerStaff the staff roster — the only portal page a Retailer Manager may
+ *                 read. Sending them to /retailer instead would bounce them off it,
+ *                 because that page requires the RETAILER_OWNER role.
+ *   salesStaff    receipt submission and personal history — the only portal page a
+ *                 Sales Staff member may reach.
  *   accessDenied  the established generic authenticated-denial route for a user
  *                 who holds neither supported authorization. NOT
  *                 /retailer-access-denied — that is the portal's own direct-route
@@ -34,7 +39,12 @@
  */
 export const LANDING_ROUTES = {
   vendor: "/",
+  /** The Retailer Owner portal overview. */
   retailer: "/retailer",
+  /** A Retailer Manager's permitted landing: the staff roster they may read. */
+  retailerStaff: "/retailer/staff",
+  /** A Sales Staff member's landing: receipt submission and their own history. */
+  salesStaff: "/retailer/receipts",
   accessDenied: "/access-denied",
   login: "/login",
 } as const;
@@ -57,8 +67,20 @@ export type VendorAccessStatus = "authorized" | "unauthenticated" | "unauthorize
  * carries all four states. "unavailable" is the only way an operational failure
  * can reach the landing decision at all.
  */
+/**
+ * The Retailer PORTAL resolver's six states. It distinguishes which experience the
+ * caller qualifies for, not merely whether they qualify — "owner", "reader" (a
+ * Retailer Manager) and "submitter" (Sales Staff) are three different landings, and
+ * each is decided in SQL by a different permission mapping.
+ *
+ * It also distinguishes an operational failure ("unavailable") from an authorization
+ * denial ("unauthorized"), and this decision preserves that distinction rather than
+ * collapsing one into the other.
+ */
 export type RetailerAccessStatus =
-  | "authorized"
+  | "owner"
+  | "reader"
+  | "submitter"
   | "unauthenticated"
   | "unauthorized"
   | "unavailable";
@@ -72,6 +94,8 @@ export type RetailerAccessStatus =
 export type LandingDecision =
   | { kind: "vendor"; destination: typeof LANDING_ROUTES.vendor }
   | { kind: "retailer"; destination: typeof LANDING_ROUTES.retailer }
+  | { kind: "retailerStaff"; destination: typeof LANDING_ROUTES.retailerStaff }
+  | { kind: "salesStaff"; destination: typeof LANDING_ROUTES.salesStaff }
   | { kind: "unauthorized"; destination: typeof LANDING_ROUTES.accessDenied }
   | { kind: "unauthenticated"; destination: typeof LANDING_ROUTES.login }
   | { kind: "unavailable" };
@@ -85,8 +109,10 @@ export type LandingDecision =
  *      get moved to /retailer; the portal stays reachable directly at /retailer.
  *   2. Vendor unauthenticated -> /login. Both resolvers read the same verified
  *      token, so no verified vendor identity means no session at all.
- *   3. Vendor unauthorized    -> consult the Retailer resolver:
- *        authorized      -> /retailer
+ *   3. Vendor unauthorized    -> consult the Retailer portal resolver:
+ *        owner           -> /retailer            (Retailer Owner portal overview)
+ *        reader          -> /retailer/staff      (Retailer Manager roster, read-only)
+ *        submitter       -> /retailer/receipts   (Sales Staff receipt submission)
  *        unavailable     -> unavailable (operational, NOT a denial)
  *        unauthenticated -> /login (defensive; the token said no session)
  *        unauthorized    -> generic /access-denied
@@ -108,10 +134,15 @@ export function selectLanding(
   }
 
   // vendor === "unauthorized": a verified identity that is not a Vendor Super
-  // Admin. Fall through to the Retailer Owner authorization.
+  // Admin. Fall through to the Retailer portal authorization, which reports WHICH
+  // experience they qualify for.
   switch (retailer) {
-    case "authorized":
+    case "owner":
       return { kind: "retailer", destination: LANDING_ROUTES.retailer };
+    case "reader":
+      return { kind: "retailerStaff", destination: LANDING_ROUTES.retailerStaff };
+    case "submitter":
+      return { kind: "salesStaff", destination: LANDING_ROUTES.salesStaff };
     case "unavailable":
       return { kind: "unavailable" };
     case "unauthenticated":

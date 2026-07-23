@@ -1,12 +1,14 @@
 "use client";
 
 import { useActionState } from "react";
+import Link from "next/link";
 import {
   acceptStaffInvitationAction,
-  registerForStaffInvitationAction,
+  activateStaffAccountAction,
   signOutForStaffInvitationAction,
 } from "@/app/invitations/staff/actions";
 import { INITIAL_STAFF_ACCEPT_STATE } from "@/app/invitations/staff/accept-state";
+import { MIN_PASSWORD_LENGTH, PASSWORD_HINT } from "@/lib/auth/password-policy";
 
 /**
  * The three controls on the staff acceptance page.
@@ -88,15 +90,23 @@ export function SignOutForStaffInvitationForm() {
 }
 
 /**
- * The create-account form. Rendered ONLY when the server says the feature is enabled —
- * and the action re-checks that flag, because a hidden form is not a gate.
+ * The PASSWORD-ONLY activation form, for an invited person with no account yet.
  *
- * The email field is never pre-filled: the invitation's address must not be disclosed
- * to an unauthenticated visitor, so they type their own.
+ * TWO FIELDS, AND NO EMAIL INPUT. The invited address is derived on the server from the
+ * invitation token and handed straight to Supabase Auth; it is never rendered, never
+ * placed in a prop or a hidden field, and never sent to the browser in any form. That
+ * is why there is nothing here to pre-fill and nothing for a stranger to substitute.
+ *
+ * There is deliberately no "Sign in" button in this form either: someone who has no
+ * account cannot sign in, and offering it would suggest their address might already be
+ * registered — which is exactly the fact the flow does not disclose.
+ *
+ * `minLength` comes from the shared password policy, so the browser's rule, the Server
+ * Action's rule and the Supabase setting are one constant.
  */
-export function RegisterForStaffInvitationForm() {
+export function ActivateStaffAccountForm() {
   const [state, formAction, pending] = useActionState(
-    registerForStaffInvitationAction,
+    activateStaffAccountAction,
     INITIAL_STAFF_ACCEPT_STATE,
   );
 
@@ -106,50 +116,75 @@ export function RegisterForStaffInvitationForm() {
 
       <div className="space-y-2">
         <label
-          htmlFor="register-email"
-          className="block text-sm font-medium text-zinc-900 dark:text-zinc-100"
-        >
-          Email address
-        </label>
-        <input
-          id="register-email"
-          name="email"
-          type="email"
-          autoComplete="email"
-          required
-          disabled={pending}
-          className={inputClasses}
-        />
-        <p className="text-xs text-zinc-500 dark:text-zinc-400">
-          Use the address your invitation was sent to.
-        </p>
-      </div>
-
-      <div className="space-y-2">
-        <label
-          htmlFor="register-password"
+          htmlFor="activate-password"
           className="block text-sm font-medium text-zinc-900 dark:text-zinc-100"
         >
           Password
         </label>
         <input
-          id="register-password"
+          id="activate-password"
           name="password"
           type="password"
           autoComplete="new-password"
           required
-          minLength={12}
+          minLength={MIN_PASSWORD_LENGTH}
           disabled={pending}
+          aria-describedby="activate-password-hint"
           className={inputClasses}
         />
-        <p className="text-xs text-zinc-500 dark:text-zinc-400">
-          At least 12 characters.
+        <p
+          id="activate-password-hint"
+          className="text-xs text-zinc-500 dark:text-zinc-400"
+        >
+          {PASSWORD_HINT}
         </p>
       </div>
 
-      <button type="submit" disabled={pending} className={secondaryButton}>
-        {pending ? "Creating account…" : "Create account"}
+      <div className="space-y-2">
+        <label
+          htmlFor="activate-confirm-password"
+          className="block text-sm font-medium text-zinc-900 dark:text-zinc-100"
+        >
+          Confirm password
+        </label>
+        <input
+          id="activate-confirm-password"
+          name="confirmPassword"
+          type="password"
+          autoComplete="new-password"
+          required
+          minLength={MIN_PASSWORD_LENGTH}
+          disabled={pending}
+          className={inputClasses}
+        />
+      </div>
+
+      <button type="submit" disabled={pending} className={primaryButton}>
+        {pending ? "Creating your account…" : "Activate account"}
       </button>
     </form>
+  );
+}
+
+/**
+ * The sign-in prompt shown when the invited address ALREADY has an account.
+ *
+ * No password fields: the person has a password already, and offering to set another
+ * would be a password-reset flow this milestone does not build. The link goes to the
+ * universal /login with a validated internal return path back to this page, where the
+ * invitation cookie is still waiting.
+ *
+ * The invited address is NOT shown. Confirming which address has an account, to a
+ * visitor who has not authenticated, is exactly the disclosure the flow avoids — and
+ * the person about to sign in already knows which address they were invited at.
+ */
+export function StaffInvitationSignInPrompt() {
+  return (
+    <Link
+      href="/login?next=/invitations/staff"
+      className="inline-flex w-full items-center justify-center rounded-md bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-zinc-950"
+    >
+      Sign in
+    </Link>
   );
 }

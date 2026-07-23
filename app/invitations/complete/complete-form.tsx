@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
+import { MIN_PASSWORD_LENGTH, PASSWORD_HINT } from "@/lib/auth/password-policy";
 import { completeInvitation } from "@/app/invitations/complete/actions";
 import { INITIAL_COMPLETE_INVITATION_STATE } from "@/app/invitations/complete/complete-state";
 
@@ -91,7 +92,7 @@ export function CompleteInvitationForm() {
           */
           autoComplete="new-password"
           required
-          minLength={12}
+          minLength={MIN_PASSWORD_LENGTH}
           disabled={pending}
           aria-invalid={state.fieldErrors.password ? true : undefined}
           aria-describedby={
@@ -105,7 +106,7 @@ export function CompleteInvitationForm() {
           </p>
         ) : (
           <p id="password-hint" className="text-xs text-zinc-500 dark:text-zinc-400">
-            Use at least 12 characters.
+            {PASSWORD_HINT}
           </p>
         )}
       </div>

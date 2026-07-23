@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { LANDING_ROUTES } from "@/lib/auth/landing-decision";
+import { validatePassword } from "@/lib/auth/password-policy";
 import type { CompleteInvitationState } from "@/app/invitations/complete/complete-state";
 
 /**
@@ -52,19 +53,16 @@ import type { CompleteInvitationState } from "@/app/invitations/complete/complet
  */
 
 /**
- * Minimum password length.
+ * The password rules come from the SHARED policy module, not from constants declared
+ * here. Both account-creation flows — this one and invited staff activation — and both
+ * of their forms now read the same two numbers, so the length a browser enforces, the
+ * length this action requires, and auth.minimum_password_length = 6 in
+ * supabase/config.toml can no longer drift apart.
  *
- * Deliberately stricter than the project's current Supabase setting
- * (auth.minimum_password_length = 6 in supabase/config.toml). This account will
- * own an entire Retailer organization, and six characters is not a defensible
- * floor for that. Enforcing it here cannot weaken anything: Auth remains the final
- * authority and will reject whatever it also dislikes, so this is only ever the
- * tighter of the two rules.
+ * Supabase Auth remains the final authority: these checks run first so the person gets
+ * a specific message instead of a generic auth failure, and Auth applies its own rules
+ * afterwards.
  */
-const MIN_PASSWORD_LENGTH = 12;
-
-/** Defensive upper bound. bcrypt silently truncates beyond 72 bytes. */
-const MAX_PASSWORD_LENGTH = 72;
 
 /**
  * The Supabase Auth error code meaning "the new password is identical to the
@@ -158,10 +156,13 @@ export async function completeInvitation(
 
   if (password.length === 0) {
     fieldErrors.password = "Choose a password.";
-  } else if (password.length < MIN_PASSWORD_LENGTH) {
-    fieldErrors.password = `Use at least ${MIN_PASSWORD_LENGTH} characters.`;
-  } else if (password.length > MAX_PASSWORD_LENGTH) {
-    fieldErrors.password = `Use ${MAX_PASSWORD_LENGTH} characters or fewer.`;
+  } else {
+    // One shared rule, one shared message. `confirmation` is omitted because this form
+    // has a single password field; passing nothing skips only the match check.
+    const check = validatePassword(password);
+    if (!check.ok) {
+      fieldErrors.password = check.message;
+    }
   }
 
   if (confirmPassword.length === 0) {

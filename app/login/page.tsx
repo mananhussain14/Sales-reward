@@ -5,15 +5,32 @@ import { resolveSafeNextPath } from "@/lib/auth/safe-next-path";
 import { LoginForm } from "@/app/login/login-form";
 
 export const metadata: Metadata = {
-  title: "Sign in · SalesReward Admin",
-  description: "Sign in to the SalesReward Vendor Admin.",
+  title: "Sign in · SalesReward",
+  description: "Sign in to SalesReward.",
 };
 
 /**
- * Public sign-in page.
+ * The UNIVERSAL sign-in page — one route for every role.
  *
- * Deliberately absent, per the current milestone: sign-up, invitations,
- * forgot-password, social login, and any demo/default credentials.
+ * Vendor Super Admins, Retailer Owners, Retailer Managers and Sales Staff all sign in
+ * here. Nothing on this page names a role, and nothing on it decides one: the wording
+ * is role-neutral because the page genuinely cannot know who is signing in until Auth
+ * has verified them, and where they go afterwards is resolved on the SERVER from their
+ * actual authorization (see resolveAuthenticatedLanding, called by the sign-in action).
+ *
+ * WHY NO ROLE TEXT AT ALL. A page that said "Vendor Admin sign in" was not merely
+ * unwelcoming to the other three roles — it was a claim about the visitor that the page
+ * has no basis for, and a hint about which credentials are worth trying. The neutral
+ * wording removes both.
+ *
+ * A validated `next` path is honoured so someone sent here mid-flow (an invitation, a
+ * deep link) returns to exactly that page. It is filtered by resolveSafeNextPath here,
+ * and re-filtered by the sign-in action on receipt, so an open redirect is impossible
+ * even from a hand-crafted request.
+ *
+ * Deliberately absent: self-service sign-up (invited staff activate through their
+ * invitation link, which proves which address they are), forgot-password, social
+ * login, and any demo or default credentials.
  */
 export default async function LoginPage({
   searchParams,
@@ -59,10 +76,10 @@ export default async function LoginPage({
         <div className="rounded-xl border border-zinc-200 bg-white p-6 shadow-sm sm:p-8 dark:border-zinc-800 dark:bg-zinc-950">
           <div className="mb-6">
             <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-              Vendor Admin sign in
+              Sign in to SalesReward
             </h1>
             <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-              Enter your credentials to access the admin.
+              Enter your email and password to continue.
             </p>
           </div>
 
@@ -70,7 +87,7 @@ export default async function LoginPage({
         </div>
 
         <p className="mt-6 text-center text-xs text-zinc-400 dark:text-zinc-600">
-          Vendor Admin · v0.1
+          SalesReward
         </p>
       </main>
     </div>
