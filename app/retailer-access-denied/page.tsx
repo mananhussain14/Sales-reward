@@ -4,8 +4,8 @@ import { getRetailerOwnerPortalAccess } from "@/lib/retailer-portal/retailer-own
 import { SignOutButton } from "@/components/auth/sign-out-button";
 
 export const metadata: Metadata = {
-  title: "Access denied · Retailer Owner Portal",
-  description: "This account does not have Retailer Owner portal access.",
+  title: "Access denied · SalesReward",
+  description: "This account does not have access to this page.",
 };
 
 /**
@@ -98,13 +98,13 @@ export default async function RetailerAccessDeniedPage() {
             </h1>
 
             <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
-              You are signed in, but this account does not have access to the
-              SalesReward Retailer Owner Portal.
+              You are signed in, but this account does not have access to this
+              page.
             </p>
 
             <p className="mt-3 text-sm text-zinc-500 dark:text-zinc-400">
-              If you believe this is a mistake, please contact your system
-              administrator.
+              Use the navigation available to your account, or sign in with a
+              different account.
             </p>
 
             {/* Lets the user sign out and return to /login with another account.
@@ -115,9 +115,6 @@ export default async function RetailerAccessDeniedPage() {
           </div>
         </div>
 
-        <p className="mt-6 text-center text-xs text-zinc-400 dark:text-zinc-600">
-          Retailer Owner Portal · v0.1
-        </p>
       </main>
     </div>
   );

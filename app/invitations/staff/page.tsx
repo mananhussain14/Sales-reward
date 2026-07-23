@@ -1,19 +1,20 @@
 import type { Metadata } from "next";
+import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { formatOwnerTimestamp } from "@/lib/retailers/owner-status-normalization";
+import { LANDING_ROUTES } from "@/lib/auth/landing-decision";
+import { resolveAuthenticatedLanding } from "@/lib/auth/authenticated-landing";
 import { readStaffInviteHash } from "@/lib/staff/staff-invite-cookie";
 import { resolveStaffInvitation } from "@/lib/staff/staff-acceptance";
 import { getStaffRegistrationView } from "@/lib/staff/staff-registration";
-import { retailerRoleDisplayName } from "@/lib/staff/staff-roles";
 import {
-  AcceptStaffInvitationForm,
+  AcceptInvitationTransition,
   ActivateStaffAccountForm,
-  SignOutForStaffInvitationForm,
   StaffInvitationSignInPrompt,
+  WrongAccountSwitch,
 } from "@/app/invitations/staff/accept-forms";
 
 /**
- * The CLEAN staff acceptance page — no token in the URL. It was exchanged for an
+ * The CLEAN staff invitation page — no token in the URL. It was exchanged for an
  * HttpOnly hash cookie by /invitations/staff/enter, which then redirected here.
  *
  * `referrer: no-referrer` so this page never leaks its URL onward. `robots noindex`
@@ -28,29 +29,33 @@ export const metadata: Metadata = {
 /**
  * WHAT THIS PAGE MAY REVEAL, AND WHEN.
  *
- *   Signed OUT      one bit only, and it is decided on the server: does the invited
- *                   address already have an account? That chooses between a
- *                   password-only activation form and a sign-in prompt. NOTHING else
- *                   is revealed — not the Retailer, the role, the shops, the expiry,
- *                   or the invited email itself, which never leaves the server. An
- *                   unknown, malformed, expired, revoked, accepted or stale token, and
- *                   a visitor with no cookie, all render one identical screen.
- *   Signed IN       the resolver decides, in SQL. It returns rows ONLY when the
- *                   caller's Auth email is CONFIRMED and exactly equals the
- *                   invitation's canonical address; every other case — wrong account,
- *                   unverified email, unknown, malformed, expired, revoked, already
- *                   accepted, inactive Retailer or role, an intended shop that is no
- *                   longer valid — returns zero rows and lands on ONE generic screen.
- *                   This page never learns which, so it can never say.
+ *   Signed OUT      one bit only, decided on the server: does the invited address
+ *                   already have an account? That chooses between a password-only
+ *                   activation form and a sign-in prompt. NOTHING else is revealed —
+ *                   not the Retailer, role, shops, expiry, or the invited email, which
+ *                   never leaves the server. Unknown, malformed, expired, revoked,
+ *                   accepted or stale tokens, and no cookie, all render one screen.
+ *   Signed IN       the recipient RPC decides, in SQL. It returns a match ONLY when the
+ *                   caller's confirmed email exactly equals the invitation's canonical
+ *                   address; on a match the page renders a data-free transition that
+ *                   accepts automatically. Every other case — wrong account, unverified
+ *                   email, unknown, expired, revoked, already accepted, inactive
+ *                   Retailer/role, invalid shop — returns nothing and renders the
+ *                   account-switch screen. The page never learns which, so it never
+ *                   says.
+ *   Signed IN,      no invitation to act on. The caller is sent to their own authorized
+ *   no cookie       landing (or the neutral access-denied), which is also what stops the
+ *                   Back button returning to a completed invitation's form.
  *
  * The token hash is read from the HttpOnly cookie server-side and is never rendered,
- * never placed in a prop, and never written to client state or localStorage.
+ * never placed in a prop, and never written to client state. NO DATABASE MUTATION
+ * happens during this GET render — acceptance is a POST from the transition component.
  *
- * No invitation table is queried directly — everything flows through the two SECURITY
- * DEFINER RPCs wrapped in @/lib/staff/staff-acceptance, under the caller's own token.
+ * No invitation table is queried directly — everything flows through the SECURITY
+ * DEFINER RPCs wrapped in @/lib/staff/staff-acceptance and @/lib/staff/staff-registration.
  */
 
-/** Centered card shell shared by every state below. Mirrors the owner flow's. */
+/** Centered card shell shared by every state below. */
 function Shell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-zinc-50 px-4 py-12 dark:bg-zinc-900">
@@ -76,13 +81,10 @@ const headingClasses =
 const bodyClasses = "mt-2 text-sm text-zinc-500 dark:text-zinc-400";
 
 /**
- * The single generic screen for every unavailable case.
- *
- * It offers a way forward — sign out and use a different account — because the most
- * common innocent cause is being signed in as the wrong person. Offering it discloses
- * nothing: the screen and the offer are identical for a fabricated token.
+ * The single generic screen for an unavailable invitation when the visitor is signed
+ * OUT and there is nothing to offer. Reveals nothing; identical for a fabricated token.
  */
-function UnavailableScreen({ signedIn }: { signedIn: boolean }) {
+function UnavailableScreen() {
   return (
     <Shell>
       <h1 className={headingClasses}>This invitation isn&rsquo;t available</h1>
@@ -90,13 +92,32 @@ function UnavailableScreen({ signedIn }: { signedIn: boolean }) {
         It may have expired, been withdrawn, already been accepted, or been sent to a
         different email address. Ask the person who invited you to send a new one.
       </p>
-      {signedIn && (
-        <div className="mt-6">
-          <SignOutForStaffInvitationForm />
-        </div>
-      )}
     </Shell>
   );
+}
+
+/**
+ * Resolves where a signed-in caller with no invitation to act on should go. Never
+ * reveals anything about an invitation — it is purely "given who you are, where do you
+ * belong". "unauthorized"/"unavailable" fall back to the neutral access-denied.
+ */
+async function landingDestinationForSignedInCaller(): Promise<string> {
+  try {
+    const landing = await resolveAuthenticatedLanding();
+    switch (landing.kind) {
+      case "vendor":
+      case "retailer":
+      case "retailerStaff":
+      case "salesStaff":
+        return landing.destination;
+      case "unauthenticated":
+        return LANDING_ROUTES.login;
+      default:
+        return LANDING_ROUTES.accessDenied;
+    }
+  } catch {
+    return LANDING_ROUTES.accessDenied;
+  }
 }
 
 export default async function StaffInvitationPage() {
@@ -110,43 +131,28 @@ export default async function StaffInvitationPage() {
     signedIn = Boolean(data?.claims?.sub);
   } catch {
     // The thrown value is deliberately not bound or logged: auth exceptions can carry
-    // token material. An identity we cannot verify is no identity.
+    // token material.
     signedIn = false;
   }
 
   // ---------------------------------------------------------------------------
-  // Signed out — decide between activation and sign-in, revealing nothing else.
+  // Signed OUT — decide between activation and sign-in, revealing nothing else.
   // ---------------------------------------------------------------------------
-  // The ONLY thing established here is which of two screens to show, and it is
-  // established on the SERVER: the hash cookie goes to a service-role RPC that reports
-  // "register", "sign-in" or "unavailable" — a discriminant with no email attached, by
-  // construction (see @/lib/staff/staff-registration). The invited address therefore
-  // cannot reach a prop, the HTML, the RSC payload, client JavaScript, a URL or a log.
-  //
-  // Neither screen names the Retailer, the role, the shops, the expiry or the address.
-  // All of that appears only AFTER sign-in, once the authenticated recipient RPC has
-  // verified that the caller's CONFIRMED email matches the invitation exactly.
-  //
-  // An unknown, malformed, expired, revoked, accepted or stale token — and a visitor
-  // with no cookie at all — land on one identical "not available" screen.
   if (!signedIn) {
     const tokenHash = await readStaffInviteHash();
     const view = tokenHash ? await getStaffRegistrationView(tokenHash) : "unavailable";
 
     if (view === "unavailable") {
-      return <UnavailableScreen signedIn={false} />;
+      return <UnavailableScreen />;
     }
 
     if (view === "sign-in") {
-      // The invited address already has a SalesReward account. No password fields:
-      // they have a password already, and offering to set another would be a
-      // password-reset flow this milestone does not build.
       return (
         <Shell>
           <h1 className={headingClasses}>You already have a SalesReward account</h1>
           <p className={bodyClasses}>
-            Sign in to continue. You&rsquo;ll come straight back here to accept your
-            invitation.
+            Sign in to continue. You&rsquo;ll come straight back here, and your
+            invitation will be accepted automatically.
           </p>
           <div className="mt-6">
             <StaffInvitationSignInPrompt />
@@ -155,8 +161,8 @@ export default async function StaffInvitationPage() {
       );
     }
 
-    // view === "register": no account yet. Password and confirmation only — the
-    // address is derived from the invitation on the server.
+    // view === "register": no account yet. Password and confirmation only — the address
+    // is derived from the invitation on the server.
     return (
       <Shell>
         <h1 className={headingClasses}>Set your password</h1>
@@ -172,75 +178,52 @@ export default async function StaffInvitationPage() {
   }
 
   // ---------------------------------------------------------------------------
-  // Signed in — the RPC is the authority for verified-email matching.
+  // Signed IN.
   // ---------------------------------------------------------------------------
   const tokenHash = await readStaffInviteHash();
 
-  // No cookie: the link was never opened in this browser, or the hour-long cookie
-  // lapsed. Reported on the SAME screen as every other unavailable case, so a visitor
-  // cannot distinguish "no token" from "not your invitation".
+  // No cookie: the invitation was already completed (its cookie was cleared on
+  // acceptance) or was never present. Send the signed-in caller to their own authorized
+  // landing rather than a stale invitation page — this is also what stops the Back
+  // button returning to an actionable form.
   if (!tokenHash) {
-    return <UnavailableScreen signedIn />;
+    redirect(await landingDestinationForSignedInCaller());
   }
 
+  // The recipient RPC is the authority: a match requires the caller's confirmed email to
+  // equal the invitation's canonical address exactly. It never returns another
+  // Retailer's data or a foreign email.
   const resolved = await resolveStaffInvitation(tokenHash);
 
   if (resolved.status === "unavailable") {
-    return <UnavailableScreen signedIn />;
+    // Wrong account, or a genuinely dead invitation — the RPC does not distinguish them,
+    // so neither does this. Offer the account switch, which is the remedy for the
+    // common (wrong-account) case and harmless for the rare (dead) one.
+    return (
+      <Shell>
+        <h1 className={headingClasses}>Continue with the invited account</h1>
+        <p className={bodyClasses}>
+          Another SalesReward account is currently signed in. Continuing will sign out
+          that account so you can use this invitation.
+        </p>
+        <div className="mt-6">
+          <WrongAccountSwitch />
+        </div>
+      </Shell>
+    );
   }
 
-  // Match: the caller's CONFIRMED email equals the invitation's canonical address.
-  // Everything below comes from the RPC's own safe payload — no id of any kind, no
-  // token, no hash, no Auth metadata, and no other Retailer's data.
-  const { invitation } = resolved;
-  const roleName = retailerRoleDisplayName(invitation.roleCode, invitation.roleName);
-
+  // Match. Render a data-free transition that accepts automatically and redirects to the
+  // correct role landing. No Retailer, role, shop, email, token, hash or id is passed to
+  // it — the acceptance action re-reads the cookie server-side.
   return (
     <Shell>
-      <h1 className={headingClasses}>Join {invitation.retailerName}</h1>
+      <h1 className={headingClasses}>Joining your Retailer…</h1>
       <p className={bodyClasses}>
-        Hi {invitation.firstName}, you&rsquo;ve been invited to join{" "}
-        <span className="font-medium text-zinc-700 dark:text-zinc-300">
-          {invitation.retailerName}
-        </span>{" "}
-        on SalesReward.
+        Hold on a moment while we finish setting up your access.
       </p>
-
-      <dl className="mt-6 divide-y divide-zinc-200 overflow-hidden rounded-lg border border-zinc-200 text-sm dark:divide-zinc-800 dark:border-zinc-800">
-        <div className="flex items-start justify-between gap-4 px-4 py-3">
-          <dt className="text-zinc-500 dark:text-zinc-400">Role</dt>
-          <dd className="text-right font-medium text-zinc-900 dark:text-zinc-100">
-            {roleName}
-          </dd>
-        </div>
-
-        {/* Shops appear only for a Sales Staff invitation — a Retailer Manager
-            invitation carries none, and the RPC returns an empty array for it. */}
-        {invitation.shopNames.length > 0 && (
-          <div className="flex items-start justify-between gap-4 px-4 py-3">
-            <dt className="text-zinc-500 dark:text-zinc-400">Shops</dt>
-            <dd className="text-right font-medium text-zinc-900 dark:text-zinc-100">
-              {invitation.shopNames.join(", ")}
-            </dd>
-          </div>
-        )}
-
-        <div className="flex items-start justify-between gap-4 px-4 py-3">
-          <dt className="text-zinc-500 dark:text-zinc-400">Email</dt>
-          <dd className="break-all text-right font-medium text-zinc-900 dark:text-zinc-100">
-            {invitation.email}
-          </dd>
-        </div>
-      </dl>
-
-      {invitation.expiresAt && (
-        <p className="mt-3 text-xs text-zinc-400 dark:text-zinc-500">
-          This invitation is valid until {formatOwnerTimestamp(invitation.expiresAt)}.
-        </p>
-      )}
-
       <div className="mt-6">
-        <AcceptStaffInvitationForm />
+        <AcceptInvitationTransition />
       </div>
     </Shell>
   );
