@@ -141,7 +141,7 @@ belongs on mobile at all.
 
 ### New Postgres RPCs — read-only, no secret
 
-**1 of 6 delivered.**
+**3 of 6 delivered**, plus one justified companion read.
 
 | # | RPC | Unblocks | Priority |
 | --- | --- | --- | --- |
@@ -149,8 +149,13 @@ belongs on mobile at all.
 | 2 | `get_vendor_admin_dashboard_summary()` | V-01 | Low — phase 3 |
 | 3 | `list_vendor_organization_members()` | V-02 | Low — phase 3 |
 | 4 | `list_vendor_audit_logs(p_limit, p_before)` | V-04 + pagination | Low — phase 3 |
-| 5 | `list_vendor_retailers()` | V-05, cross-linking | Low — phase 3 |
-| 6 | `get_vendor_retailer_detail(p_relationship_id)` | V-06 | Low — phase 3 |
+| 5 | ~~`list_vendor_retailers()`~~ ✅ **shipped** — migration `20260731090000` | V-05, cross-linking | ~~Low — phase 3~~ **done** |
+| 6 | ~~`get_vendor_retailer_detail(p_relationship_id)`~~ ✅ **shipped** — migration `20260731090000` | V-06 | ~~Low — phase 3~~ **done** |
+| 6a | `list_vendor_retailer_shops(p_relationship_id)` ✅ **shipped** — migration `20260731090000` | V-06's shop list — a companion rather than an unbounded nested payload | **done** |
+
+Item 5/6 detail: `docs/mobile-vendor-retailer-reads-audit.md`. Nothing in the Vendor shell
+beyond Retailers is unblocked — items 2, 3 and 4 remain untouched, and Vendor Users, Roles
+and Products still have **no** mobile contract.
 
 ### New Edge Functions (7)
 
@@ -168,12 +173,12 @@ belongs on mobile at all.
 
 | # | Change | Why |
 | --- | --- | --- |
-| 1 | Add `shop_id` to `list_retailer_owner_portal_shops()` | Mobile lists cannot navigate without it |
+| 1 | Add `shop_id` to `list_retailer_owner_portal_shops()` | Mobile lists cannot navigate without it. *(The new `list_vendor_retailer_shops()` returns one; the Owner-portal function is unchanged.)* |
 | 2 | Add `ELSE` to `list_retailer_staff_invitations().derived_state` | Closes a `NULL` in a documented enum |
 | 3 | Replace message-substring error discrimination with distinct SQLSTATEs | Message text is not an API |
-| 4 | Freeze / version `get_vendor_retailer_owner_status` | Three breaking recreations already |
+| 4 | Freeze / version `get_vendor_retailer_owner_status` | Three breaking recreations already. **Still open** — `20260731090000` deliberately did not touch it, so there is no fourth |
 | 5 | Return `boolean` instead of `void` from the four idempotent product writes | Clients cannot tell "changed" from "already so" |
-| 6 | Have `list_vendor_retailers()` return both `relationship_id` and `retailer_organization_id` | Two address spaces today |
+| 6 | ~~Have `list_vendor_retailers()` return both `relationship_id` and `retailer_organization_id`~~ ✅ **done** — migration `20260731090000` | Two address spaces today |
 
 ---
 
@@ -183,4 +188,4 @@ belongs on mobile at all.
 | --- | --- | --- |
 | **1 — Sales Staff MVP** | Sign in, my shops, capture + submit receipt, my history, staff invitation acceptance & activation | ~~1 RPC (`get_my_portal_context`)~~ ✅ **done** + 3 Edge Functions (`submit-receipt`, `staff-invitation-context`, `activate-staff-account`) |
 | **2 — Retailer management** | Owner/Manager portal, staff roster, invitations, assigned products, receipt image viewing, owner-invitation acceptance | 2 Edge Functions (`send-staff-invitation`, `get-receipt-image-url`) + contract fixes 1–2 + answers to Q1–Q3 |
-| **3 — Vendor administration** *(optional)* | Retailer directory & detail, onboarding, shops, products, assignments, audit logs, owner invitations | 5 RPCs + 2 Edge Functions + contract fixes 4–6 + answer to Q4 |
+| **3 — Vendor administration** *(optional)* | Retailer directory & detail, onboarding, shops, products, assignments, audit logs, owner invitations | ~~5 RPCs~~ **3 RPCs remaining** (dashboard summary, members, audit logs) — the Retailer directory and detail reads are ✅ **shipped** in `20260731090000` — + 2 Edge Functions + contract fixes 4–5 + answer to Q4 |

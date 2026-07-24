@@ -3,11 +3,19 @@
 Companion to [`mobile-backend-contract.md`](./mobile-backend-contract.md) (per-operation
 detail) and [`mobile-feature-matrix.md`](./mobile-feature-matrix.md) (planning view).
 
-**Status:** recommendation only, with one item since delivered. No Flutter project was
-created and no package installed. The single backend change made since this document was
-written is migration `20260729090000_shared_portal_context.sql`, which implements the
-`get_my_portal_context()` recommendation in § 4.1 below. No RLS policy or existing RPC was
-modified.
+**Status:** recommendation only, with several items since delivered. No Flutter project was
+created and no package installed. The backend changes made since this document was written
+are:
+
+- `20260729090000_shared_portal_context.sql` — implements the `get_my_portal_context()`
+  recommendation in § 4.1 below.
+- `20260730090000_sales_staff_receipt_product_and_submission_reads.sql` — the two Sales
+  Staff receipt reads (`docs/mobile-receipt-submission-audit.md`).
+- `20260731090000_mobile_vendor_retailer_reads.sql` — the Vendor Retailer list and detail
+  reads for **V-05 / V-06** (`docs/mobile-vendor-retailer-reads-audit.md`).
+
+**No RLS policy, table grant, or existing RPC was modified by any of them**, and no web page
+changed behaviour. Each is purely additive.
 
 ---
 
