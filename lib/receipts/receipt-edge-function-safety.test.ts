@@ -272,7 +272,11 @@ describe("nothing secret reaches a response body", () => {
     const FORBIDDEN =
       /\b(objectPath|storage_object_path|storage_bucket|sha256|serviceRoleKey|publishableKey|authorization)\b/;
     for (const line of CODE_LINES) {
-      if (!/new Response\(|JSON\.stringify\(/.test(line.text)) continue;
+      // Every shape that produces a reply, including the shared CORS builders — this file
+      // no longer constructs a `Response` itself, so scanning only `new Response(` would
+      // make the rule vacuous.
+      if (!/new Response\(|JSON\.stringify\(|corsJsonResponse\(|corsPreflightResponse\(/.test(line.text))
+        continue;
       assert.ok(
         !FORBIDDEN.test(line.text),
         `${FUNCTION_PATH}:${line.number} puts secret material in a response: ${line.text.trim()}`,
@@ -351,6 +355,136 @@ describe("the deployment declares JWT verification", () => {
       /entrypoint\s*=\s*["']\.\/functions\/submit-receipt\/index\.ts["']/.test(block),
       "the entrypoint does not point at the function",
     );
+  });
+});
+
+/**
+ * ============================================================================
+ * THE CORS POLICY IS CENTRAL, AND NO REPLY ESCAPES IT
+ * ============================================================================
+ * A Flutter Web build is a browser, so a reply it cannot read is a reply the client never
+ * receives — the function runs, the receipt is stored, and the app shows nothing. Two
+ * shapes caused exactly that and are held shut here:
+ *
+ *   - a header map that omitted `apikey` and `x-client-info`, which a real Supabase
+ *     client always sends: one unlisted header fails the whole preflight;
+ *   - replies built outside the helper, including the runtime's own 500 for an uncaught
+ *     throw, which carry no CORS headers at all.
+ *
+ * The VALUES are asserted against real `Response` objects in ./receipt-cors.test.ts. What
+ * is asserted here is the property that file cannot see: that the Edge Function routes
+ * every reply through that one module instead of restating the policy.
+ */
+describe("the CORS policy is defined once and used everywhere", () => {
+  const CORS_MODULE_PATH = "lib/receipts/receipt-cors.ts";
+  const CORS_SOURCE = readFileSync(join(ROOT, CORS_MODULE_PATH), "utf8");
+  const CORS_CODE = stripComments(CORS_SOURCE);
+  const CODE = stripComments(SOURCE);
+
+  test("22. the Edge Function imports the policy and restates no part of it", () => {
+    assert.ok(
+      IMPORT_SPECIFIERS.some((specifier) => specifier.endsWith("lib/receipts/receipt-cors.ts")),
+      "does not import the shared CORS module",
+    );
+    for (const helper of ["corsJsonResponse", "corsPreflightResponse"]) {
+      assert.ok(new RegExp(`\\b${helper}\\b`).test(CODE), `does not use ${helper}`);
+    }
+
+    // A single literal header name here would be a second policy: the copy and the module
+    // would drift the first time either was edited, which is the defect that shipped.
+    for (const line of CODE_LINES) {
+      assert.ok(
+        !/Access-Control-/i.test(line.text),
+        `${FUNCTION_PATH}:${line.number} restates a CORS header: ${line.text.trim()}`,
+      );
+    }
+  });
+
+  test("23. the Edge Function constructs no Response of its own", () => {
+    // `new Response(` is how a reply skips the policy. There must be none: the preflight
+    // comes from corsPreflightResponse(), everything else from json() -> corsJsonResponse().
+    for (const line of CODE_LINES) {
+      assert.ok(
+        !/new Response\(|Response\.(json|redirect|error)\(/.test(line.text),
+        `${FUNCTION_PATH}:${line.number} builds a reply outside the CORS helper: ${line.text.trim()}`,
+      );
+    }
+
+    const jsonHelper = /function json\([\s\S]*?\n}/.exec(CODE)?.[0];
+    assert.ok(jsonHelper, "the json() helper is gone");
+    assert.ok(
+      /corsJsonResponse\(/.test(jsonHelper),
+      "json() no longer delegates to the shared CORS helper",
+    );
+  });
+
+  test("24. OPTIONS is answered by the shared preflight, before authentication", () => {
+    const optionsAt = CODE.search(/request\.method\s*===\s*["']OPTIONS["']/);
+    assert.ok(optionsAt > -1, "the OPTIONS method is not handled at all");
+
+    const preflightAt = CODE.indexOf("corsPreflightResponse()");
+    assert.ok(preflightAt > optionsAt, "OPTIONS is not answered by corsPreflightResponse()");
+
+    // A preflight carries NO Authorization header. Reaching the token check first would
+    // answer it with a 401 and block every cross-origin caller before the real request.
+    const authAt = CODE.indexOf(`headers.get("Authorization")`);
+    assert.ok(authAt > -1, "the authentication step disappeared");
+    assert.ok(preflightAt < authAt, "the preflight is answered after authentication is attempted");
+  });
+
+  test("25. every declared response status is returned through the helper", () => {
+    // ./receipt-cors.test.ts proves corsJsonResponse() attaches the headers to any status.
+    // This proves the Edge Function has no outcome that bypasses it — success, invalid,
+    // unauthenticated, denied, duplicate, upload-failed and unavailable alike.
+    const declared = /type ResponseStatus =([\s\S]*?);/.exec(SOURCE)?.[1] ?? "";
+    const statuses = [...declared.matchAll(/["']([a-z-]+)["']/g)].map((match) => match[1]);
+    assert.ok(statuses.length >= 7, `only ${statuses.length} statuses declared`);
+
+    const returned = new Set(
+      [...CODE.matchAll(/\bjson\(\s*["']([^"']+)["']/g)].map((match) => match[1]),
+    );
+    for (const status of statuses) {
+      assert.ok(returned.has(status), `"${status}" is never returned through json()`);
+    }
+  });
+
+  test("26. an unexpected throw is answered, not left to the runtime", () => {
+    // An uncaught throw becomes a runtime-generated 500 with no CORS headers, which the
+    // browser discards without showing the client a status or a body.
+    const wrapper = /Deno\.serve\(([\s\S]*)\)\s*;?\s*$/.exec(CODE)?.[1];
+    assert.ok(wrapper, "no Deno.serve entrypoint");
+    assert.ok(/\btry\s*\{/.test(wrapper), "the entrypoint does not catch anything");
+    assert.ok(
+      /\bcatch\b[\s\S]*?\bjson\(\s*["']unavailable["']\s*,\s*503\s*\)/.test(wrapper),
+      "an unexpected throw does not return a CORS-carrying `unavailable`",
+    );
+    // The caught value must not be bound: an error can quote a body, a path, or a
+    // provider message, and this branch returns to a caller.
+    assert.ok(
+      !/\bcatch\s*\([^)]+\)/.test(wrapper),
+      "the entrypoint binds the caught error, which can carry provider text",
+    );
+  });
+
+  test("27. the shared module enables no ambient credentials", () => {
+    // `Access-Control-Allow-Credentials: true` is the one header that would make the
+    // wildcard origin dangerous. Comments are stripped first so the prose explaining its
+    // absence cannot satisfy the rule it describes.
+    assert.ok(
+      !/Access-Control-Allow-Credentials/i.test(CORS_CODE),
+      `${CORS_MODULE_PATH} declares a credentials header`,
+    );
+    assert.ok(!/Access-Control-Allow-Credentials/i.test(CODE), "the Edge Function declares one");
+  });
+
+  test("28. the shared module is dependency-free, so Deno can import it", () => {
+    // The same constraint ./receipt-file.ts and ./receipt-submission-flow.ts are under:
+    // an import of `next/*`, a Supabase client, or a Deno API would make this module
+    // unusable from one of the two runtimes that load it.
+    const imports = [...CORS_SOURCE.matchAll(/\bfrom\s+["']([^"']+)["']/g)].map((m) => m[1]);
+    assert.deepEqual(imports, [], `${CORS_MODULE_PATH} imports ${imports.join(", ")}`);
+    assert.ok(!/\bDeno\./.test(CORS_CODE), "uses a Deno API, so Node cannot test it");
+    assert.ok(!/\bprocess\./.test(CORS_CODE), "uses a Node API, so Deno cannot serve it");
   });
 });
 

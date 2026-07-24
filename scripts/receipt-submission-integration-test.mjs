@@ -34,6 +34,22 @@
  * revokes them, and a REST insert as service_role returns 42501. That is the
  * posture the design wants, so the fixtures are applied with psql inside the
  * local database container instead of by weakening it.
+ *
+ * ============================================================================
+ * WHY EVERY REQUEST CARRIES AN `Origin` HEADER
+ * ============================================================================
+ * This suite once passed against a function a browser could not use. `fetch`
+ * from Node speaks HTTP and enforces nothing: it reads a response whose CORS
+ * headers are absent, wrong, or incomplete exactly as happily as a correct one.
+ * A Flutter Web build does not — its preflight succeeded, its POST was blocked,
+ * and no receipt appeared, while this file reported ten green sections.
+ *
+ * So every request to the function below is sent as a browser would send it —
+ * with an `Origin`, an `apikey` and an `x-client-info` — and the response headers
+ * a browser CONSULTS are asserted on each outcome that matters: the preflight,
+ * and the unauthenticated, denied, invalid-file, successful, duplicate and
+ * upload-failed replies. `checkBrowserReadable` is the assertion Node will not
+ * make on its own.
  */
 
 import { execFileSync } from "node:child_process";
@@ -145,6 +161,81 @@ function sql(statement, { quiet = true } = {}) {
 
 const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// ============================================================================
+// Browser behaviour
+// ============================================================================
+/**
+ * The origin a Flutter Web dev build calls from. The value is arbitrary — the
+ * policy is a wildcard — but sending one is not: a request with no `Origin` is
+ * not a cross-origin request, and proves nothing about what a browser would do.
+ */
+const BROWSER_ORIGIN = "http://localhost:8080";
+
+/**
+ * The request headers the Supabase JS and Dart clients attach to every call,
+ * including `functions.invoke`. A preflight that omits ONE of them fails, and
+ * the browser blocks the POST that would have followed — the exact failure this
+ * suite exists to catch. `authorization` and `content-type` alone were allowed;
+ * `apikey` and `x-client-info` were not.
+ */
+const CLIENT_REQUEST_HEADERS = ["authorization", "apikey", "x-client-info", "content-type"];
+
+function headerTokens(response, name) {
+  return (response.headers.get(name) ?? "")
+    .split(",")
+    .map((entry) => entry.trim().toLowerCase())
+    .filter((entry) => entry.length > 0);
+}
+
+/**
+ * Asserts that a browser would hand this response to the page that asked for it.
+ *
+ * Node already has the body; `Access-Control-Allow-Origin` is what a browser
+ * consults before deciding whether the caller may see it at all — its absence is
+ * why a stored receipt never reached the app.
+ *
+ * The allowed methods and headers are strictly only read on a PREFLIGHT. They
+ * are asserted on every reply anyway, because identical values across the
+ * preflight, a success and every refusal is the observable consequence of one
+ * shared helper producing all of them — the property that stops the policy being
+ * re-stated, and drifting, per response.
+ */
+function checkBrowserReadable(response, label) {
+  const allowOrigin = response.headers.get("access-control-allow-origin");
+  check(
+    allowOrigin === "*" || allowOrigin === BROWSER_ORIGIN,
+    `${label}: the browser may read it (Access-Control-Allow-Origin)`,
+    `got ${JSON.stringify(allowOrigin)}`,
+  );
+
+  const allowedHeaders = headerTokens(response, "access-control-allow-headers");
+  for (const header of CLIENT_REQUEST_HEADERS) {
+    check(
+      allowedHeaders.includes(header),
+      `${label}: allows the \`${header}\` request header`,
+      `allowed: ${allowedHeaders.join(", ") || "(none)"}`,
+    );
+  }
+
+  const allowedMethods = headerTokens(response, "access-control-allow-methods");
+  for (const method of ["post", "options"]) {
+    check(
+      allowedMethods.includes(method),
+      `${label}: advertises ${method.toUpperCase()}`,
+      `allowed: ${allowedMethods.join(", ") || "(none)"}`,
+    );
+  }
+
+  // The one header that would make the wildcard origin dangerous. This endpoint
+  // is bearer-token only and needs no cookie, and a browser refuses `*`
+  // together with credentials anyway.
+  check(
+    response.headers.get("access-control-allow-credentials") === null,
+    `${label}: enables no ambient credentials`,
+    `got ${JSON.stringify(response.headers.get("access-control-allow-credentials"))}`,
+  );
+}
+
 /** Interpolating an id into SQL is only safe if it is really a uuid. */
 function uuidLiteral(value) {
   if (!UUID_SHAPE.test(String(value))) fatal(`refusing to interpolate a non-uuid: ${value}`);
@@ -216,7 +307,13 @@ async function submit({ token, shopId, bytes, fileName, declaredType, omitFile =
     form.append("file", new Blob([bytes], { type: declaredType }), fileName);
   }
 
-  const headers = {};
+  // Sent as a browser sends it: a cross-origin request from a Flutter Web build,
+  // carrying the `apikey` and `x-client-info` the Supabase client always adds.
+  const headers = {
+    Origin: BROWSER_ORIGIN,
+    apikey: ANON_KEY,
+    "x-client-info": "supabase-flutter/2.0.0",
+  };
   if (token !== undefined) headers.Authorization = `Bearer ${token}`;
 
   const response = await fetch(FUNCTION_URL, { method: "POST", headers, body: form });
@@ -227,7 +324,9 @@ async function submit({ token, shopId, bytes, fileName, declaredType, omitFile =
   } catch {
     /* left null; the raw text is asserted instead */
   }
-  return { status: response.status, body: json, raw: text };
+  // `response` is returned so the caller can assert the CORS headers a browser
+  // would consult before letting the page see any of this.
+  return { status: response.status, body: json, raw: text, response };
 }
 
 /** Calls a Postgres RPC over REST as the given user. */
@@ -417,6 +516,78 @@ async function main() {
   for (const [name, user] of Object.entries(users)) tokens[name] = await signIn(user);
 
   // ==========================================================================
+  section("0. The preflight");
+  // ==========================================================================
+  //
+  // TWO REQUESTS, BECAUSE THE LOCAL STACK AND THE HOSTED ONE DIFFER HERE.
+  //
+  // The local stack fronts Edge Functions with Kong, whose CORS plugin
+  // SHORT-CIRCUITS any OPTIONS carrying `Access-Control-Request-Method` — the
+  // shape a browser actually sends. Kong answers it 200 and simply ECHOES the
+  // requested headers back, so that exchange proves the endpoint is reachable
+  // from a browser but proves NOTHING about this function's own policy: it
+  // would look identical if the function allowed no headers at all.
+  //
+  // Hosted, there is no such short-circuit — the function answers its own
+  // preflight, which is why Chrome recorded a 204 there. So the function's
+  // handler is exercised separately, with an OPTIONS Kong passes through.
+  {
+    // ---- (a) the function's OWN preflight handler: the one that runs hosted --
+    const own = await fetch(FUNCTION_URL, {
+      method: "OPTIONS",
+      headers: { Origin: BROWSER_ORIGIN },
+    });
+
+    equal(own.status, 204, "the function answers OPTIONS with 204");
+    equal(await own.text(), "", "...and no body");
+    checkBrowserReadable(own, "preflight");
+
+    // The regression itself, at the wire level: `apikey` and `x-client-info`
+    // were missing from this list, so the browser refused to send the POST.
+    // checkBrowserReadable already asserted each one is present; this asserts
+    // the function DECLARED them rather than a gateway having echoed them.
+    const declared = headerTokens(own, "access-control-allow-headers");
+    check(
+      CLIENT_REQUEST_HEADERS.every((header) => declared.includes(header)),
+      "the function's own allowed-header list covers every header the client sends",
+      `declared: ${declared.join(", ") || "(none)"}`,
+    );
+
+    // A preflight carries NO Authorization header, so `verify_jwt = true` must
+    // not turn it into a 401 — that would block every browser caller before the
+    // real request was ever attempted.
+    check(own.status !== 401, "the preflight is not refused for being unauthenticated");
+
+    const maxAge = own.headers.get("access-control-max-age");
+    check(
+      Number.isFinite(Number(maxAge)) && Number(maxAge) > 0,
+      "the preflight is cacheable — later submissions cost one round trip, not two",
+      `Access-Control-Max-Age: ${maxAge}`,
+    );
+
+    // ---- (b) the exchange a real browser performs against the local stack ----
+    const browser = await fetch(FUNCTION_URL, {
+      method: "OPTIONS",
+      headers: {
+        Origin: BROWSER_ORIGIN,
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": CLIENT_REQUEST_HEADERS.join(", "),
+      },
+    });
+
+    check(
+      browser.status < 400,
+      "a real browser preflight is not refused",
+      `status ${browser.status}`,
+    );
+    checkBrowserReadable(browser, "browser preflight");
+    check(
+      browser.headers.get("access-control-allow-credentials") === null,
+      "neither the function nor the local gateway enables ambient credentials",
+    );
+  }
+
+  // ==========================================================================
   section("1. Unauthenticated callers");
   // ==========================================================================
   {
@@ -430,6 +601,18 @@ async function main() {
     check(
       !/submitted/.test(noHeader.raw),
       "an unauthenticated request never reports a submission",
+    );
+    // THIS ONE IS NOT OURS. The gateway refuses it before the function is
+    // invoked, so the function's helper cannot have shaped the reply — only
+    // `Access-Control-Allow-Origin` is asserted, and only because it is the one
+    // header a browser reads on an ACTUAL (non-preflight) response. A missing
+    // one here would show the app an opaque network error instead of a 401,
+    // and would be a platform limitation to work around, not a defect to fix
+    // in this function.
+    check(
+      noHeader.response.headers.get("access-control-allow-origin") !== null,
+      "the gateway's own 401 is readable by the browser too",
+      `got ${JSON.stringify(noHeader.response.headers.get("access-control-allow-origin"))}`,
     );
 
     const garbage = await submit({
@@ -452,6 +635,9 @@ async function main() {
     });
     equal(anonKeyAsToken.status, 401, "a valid JWT with no user -> 401");
     equal(anonKeyAsToken.body?.status, "unauthenticated", "...reported as `unauthenticated`");
+    // The refusal the FUNCTION generates. A browser that cannot read it shows the
+    // person a network error instead of "please sign in again".
+    checkBrowserReadable(anonKeyAsToken.response, "unauthenticated");
   }
 
   // ==========================================================================
@@ -483,6 +669,7 @@ async function main() {
     });
     equal(result.status, 403, "a Sales Staff member with a SUSPENDED profile -> 403");
     equal(result.body?.status, "denied", "...reported as `denied`");
+    checkBrowserReadable(result.response, "denied");
   }
 
   // ==========================================================================
@@ -612,6 +799,7 @@ async function main() {
       "unsupported-type",
       "...rejected on the BYTES, not on the declared type or the extension",
     );
+    checkBrowserReadable(spoofed.response, "invalid file");
 
     const tooMany = await (async () => {
       const form = new FormData();
@@ -620,7 +808,7 @@ async function main() {
       form.append("file", new Blob([PNG_BYTES], { type: "image/png" }), "b.png");
       const response = await fetch(FUNCTION_URL, {
         method: "POST",
-        headers: { Authorization: `Bearer ${tokens.sales1}` },
+        headers: { Authorization: `Bearer ${tokens.sales1}`, Origin: BROWSER_ORIGIN },
         body: form,
       });
       return { status: response.status, body: await response.json().catch(() => null) };
@@ -648,6 +836,10 @@ async function main() {
     equal(result.body?.status, "submitted", "...reported as `submitted`");
     check(UUID_SHAPE.test(result.body?.submission_id ?? ""), "a stable submission id is returned");
     submissionId = result.body.submission_id;
+
+    // THE CASE THE OLD SUITE COULD NOT SEE. The receipt was stored either way;
+    // whether the app ever learned that is decided by these headers.
+    checkBrowserReadable(result.response, "successful submission");
 
     equal(
       Object.keys(result.body).sort().join(","),
@@ -779,6 +971,7 @@ async function main() {
     });
     equal(replay.status, 409, "the same person resubmitting the same bytes -> 409");
     equal(replay.body?.status, "duplicate", "...reported as `duplicate`");
+    checkBrowserReadable(replay.response, "duplicate");
 
     equal(
       sql(`select count(*)::text from public.receipt_submissions
@@ -834,6 +1027,9 @@ async function main() {
       "the response reveals nothing about WHY Storage refused it",
       failed.raw,
     );
+    // `upload-failed` is the one outcome the client is meant to offer a retry
+    // for, so a browser being unable to read it is worse than useless.
+    checkBrowserReadable(failed.response, "upload-failed");
 
     const failedRow = sql(`
       select rs.status || '|' || coalesce(rs.failure_code, '-') || '|' ||
@@ -878,14 +1074,18 @@ async function main() {
   {
     const get = await fetch(FUNCTION_URL, {
       method: "GET",
-      headers: { Authorization: `Bearer ${tokens.sales1}` },
+      headers: { Authorization: `Bearer ${tokens.sales1}`, Origin: BROWSER_ORIGIN },
     });
     check(get.status === 405 || get.status === 400, "GET is refused", `status ${get.status}`);
+    // Refused, but still readable: a browser must be able to see the 405 rather
+    // than report an opaque network failure.
+    checkBrowserReadable(get, "refused method");
 
     const notMultipart = await fetch(FUNCTION_URL, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${tokens.sales1}`,
+        Origin: BROWSER_ORIGIN,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ shop_id: shopAssigned, submitted_by: users.owner.id }),
