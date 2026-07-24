@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --experimental-strip-types --test \"lib/**/*.test.ts\""
+    "test": "node --experimental-strip-types --test \"lib/**/*.test.ts\"",
+    "test:receipts:integration": "node scripts/receipt-submission-integration-test.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.3",

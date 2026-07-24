@@ -12,6 +12,14 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Supabase Edge Functions are DENO, not Next.js. They use `Deno.serve`, `Deno.env`
+    // and `npm:` import specifiers, none of which resolve under this project's Node/
+    // bundler settings — so linting them here reports errors about a runtime that is not
+    // the one they run in. They are excluded from tsconfig.json for the same reason.
+    // They are not unchecked: lib/receipts/receipt-edge-function-safety.test.ts asserts
+    // their structural and security properties, and `supabase functions deploy`
+    // typechecks them under Deno.
+    "supabase/functions/**",
   ]),
   {
     // Honor the underscore-prefix convention for intentionally-unused bindings.

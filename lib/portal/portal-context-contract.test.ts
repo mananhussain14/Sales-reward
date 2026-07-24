@@ -80,11 +80,36 @@ describe("get_my_portal_context — migration hygiene", () => {
       applied.includes(MIGRATION_NAME),
       "the migration file must exist in supabase/migrations",
     );
-    assert.equal(
-      applied[applied.length - 1],
-      MIGRATION_NAME,
-      "must be the newest migration — an out-of-order timestamp would apply before its dependencies",
-    );
+
+    // ORDERED AFTER ITS DEPENDENCIES, not last overall.
+    //
+    // This originally asserted `applied[applied.length - 1] === MIGRATION_NAME`. That is
+    // the right INTENT — the message says so: "an out-of-order timestamp would apply
+    // before its dependencies" — but the wrong TEST. "Newest overall" is a property of
+    // the repository at one moment in time, not of this migration, so it forbade every
+    // future migration rather than the defect it was aiming at, and the first unrelated
+    // migration to land would have failed it for no reason.
+    //
+    // What actually matters is stated directly: this migration's timestamp sorts strictly
+    // after every migration whose objects it depends on. Those are the functions its own
+    // header names as dependencies, each of which it calls.
+    const DEPENDENCIES = [
+      "20260717083515_vendor_super_admin_context.sql",
+      "20260717100208_retailer_authorization_helpers.sql",
+      "20260723090000_retailer_staff_invitation_storage_foundation.sql",
+      "20260726210000_receipt_submission_operations.sql",
+    ];
+
+    for (const dependency of DEPENDENCIES) {
+      assert.ok(
+        applied.includes(dependency),
+        `declared dependency ${dependency} is missing`,
+      );
+      assert.ok(
+        dependency < MIGRATION_NAME,
+        `${MIGRATION_NAME} must sort after its dependency ${dependency}`,
+      );
+    }
   });
 
   test("2. adds a function and nothing else", () => {
