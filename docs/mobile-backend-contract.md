@@ -1,11 +1,18 @@
 # Mobile Backend Contract — SalesReward
 
-**Status:** originally an audit. **Updated 2026-07-24** for migration
-`20260729090000_shared_portal_context.sql`, which added `public.get_my_portal_context()` —
-the only backend change made since this document was first written. Everything else below
-still describes the schema as audited: no other migration, RPC, RLS policy, grant, Storage
-policy, environment variable, or application file was created or changed. See **AUTH-05**
-for the new operation.
+**Status:** originally an audit. **Updated 2026-07-25** for the backend changes made since
+it was first written:
+
+| Migration | Added | See |
+| --- | --- | --- |
+| `20260729090000_shared_portal_context.sql` | `public.get_my_portal_context()` | **AUTH-05** |
+| `20260730090000_sales_staff_receipt_product_and_submission_reads.sql` | `public.list_my_receipt_products()`, `public.get_my_receipt_submission(uuid)` | `docs/mobile-receipt-submission-audit.md` |
+| `20260731090000_mobile_vendor_retailer_reads.sql` | `public.list_vendor_retailers()`, `public.get_vendor_retailer_detail(uuid)`, `public.list_vendor_retailer_shops(uuid)`, and the internal `public.vendor_retailer_owner_state(uuid)` | **V-05**, **V-06**, and `docs/mobile-vendor-retailer-reads-audit.md` |
+
+Everything else below still describes the schema as audited: no other migration, RPC, RLS
+policy, grant, Storage policy, environment variable, or application file was created or
+changed. In particular **no existing function was edited, dropped, or replaced by any of
+the three**, and no web page changed behaviour.
 
 **Purpose.** Establish which parts of the existing SalesReward backend can be shared, as-is,
 between the current Next.js web application and a future Flutter mobile application against
@@ -501,9 +508,9 @@ neither is behaviour-preserving, so they belong in their own reviewable change.
 | Storage bucket | — |
 | Idempotency | Read-only |
 | Flutter direct? | **Yes**, but it fetches every shop row purely to count them — poor on a mobile connection |
-| Classification | **B** → recommend **C** |
-| Backend change | **Recommended:** `public.list_vendor_retailers()` returning the aggregate. |
-| Tests | — |
+| Classification | **B** → **C, delivered** |
+| Backend change | **DONE.** `public.list_vendor_retailers()` was added in migration `20260731090000_mobile_vendor_retailer_reads.sql`. Zero arguments; `authenticated`; permission `RETAILERS_READ`. Returns `(relationship_id, retailer_organization_id, retailer_name, retailer_status, relationship_status, relationship_created_at, shop_count, active_shop_count, owner_state)`, ordered by `retailer_name, relationship_id`. Counts are computed with `count(*)` / `count(*) filter (…)` in a `LEFT JOIN LATERAL`, so **one row per Retailer** crosses the wire instead of one row per shop, and the whole directory is **one round trip** instead of four. An unauthorized caller gets `42501`; a Vendor with no Retailers gets an **empty set**. `retailer_organization_id` is returned to close the two-address-space problem in § 6.8. The multi-query TypeScript assembly above is still what the *web* does — the web migration is deliberately deferred. |
+| Tests | pgTAP `supabase/tests/database/vendor_retailer_reads_test.sql` (127); static `lib/retailers/vendor-retailer-reads-contract.test.ts` (33) |
 
 ---
 
@@ -526,9 +533,9 @@ neither is behaviour-preserving, so they belong in their own reviewable change.
 | Storage bucket | — |
 | Idempotency | Read-only |
 | Flutter direct? | **Partly.** Owner status = yes (A). The detail body = three more reads. |
-| Classification | **A** + **B** → recommend **C** |
-| Backend change | **Recommended:** `public.get_vendor_retailer_detail(p_relationship_id uuid)` folding the three reads in, alongside the existing owner-status RPC. See § 6 for the stability problem with `get_vendor_retailer_owner_status`. |
-| Tests | `lib/retailers/owner-status-normalization.test.ts` (69) |
+| Classification | **A** + **B** → **C, delivered** |
+| Backend change | **DONE.** `public.get_vendor_retailer_detail(p_relationship_id uuid)` was added in migration `20260731090000_mobile_vendor_retailer_reads.sql`, alongside the companion `public.list_vendor_retailer_shops(p_relationship_id uuid)`. Both `authenticated`, permission `RETAILERS_READ`.<br><br>Detail returns **one fixed-size row**: the nine list columns plus `country_code` and `default_currency`. Shops are **not nested** — a shop list is unbounded, so it is a separate call returning `(shop_id, shop_name, shop_code, city, country_code, shop_status)` ordered by `shop_name, shop_id`. `shop_id` is included, closing § 6.3 for this surface.<br><br>**A foreign, unknown, or null relationship id returns ZERO ROWS, not an error** — deliberately unlike `get_vendor_retailer_owner_status`, which raises `42501` for the same input. That function is **unchanged** and remains the only source of the owner card (name, email, `sent_at`/`expires_at`/`accepted_at`, `failure_code`, `invitation_kind`); the new reads carry only a coarse `owner_state` badge whose precedence is asserted equal to it. § 6.1's stability problem is therefore **not** made worse, and **not** fixed. |
+| Tests | `lib/retailers/owner-status-normalization.test.ts` (69); pgTAP `supabase/tests/database/vendor_retailer_reads_test.sql` (127); static `lib/retailers/vendor-retailer-reads-contract.test.ts` (33) |
 
 ---
 
@@ -1161,11 +1168,17 @@ uses a deep link + `flutter_secure_storage`. Tests:
 | `get_vendor_admin_dashboard_summary()` | V-01's four counts | Pure aggregate |
 | `list_vendor_organization_members()` | V-02's four-query join | Pure join |
 | `list_vendor_audit_logs(p_limit, p_before)` | V-04 | Pure read; adds pagination mobile needs |
-| `list_vendor_retailers()` | V-05 | Pure aggregate |
-| `get_vendor_retailer_detail(p_relationship_id)` | V-06's three reads | Pure read, already-proven ownership pattern |
+| ~~`list_vendor_retailers()`~~ ✅ **shipped** — `20260731090000` | V-05 | Pure aggregate |
+| ~~`get_vendor_retailer_detail(p_relationship_id)`~~ ✅ **shipped** — `20260731090000` | V-06's three reads | Pure read, already-proven ownership pattern |
+| `list_vendor_retailer_shops(p_relationship_id)` ✅ **shipped** — `20260731090000` | V-06's shop list | Justified companion: a shop list is unbounded and must not be nested in a detail payload |
 
-All six are read-only, need no secret, and are enforceable by the existing resolvers. Putting
+All are read-only, need no secret, and are enforceable by the existing resolvers. Putting
 them in SQL means **one definition for both clients** — which is the whole point.
+
+**Three of the six are delivered** (`get_my_portal_context`, `list_vendor_retailers`,
+`get_vendor_retailer_detail`), plus the one companion read above. None is consumed by the
+web yet: each shipped RPC is additive, and migrating a web page to it is a separate change
+with its own review.
 
 ### 4.2 Must become a Supabase Edge Function
 
@@ -1256,6 +1269,13 @@ column. **Recommend:** freeze the signature and make future additions purely add
 return a single `jsonb` payload with named keys, or version the name
 (`get_vendor_retailer_owner_status_v2`).
 
+**Still open.** Migration `20260731090000` deliberately did **not** touch this function — it
+neither recreates it nor re-grants it, and a static test forbids the migration from even
+naming it, so V-06 gained a mobile contract without a fourth breaking recreation. The new
+reads mirror its five-state precedence in `public.vendor_retailer_owner_state(uuid)` (granted
+to nobody) and expose only the state word; the pgTAP suite asserts the two agree row for row,
+so the mirror cannot drift silently. That contains the problem. It does not solve it.
+
 ### 6.2 `list_retailer_staff_invitations().derived_state` can be `NULL`
 
 The `CASE` expression has no `ELSE`. A `PENDING`, unexpired row with `sent_at IS NULL` **and**
@@ -1269,6 +1289,11 @@ It returns `(shop_name, shop_code, city, country_code, shop_status)`. Sibling fu
 `list_retailer_staff_assignable_shops()` and `list_my_assigned_receipt_shops()` both return
 `shop_id`. A mobile list cannot navigate to a detail screen, deduplicate, or key a widget
 without a stable id. **Recommend:** add `shop_id`.
+
+**Still open for `list_retailer_owner_portal_shops()` itself.** The new Vendor-side
+`list_vendor_retailer_shops()` (`20260731090000`) returns `shop_id` from the start, so the
+Vendor shop list does not repeat the mistake — but the Retailer Owner portal function is
+unchanged and still returns none.
 
 ### 6.4 Errors discriminated by English message text
 
@@ -1312,7 +1337,14 @@ contract so Dart wrappers are written the same way.
   `assign_vendor_product_to_retailer` takes `p_retailer_organization_id`. **Two address
   spaces for the same tenant**, and nothing in the API maps between them. A Flutter product
   screen and a Flutter retailer screen therefore cannot cross-link.
-  **Recommend:** have `list_vendor_retailers()` (§ 4.1) return **both** ids.
+  ✅ **Closed for the Retailer surface.** `list_vendor_retailers()` and
+  `get_vendor_retailer_detail()` (`20260731090000`) both return `relationship_id` **and**
+  `retailer_organization_id`, so a Flutter Retailer screen can now cross-link to
+  `list_vendor_product_retailer_assignments()` and `assign_vendor_product_to_retailer()`.
+  Note the direction: the Retailer organization id is an **output only** — neither function
+  accepts one, because `vendor_retailers.id` is the narrower selector (it names one Vendor's
+  view of one Retailer, so a foreign value matches nothing). The naming inconsistency in the
+  first bullet is unchanged.
 
 ### 6.9 `expire_stale_retailer_invitations` is a hidden write inside a read-ish path
 
@@ -1379,7 +1411,7 @@ release, because § 6.1 shows this schema has already made three breaking functi
 | --- | --- | --- |
 | **A** — existing authenticated RPC, callable as-is | 26 | ~60 % |
 | **B** — existing RLS-protected table access | 5 (all also candidates for C) | ~12 % |
-| **C** — new shared RPC recommended | 6 | ~14 % |
+| **C** — new shared RPC recommended | 6 — **3 delivered** (`get_my_portal_context`, `list_vendor_retailers`, `get_vendor_retailer_detail`), 3 outstanding | ~14 % |
 | **D** — Edge Function required | 7 | ~16 % |
 | **E** — web-only UI to recreate | 7 surfaces | — |
 | **F** — needs a product decision | 9 questions | — |
