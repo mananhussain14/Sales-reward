@@ -303,8 +303,23 @@ The storage bucket, the object path and the file hash are consumed inside the fu
 appear in **no** response and **no** log line. Neither key is ever echoed.
 
 **JWT verification is enforced twice**: by the gateway (`verify_jwt = true` in
-`supabase/config.toml`) and by the function's own `auth.getUser()` call, which revalidates
-with the Auth server rather than trusting the token's claims.
+`supabase/config.toml`) and by the function's own `auth.getUser(accessToken)` call, which
+revalidates with the Auth server rather than trusting the token's claims. The token is passed
+explicitly because `persistSession: false` leaves the client with no stored session for the
+argument-less form to find.
+
+### B.4 The three test layers, and what only each one can prove
+
+| Layer | File | Proves |
+| --- | --- | --- |
+| Database | `supabase/tests/database/sales_staff_receipt_reads_test.sql` (pgTAP, 76 assertions) | what the DATABASE enforces regardless of any client: grants, tenant isolation, fail-closed resolution, returned shape |
+| Source | `lib/receipts/receipt-edge-function-safety.test.ts` (21 assertions) | what the function's SOURCE may not become: no re-implemented sniffing, no secret in a log or a response, the right key in the right client |
+| Runtime | `scripts/receipt-submission-integration-test.mjs` (84 assertions) | what the served function actually DOES with a real JWT, a real multipart body, a real bucket and a real service-role key |
+
+None of the three subsumes another. The source test cannot know whether the function runs;
+the pgTAP suite cannot see the Edge Function at all; and the integration test, which sees
+everything, cannot prevent a later edit from quietly duplicating the sniffing logic — only
+the source test fails on that.
 
 ---
 
@@ -315,9 +330,13 @@ rejection state, no incentive, campaign, reward, coin or payout object, and no V
 reporting. No receipt image retrieval. No change to the web UI. No storage policy. No
 change to any deployed table, function, permission mapping or RLS posture.
 
-## Two supporting changes
+## Three supporting changes
 
-Neither is part of the contract, but both were required and are worth stating plainly.
+None is part of the contract, but all three were required and are worth stating plainly.
+
+**`package.json` gains one script.** `test:receipts:integration` runs the local integration
+test. It is deliberately NOT wired into `npm test`, which must stay runnable without Docker
+and without a served function.
 
 **`supabase/functions` is excluded from `tsconfig.json` and `eslint.config.mjs`.** The Edge
 Function is Deno: it uses `Deno.serve`, `Deno.env` and an `npm:` import specifier, none of
@@ -337,42 +356,97 @@ production code was touched.
 
 ## Verification performed
 
-| Check | Result |
+Everything below was **executed** against a local Supabase stack (Docker) on this branch.
+Nothing was deployed to the hosted project: no `supabase db push`, no
+`supabase functions deploy`.
+
+### Executed and passing
+
+| Check | Command | Result |
+| --- | --- | --- |
+| Migration applies after every historical migration | `npx supabase db reset` | ✅ all 33 migrations applied in order, `20260730090000` last |
+| pgTAP behavioural suite | `npx supabase test db` | ✅ **PASS — 2 files, 134 assertions, 0 failed** |
+| Edge Function bundles and serves | `npx supabase functions serve submit-receipt` | ✅ started on `supabase-edge-runtime-1.74.2` (Deno 2.1.4) and **executed a real request** |
+| Edge Function local integration test | `npm run test:receipts:integration` | ✅ **84 passed, 0 failed** |
+| Unit + source-safety suite | `npm test` | ✅ **726 passed, 0 failed** (182 suites) |
+| TypeScript | `npx tsc --noEmit` | ✅ clean |
+| ESLint | `npm run lint` | ✅ clean |
+| Production build | `npm run build` | ✅ compiled |
+| Whitespace / conflict markers | `git diff --check` | ✅ clean |
+
+### pgTAP — what was proven in the database
+
+`supabase/tests/database/sales_staff_receipt_reads_test.sql` — **76 assertions**, all
+passing (the pre-existing `portal_context_test.sql` contributes the other 58). One
+transaction, rolled back; every organization, product, shop and submission is created by the
+file, so nothing depends on ambient data.
+
+It covers, for `list_my_receipt_products()`: the zero-argument signature; `authenticated`
+holds EXECUTE while `anon` and `service_role` do not; SECURITY DEFINER, STABLE, empty
+`search_path`; `RECEIPT_PRODUCTS_READ` is mapped to `SALES_STAFF` **and to no other role**;
+a signed-out caller, a Vendor Super Admin, a Retailer Owner, a Retailer Manager and a
+member-less account are each refused with `42501`; a SUSPENDED profile, a DEACTIVATED
+profile, a SUSPENDED membership and a two-Retailer ambiguity all fail closed; an ACTIVE Sales
+Staff member sees exactly the ACTIVE products actively assigned to their own Retailer, with
+the INACTIVE product, the withdrawn assignment, another Retailer's product and another
+Vendor's product all absent; a duplicate `(product, Retailer)` assignment is impossible; a
+member holding two roles still sees each product exactly once; and the returned shape is
+exactly the five declared columns.
+
+And for `get_my_receipt_submission(uuid)`: the exact one-uuid signature and the same grant
+matrix; the submitter reads their own row; **another Sales Staff member in the same Retailer
+gets zero rows**, as does a same-role member of another Retailer, an unknown uuid and a null
+id — and all of those are proven *indistinguishable from each other*, so there is no
+existence oracle; a Vendor, an Owner and a Manager are refused outright; and the returned
+shape is exactly nine columns, byte-identical to `list_my_receipt_submissions()`, exposing no
+bucket, object path, hash, profile id, organization id or failure code.
+
+It also re-asserts that this migration changed nothing already deployed: all five original
+receipt operations still exist, `finalize` and `record-failure` are still `service_role`-only,
+the three tables still carry zero policies and no browser-role privilege, `storage.objects`
+still has zero policies, and the `receipts` bucket is still private.
+
+### Edge Function — bundling confirmed, not assumed
+
+The previous revision of this document flagged the cross-directory import as an unexercised
+assumption. **It has now been exercised and it works.** `npx supabase functions serve
+submit-receipt` starts the runtime, and a real request returns this function's own body
+(`{"status":"unauthenticated"}`) — which is only reachable after
+`../../../lib/receipts/receipt-file.ts`, `../../../lib/receipts/receipt-submission-flow.ts`
+and `npm:@supabase/supabase-js@2.110.6` have all resolved and the module has executed. The
+documented `_shared/` fallback was **not needed and was not implemented**; one definition of
+the magic-byte sniffing, hashing and orphan cleanup is shared by the web and mobile paths.
+
+### Integration test — what was proven over real HTTP
+
+`scripts/receipt-submission-integration-test.mjs`, run with `npm run
+test:receipts:integration` — **84 assertions**, all passing, exiting non-zero on any failure.
+It drives the served function with real password-grant JWTs and asserts against the real
+database and the real Storage bucket. Local keys are read at runtime from `supabase status
+-o json`; fixture passwords are generated per run; **no secret is in the file**. Fixtures are
+applied with `psql` inside the local database container because `service_role` holds no table
+privileges in this schema — a REST insert as `service_role` returns `42501`, which is the
+posture the design wants and was not weakened to make testing easier.
+
+| Group | What it proves |
 | --- | --- |
-| `npm run lint` | ✅ clean |
-| `npm run build` | ✅ compiled, typechecked |
-| `npm test` | ✅ **726 passed, 0 failed** (182 suites; 21 new assertions) |
-| Deno typecheck of the Edge Function | ❌ **not run** — no Deno binary in this environment |
-| Edge Function deploy / local serve | ❌ **not run** — requires Docker and a linked project |
-| Migration applied against a database | ❌ **not run** — no database in this environment |
-| pgTAP behavioural suite for the new RPCs | ❌ **not written** — see below |
+| 1. Unauthenticated | no header → 401 at the gateway; a malformed token → 401; a structurally valid JWT with no user (the anon key) → 401 `unauthenticated` from the function itself |
+| 2. Wrong role | Vendor Super Admin, Retailer Owner, Retailer Manager and a SUSPENDED-profile Sales Staff member all → 403 `denied` |
+| 3. Shop scoping | unassigned shop, another Retailer's shop and a nonexistent shop → 403, and all three responses are **byte-identical**; a malformed shop id → 400 `invalid-shop` |
+| 4. Product scoping | Sales Staff see only their own Retailer's product; the other Retailer's product is absent; no Vendor id, assignment status or catalogue prose is exposed; Vendor/Owner/Manager are refused |
+| 5. File validation | no file → `missing`; empty → `empty`; **PDF bytes declared `image/jpeg` and named `.jpg` → `unsupported-type`**; two file parts → `too-many-files` |
+| 6. Valid submission | 200 `submitted`; response carries **exactly** `status` and `submission_id`; row reaches `SUBMITTED` with `submitted_at` set; **the recorded MIME type is the sniffed `image/png`, not the declared `image/jpeg`**; `submitted_by_profile_id` is the token's user; Retailer derived server-side; path is `<retailer>/<user>/<submission>/<random>` with nothing from the filename (`../../etc/My Receipt.png`) shaping it; the object is in the private `receipts` bucket; `storage.objects` still has zero policies; the response contains neither the object path, nor the bucket prefix, nor the service-role key |
+| 7. Reading it back | the submitter gets one row exposing no storage location, hash, profile or organization; a colleague and a cross-tenant member get **zero rows**, indistinguishable from an unknown uuid; Vendor/Owner/Manager are refused |
+| 8. Duplicate / replay | the same person resubmitting the same bytes → 409 `duplicate` with no second row; a **different** staff member may submit the identical photo, because the index is per-submitter |
+| 9. Upload failure | a deterministic post-reserve Storage rejection → 502 `upload-failed`; the row is `UPLOAD_FAILED` with the fixed `STORAGE_UPLOAD_FAILED` code and no `submitted_at`; **no orphan object is left in the bucket**; the same file is then retryable; nothing is stranded in `RESERVED`; the response reveals nothing about why Storage refused |
+| 10. Transport | `GET` is refused; a JSON body is refused, and a `submitted_by` field in it changes nothing |
 
-The last four are real gaps in this milestone's verification. Before merge:
+### Genuinely still unverified
 
-```bash
-# 1. Typecheck the Edge Function under the runtime it actually runs in.
-deno check supabase/functions/submit-receipt/index.ts
-
-# 2. Apply the migration and serve the function locally (needs Docker).
-supabase db reset
-supabase functions serve submit-receipt
-
-# 3. Deploy.
-supabase functions deploy submit-receipt
-```
-
-**The bundling assumption to confirm on first deploy.** The Edge Function imports
-`lib/receipts/receipt-file.ts` and `lib/receipts/receipt-submission-flow.ts` through relative
-paths *outside* `supabase/functions`, with the explicit `.ts` extensions Deno requires. The
-Supabase CLI bundler walks the module graph from the entrypoint and should include them.
-That path has not been exercised here. If a deploy cannot resolve them, the fallback is to
-move both modules to `supabase/functions/_shared/` and have `lib/receipts/` re-export from
-there — keeping one definition, which is the property that matters. **Do not** solve it by
-copying the magic-byte sniffing into the function; the safety test will fail, and correctly.
-
-**A pgTAP suite for the two new RPCs is not included.** `supabase/tests/database/` holds the
-behavioural suites for this schema (e.g. `portal_context_test.sql`, 58 assertions), and the
-new `list_my_receipt_products()` and `get_my_receipt_submission(uuid)` deserve the same
-treatment — in particular the tenant-isolation and "another person's id returns zero rows"
-cases, which are exactly the properties source-level tests cannot prove. Writing them
-requires Docker and was out of reach here. This is the single largest outstanding item.
+| Item | Why |
+| --- | --- |
+| `deno check` on the Edge Function | No Deno binary is installed on this machine. The function is nevertheless *executed* under Deno 2.1.4 by the local edge runtime above, which is a stronger signal than a typecheck — but a static check would still catch an unexecuted branch. |
+| Behaviour against the hosted project | Out of scope by instruction: nothing was pushed or deployed. The migration and the function have only ever run locally. |
+| Real device / Flutter client integration | The Flutter repository was not modified and no mobile client has called this endpoint. |
+| Image retrieval | Still absent by design — no signed URL, no download RPC, no storage policy. `docs/mobile-backend-contract.md` § 7 Q1 remains open. |
+| Multi-Retailer account switching | `resolve_retailer_member_organization` still fails closed for a member of two Retailers (§ 6.5). Proven by test, unchanged by choice. |
