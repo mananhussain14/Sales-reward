@@ -3,8 +3,11 @@
 Companion to [`mobile-backend-contract.md`](./mobile-backend-contract.md) (per-operation
 detail) and [`mobile-feature-matrix.md`](./mobile-feature-matrix.md) (planning view).
 
-**Status:** recommendation only. No Flutter project was created, no package installed, no
-migration written, no RLS policy or RPC modified.
+**Status:** recommendation only, with one item since delivered. No Flutter project was
+created and no package installed. The single backend change made since this document was
+written is migration `20260729090000_shared_portal_context.sql`, which implements the
+`get_my_portal_context()` recommendation in § 4.1 below. No RLS policy or existing RPC was
+modified.
 
 ---
 
@@ -172,17 +175,24 @@ Today the web app answers "which experience?" by probing up to three RPCs and re
 each threw `42501` (`lib/staff/retailer-staff-access.ts` + `portal-access-decision.ts`).
 Authorization decided by error handling is workable in one client and fragile in two.
 
-**Recommendation: add `public.get_my_portal_context()`** returning one row:
+✅ **DELIVERED** as migration `20260729090000_shared_portal_context.sql`. The shipped
+contract is richer than the sketch this section originally proposed, in two ways that
+matter:
 
-```
-kind                     text     -- 'vendor' | 'owner' | 'reader' | 'submitter' | 'none'
-retailer_organization_id uuid     -- null for vendor/none
-retailer_name            text     -- null where not applicable
-```
+- it returns a single **`jsonb`** value rather than a typed row, so a new field is an
+  additive change instead of the `DROP FUNCTION` + recreate that has already bitten
+  `get_vendor_retailer_owner_status` three times;
+- it resolves the **`vendor` and `retailer` blocks independently** rather than collapsing to
+  one `kind`, so a caller holding both roles routes Vendor-first *and* still receives their
+  Retailer context — which the single-`kind` sketch could not express.
+
+It also carries seven **resolver-derived** capability hints. Full contract:
+`mobile-backend-contract.md` **AUTH-05**.
 
 One round trip, one definition of precedence, and it simultaneously fixes **Q3** — a Retailer
-Manager currently has no way to read their own Retailer's name, because
-`get_retailer_owner_portal_context()` hard-filters `RETAILER_OWNER`.
+Manager could not read their own Retailer's name, because
+`get_retailer_owner_portal_context()` hard-filters `RETAILER_OWNER`. `retailer.organization_name`
+is now returned for all three retailer kinds.
 
 ### 4.2 Navigation shells
 
@@ -618,7 +628,7 @@ Vendor administration surface not at all.
 
 | Deliverable | Detail |
 | --- | --- |
-| **Backend — 1 new RPC** | `get_my_portal_context()` |
+| **Backend — 1 new RPC** | ~~`get_my_portal_context()`~~ ✅ **shipped** (`20260729090000`) |
 | **Backend — 3 Edge Functions** | `submit-receipt`, `staff-invitation-context`, `activate-staff-account` |
 | **Backend — refactor** | Point the corresponding Server Actions at the new Edge Functions so there is one implementation, not two |
 | **Backend — tests** | pgTAP/`supabase test db` for the receipt and staff-acceptance RPCs (Tier 2, § 9.2) |

@@ -6,17 +6,20 @@
 | --- | --- |
 | Repository | `salesreward-admin` (Next.js 16.2.10 + Supabase) |
 | Branch | `main` |
-| Commit | `510331e5fed8293f6af95c339fee8c082b4ea458` |
-| Latest migration | `supabase/migrations/20260728090000_retailer_staff_registration_context.sql` |
+| Commit (original audit) | `510331e5fed8293f6af95c339fee8c082b4ea458` |
+| Latest migration | `supabase/migrations/20260729090000_shared_portal_context.sql` |
 | Date of audit | 2026-07-24 |
+| Last updated | 2026-07-24 — for `get_my_portal_context()` (§ 2.3, D-1, D-6) |
 
 Companion documents: [`mobile-backend-contract.md`](./mobile-backend-contract.md) (per-RPC
 detail), [`mobile-feature-matrix.md`](./mobile-feature-matrix.md) (readiness and phasing),
 [`mobile-architecture-recommendation.md`](./mobile-architecture-recommendation.md) (layering),
 [`mobile-ui-design-handoff.md`](./mobile-ui-design-handoff.md) (visual identity).
 
-**Status: audit and specification only.** Nothing in the database, RLS, RPCs, or
-application code was changed.
+**Status:** originally an audit and specification. One backend change has since been made —
+migration `20260729090000_shared_portal_context.sql`, which adds
+`public.get_my_portal_context()` and resolves **D-1** (and D-6 for Flutter). No RLS policy,
+existing RPC, or application code was changed.
 
 ---
 
@@ -92,11 +95,26 @@ From `docs/mobile-backend-contract.md` and the migrations:
 | Vendor Super Admin | Authorized by **role**, not by permission — `auth.uid()` → ACTIVE profile → ACTIVE membership → ACTIVE `VENDOR` org → ACTIVE `VENDOR_SUPER_ADMIN` role. Plus `RETAILER_OWNERS_INVITE`, `RBAC_READ`, product and audit permissions. |
 | Retailer Owner | `RETAILER_PORTAL_READ`, `RETAILER_SHOPS_READ`, `RETAILER_STAFF_READ`, `RETAILER_STAFF_MANAGE`, `RETAILER_STAFF_SHOP_ASSIGN`, `RETAILER_PRODUCTS_READ` |
 | Retailer Manager | `RETAILER_PORTAL_READ`, `RETAILER_SHOPS_READ`, `RETAILER_STAFF_READ`, `RETAILER_PRODUCTS_READ` — and **not** `RETAILER_STAFF_MANAGE` or `RETAILER_STAFF_SHOP_ASSIGN` |
-| Sales Staff | `RECEIPT_SUBMIT` — and nothing else |
+| Sales Staff | `RETAILER_PORTAL_READ`, `RECEIPT_SUBMIT` |
 
-Note what this means: **a Sales Staff member holds no read permission for the portal, the
-staff roster, or the product catalogue.** Every one of those RPCs refuses them in SQL.
-That is why their navigation has exactly one destination.
+**Holding a permission is not the same as passing an operation's gate**, and two cases in
+this table prove it. Both were verified against the seed migrations
+(`20260722210000`, `20260726090000`, `20260727090000`):
+
+- **Sales Staff hold `RETAILER_PORTAL_READ`** — seeded "so the portal shell renders" — yet
+  they are still refused the Overview screen, because
+  `get_retailer_owner_portal_context()` resolves through
+  `resolve_retailer_owner_organization()`, which hard-filters `r.code = 'RETAILER_OWNER'`.
+- **Retailer Managers hold `RETAILER_SHOPS_READ`** yet cannot list shops, because
+  `list_retailer_owner_portal_shops()` uses that same owner-only resolver.
+
+They *do* correctly lack `RETAILER_STAFF_READ` and `RETAILER_PRODUCTS_READ`, so the roster
+and catalogue refuse them by mapping alone.
+
+The consequence for Flutter is concrete: **never derive a capability from a permission
+code.** Derive it from the resolver the operation actually calls — which is exactly what
+`get_my_portal_context().retailer.capabilities` does, and why `view_shops` is `false` for a
+Manager who holds the permission.
 
 ### 2.3 How the landing screen is resolved — `lib/auth/landing-decision.ts`
 
@@ -133,12 +151,17 @@ roster  == denied → submitter probe:
     denied      → unauthorized  (or unavailable, if the owner probe was unavailable)
 ```
 
-> ⚠️ **This is the single most important thing to fix before Flutter ships.** The role is
-> currently inferred from *which list RPC returns `42501`*. That is authorization decided
-> by error handling, it costs up to three round trips on every cold start, and two clients
-> implementing the same probe order will drift. `mobile-feature-matrix.md` § 8 lists
-> **`get_my_portal_context()`** as the #1 new RPC, high priority, phase 1. Flutter should
-> be built against that contract and the probe used only as a temporary fallback.
+> ✅ **RESOLVED — `public.get_my_portal_context()` now exists** (migration
+> `20260729090000_shared_portal_context.sql`). The probe sequence above is what the **web**
+> still does; it is no longer what a client *has* to do. Flutter must build against the new
+> RPC and must not reproduce the probe at all.
+>
+> One call returns `portal_kind` (vendor-first, reproducing `selectLanding()`) plus
+> independently-resolved `vendor` and `retailer` blocks and seven capability hints. Denial
+> is a **value** (`portal_kind: "NONE"`), so a raised exception still means `unavailable`
+> and the two stay distinguishable. Full contract: `mobile-backend-contract.md` AUTH-05.
+>
+> The web migration is deliberately deferred — see D-1 in § 8.
 
 **Classification: B** (shared domain — one identity and one landing decision; role-specific
 presentation — four different first screens).
@@ -546,12 +569,12 @@ decisions below are the role-flow consequences.
 
 | # | Decision | Depends on | Recommendation |
 | --- | --- | --- | --- |
-| **D-1** | Ship `get_my_portal_context()` before Flutter, or let Flutter reproduce the three-probe fallback? | — | **Ship the RPC first.** Role-by-`42501`-probe is fragile, slow on mobile, and guaranteed to drift between two clients. It is the #1 phase-1 backend item. |
+| **D-1** | ✅ **RESOLVED.** `get_my_portal_context()` shipped in migration `20260729090000`. Flutter builds against it and must not reproduce the probe. **Still open:** when to migrate the *web* resolver onto it. | — | Defer the web swap to its own change. It collapses up to four round trips into one, but it is not behaviour-preserving: a Manager's header would start showing their Retailer name (`null` today), and `unavailable` would come from one call failing rather than three probes failing independently. Both are improvements; both deserve their own review. |
 | **D-2** | Can a user hold roles at more than one Retailer? | Q2 | Today `resolve_retailer_*_organization` returns `NULL` when the caller qualifies at more than one Retailer — a **total silent denial**. Either forbid it explicitly or design an account switcher. Do not leave it silent. |
 | **D-3** | Does the Vendor portal belong on mobile at all? | Q4 | **Defer to phase 3.** Five new RPCs and two Edge Functions stand in the way, and the audience is internal desktop users. Build Sales Staff and Retailer first. |
 | **D-4** | Sales Staff: is offline capture in scope? | Q5 | **Not for the MVP.** The reservation step needs connectivity, and queued bytes are unencrypted customer data unless deliberately protected. Ship online-only, then revisit. |
 | **D-5** | Can a Sales Staff member view a receipt they submitted? | Q1 | **Yes, and it needs `get-receipt-image-url`.** A history list whose rows cannot be opened is a poor mobile experience. Short-lived signed URL, issued only after verifying ownership. |
-| **D-6** | How does a Retailer Manager learn their own Retailer's name? | Q3 | Either widen `get_retailer_owner_portal_context()` (or add a minimal `get_my_retailer_identity()`), or accept the web's honest omission. **Recommend the minimal new read** — on mobile the blank app bar is far more noticeable than on the web. |
+| **D-6** | ✅ **RESOLVED for Flutter.** `get_my_portal_context().retailer.organization_name` is returned for **all three** retailer kinds, including a Manager and a Sales Staff member. Safe: the id came from a resolver that already proved ACTIVE membership, so a caller only ever learns the name of the tenant they demonstrably belong to. **Still open:** whether the web adopts it (that is the user-visible half of D-1). | Q3 | Adopt it in Flutter now. Adopt it in the web with the D-1 swap. |
 | **D-7** | Who reviews receipts, and where? | — | Nothing exists: no reviewer permission, no approve/reject RPC, no screen. The brief anticipates *"receipt review will belong to an authorized Vendor reviewer"* — that role, its permission, and its RPCs all need to be designed. Until then, receipt review is **class E**, not a Flutter task. |
 | **D-8** | Should owner-invitation revoke be wired up? | Q8 | `revoke_retailer_owner_invitation()` is granted and audited but **called by nothing anywhere**. Either wire it (web and Flutter together) or remove the grant. A live, audited, unreachable mutation is a latent risk. |
 | **D-9** | Where does `canResendInvitation` live? | — | It is a **TypeScript-only predicate** today (RO-08). Move it into SQL or into the shared Edge Function before Flutter reimplements it, or the two clients will disagree about which invitations are resendable. |
