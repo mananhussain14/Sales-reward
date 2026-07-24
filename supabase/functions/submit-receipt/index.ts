@@ -42,6 +42,14 @@
 //   service-role key and the publishable key are consumed here and appear in no response
 //   body, no header, and no log line. Provider errors are never bound, echoed, or logged.
 //
+// EVERY RESPONSE IS BUILT BY lib/receipts/receipt-cors.ts, INCLUDING THE PREFLIGHT AND THE
+//   UNEXPECTED-ERROR REPLY. A Flutter Web build is a browser, so a reply this function
+//   cannot make readable is a reply the client never sees — which is how a successful
+//   submission previously vanished. There is no `new Response(` in this file: the preflight
+//   comes from `corsPreflightResponse()`, everything else from `json()`, and the
+//   `Deno.serve` wrapper at the bottom catches throws so the runtime never gets to emit a
+//   header-less 500. CORS changes nothing about WHO may submit — see that module.
+//
 // WHAT THIS FUNCTION DELIBERATELY DOES NOT DO
 //   No OCR, no receipt parsing, no product or SKU matching, no reviewer queue, no approval
 //   or rejection, no incentive, campaign, reward, coin or payout logic, and no receipt
@@ -49,6 +57,10 @@
 
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2.110.6";
 
+import {
+  corsJsonResponse,
+  corsPreflightResponse,
+} from "../../../lib/receipts/receipt-cors.ts";
 import { validateReceiptFile } from "../../../lib/receipts/receipt-file.ts";
 import {
   runReceiptSubmissionFlow,
@@ -71,18 +83,6 @@ const SHOP_ID_FIELD = "shop_id";
 const FILE_FIELD = "file";
 
 /**
- * CORS. Safe to allow any origin here because this endpoint carries NO ambient authority:
- * it authenticates from an `Authorization: Bearer` header that a cross-site request cannot
- * cause a browser to attach, and it reads no cookie. A Flutter mobile client never sends a
- * preflight; this exists so a Flutter Web build is not blocked by one.
- */
-const CORS_HEADERS: Record<string, string> = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, content-type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-};
-
-/**
  * Sanitized operator logging. No ids, paths, hashes, buckets, tokens, or error objects —
  * identical posture to `logSubmissionFailure` in lib/receipts/receipt-submissions.ts.
  */
@@ -100,15 +100,19 @@ type ResponseStatus =
   | "upload-failed"
   | "unavailable";
 
+/**
+ * The ONLY way this function produces a JSON reply.
+ *
+ * It adds the closed status vocabulary; lib/receipts/receipt-cors.ts adds the CORS
+ * headers. Neither concern is restated here, so there is no response — success, refusal,
+ * duplicate, upload failure, or unexpected error — that a browser is unable to read.
+ */
 function json(
   status: ResponseStatus,
   httpStatus: number,
   extra?: Record<string, string>,
 ): Response {
-  return new Response(JSON.stringify({ status, ...extra }), {
-    status: httpStatus,
-    headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
-  });
+  return corsJsonResponse({ status, ...extra }, httpStatus);
 }
 
 /**
@@ -148,9 +152,17 @@ function readPublishableKey(): string | null {
   );
 }
 
-Deno.serve(async (request: Request): Promise<Response> => {
+/**
+ * The request handler proper. It is a named function rather than the argument to
+ * `Deno.serve` so that the wrapper below can catch everything it throws — see there.
+ */
+async function handleRequest(request: Request): Promise<Response> {
+  // Answered BEFORE authentication, and it must be: a browser sends a preflight with no
+  // `Authorization` header, so refusing it would block every cross-origin caller before
+  // the real request was ever attempted. It reveals only which methods and headers this
+  // endpoint accepts, and is identical for every caller.
   if (request.method === "OPTIONS") {
-    return new Response(null, { status: 204, headers: CORS_HEADERS });
+    return corsPreflightResponse();
   }
 
   if (request.method !== "POST") {
@@ -445,5 +457,22 @@ Deno.serve(async (request: Request): Promise<Response> => {
       return json("upload-failed", 502);
     default:
       return json("unavailable", 503);
+  }
+}
+
+Deno.serve(async (request: Request): Promise<Response> => {
+  try {
+    return await handleRequest(request);
+  } catch {
+    // THE LAST RESPONSE THAT COULD HAVE ESCAPED THE POLICY. An uncaught throw becomes a
+    // runtime-generated 500 carrying no CORS headers, which a browser discards without
+    // ever showing the client a status or a body — the Flutter Web symptom this branch
+    // exists to make impossible. It is reported as the same `unavailable` every other
+    // infrastructure failure returns, so a caller learns nothing new from a crash.
+    //
+    // The error is not bound, echoed, or logged: it can quote a request body, an object
+    // path, or a provider message, exactly as the inner handlers assume.
+    logFailure("unexpected error");
+    return json("unavailable", 503);
   }
 });
