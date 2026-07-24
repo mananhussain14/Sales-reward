@@ -1,13 +1,18 @@
 # Mobile Backend Contract — SalesReward
 
-**Status:** audit only. No migration, RPC, RLS policy, grant, Storage policy, environment
-variable, or application file was created or changed to produce this document.
+**Status:** originally an audit. **Updated 2026-07-24** for migration
+`20260729090000_shared_portal_context.sql`, which added `public.get_my_portal_context()` —
+the only backend change made since this document was first written. Everything else below
+still describes the schema as audited: no other migration, RPC, RLS policy, grant, Storage
+policy, environment variable, or application file was created or changed. See **AUTH-05**
+for the new operation.
 
 **Purpose.** Establish which parts of the existing SalesReward backend can be shared, as-is,
 between the current Next.js web application and a future Flutter mobile application against
 the *same* Supabase project — and which parts cannot, and why.
 
-**Audit basis.** All 31 applied migrations under `supabase/migrations/`, every Server Action
+**Audit basis.** All 32 applied migrations under `supabase/migrations/` (31 at the time of
+the original audit, plus `20260729090000`), every Server Action
 and Route Handler under `app/`, and every server module under `lib/`. There are **no Supabase
 Edge Functions in this repository** (`supabase/` contains only `config.toml`, `migrations/`
 and `templates/`).
@@ -294,9 +299,82 @@ parameter. Flutter has no equivalent surface; it should use typed routes and ign
 | Storage bucket | — |
 | Idempotency | Read-only |
 | Flutter direct? | **Yes**, but only by re-running the same three-probe sequence — the *composition* is TypeScript-only |
-| Classification | **A** (the probes) + **C** (the composition, recommended) |
-| Backend change | **Recommended:** one new `public.get_my_portal_context()` returning `(kind text, retailer_organization_id uuid, retailer_name text)` so both clients get the answer in one round trip instead of up to three, and so the precedence rule has one definition. Also fixes the fact that today "which experience" is inferred from *whether a list RPC threw 42501*, which is an authorization decision made by error handling. |
+| Classification | **A** (the probes) + **C** (the composition) — **the composition is now DELIVERED, see AUTH-05** |
+| Backend change | **DONE.** `public.get_my_portal_context()` was added in migration `20260729090000_shared_portal_context.sql`. See AUTH-05 for its contract. The three-probe sequence above is still what the *web* does today; the web migration is deliberately deferred (see AUTH-05's integration note). |
 | Tests | `lib/staff/portal-access-decision.test.ts` (23) |
+
+---
+
+#### AUTH-05 — Resolve the caller's application context (shared, both clients)
+
+| Field | Value |
+| --- | --- |
+| Feature | One trusted answer to "who is this caller, and which experience do they get?" |
+| Role | All four — Vendor Super Admin, Retailer Owner, Retailer Manager, Sales Staff |
+| Permission | None of its own. It **reports** the decisions the existing resolvers make. |
+| Web route | Not yet consumed by the web — see the integration note below |
+| Server Action | — |
+| Existing RPC | **`public.get_my_portal_context()`** (migration `20260729090000`) |
+| Inputs | **none** — zero arguments, by design |
+| Backend-resolved | Everything: vendor org, retailer org, experience kind, and seven capability hints |
+| Returns | A single `jsonb` value, never SQL NULL. See the shape below. |
+| Errors | **Raises nothing.** Denial is a value (`portal_kind: "NONE"`), so an exception can only mean an operational failure — which is exactly what makes `unavailable` distinguishable from `unauthorized`. |
+| RLS & authorization | `SECURITY DEFINER`, `search_path = ''`, fully qualified. Delegates every decision to `get_vendor_super_admin_context()`, `resolve_retailer_owner_organization()` and `resolve_retailer_member_organization()` — it reimplements no part of the membership/role/permission chain. |
+| Tables | `public.organizations`, and only for the display name, addressed by an id a resolver already authorized |
+| Storage bucket | — |
+| Idempotency | Read-only, `STABLE` |
+| Flutter direct? | **Yes.** This is the intended first call after sign-in. |
+| Classification | **A** |
+| Backend change | None outstanding |
+| Tests | `supabase/tests/database/portal_context_test.sql` (pgTAP, behavioural) + `lib/portal/portal-context-contract.test.ts` (24, static contract guards) |
+
+**Result shape** (additive — new keys may appear without a version bump):
+
+```jsonc
+{
+  "context_version": 1,
+  "portal_kind": "VENDOR_SUPER_ADMIN" | "RETAILER_OWNER" | "RETAILER_MANAGER"
+                 | "SALES_STAFF" | "NONE",
+  "vendor":   null | { "organization_id": uuid, "organization_name": text },
+  "retailer": null | {
+    "kind": "RETAILER_OWNER" | "RETAILER_MANAGER" | "SALES_STAFF",
+    "organization_id": uuid,
+    "organization_name": text,
+    "capabilities": {
+      "view_retailer_overview": bool, "view_shops": bool, "view_staff": bool,
+      "manage_staff": bool, "assign_staff_shops": bool,
+      "view_assigned_products": bool, "submit_receipts": bool
+    }
+  }
+}
+```
+
+Four things a client must get right:
+
+1. **`portal_kind` is vendor-first**, reproducing `selectLanding()`. But `vendor` and
+   `retailer` are resolved **independently**, so a caller holding both roles receives
+   both blocks — the Retailer portal shell reads `retailer` and ignores precedence,
+   matching what `getRetailerPortalAccess()` does today.
+2. **Denial is a value, not an error.** `portal_kind: "NONE"` → unauthorized. A raised
+   exception → unavailable. Never collapse one into the other.
+3. **`capabilities` are presentation hints, never authorization.** Each is computed by
+   calling the *same resolver with the same permission code* that the operation it
+   describes calls, so a hint cannot drift from its gate — but the database still decides
+   again on every call.
+4. **`view_shops` is `false` for a Retailer Manager** even though a Manager *holds*
+   `RETAILER_SHOPS_READ`, because `list_retailer_owner_portal_shops()` resolves through
+   the **owner** resolver, which hard-filters `r.code = 'RETAILER_OWNER'`. This is why the
+   capabilities are resolver-derived and not permission-derived; a
+   `has_organization_permission()` implementation would have reported `true` and sent both
+   clients to a screen the database refuses.
+
+**Web integration is deliberately NOT done in the same change.** Migrating
+`getRetailerPortalAccess()` / `resolveAuthenticatedLanding()` onto this RPC would collapse
+up to four round trips into one, but it would also change two shipped behaviours: a
+Retailer Manager's header would begin showing their Retailer name (it is `null` today,
+because no installed RPC could supply it), and the `unavailable` signal would come from one
+call failing rather than from three probes failing independently. Both are improvements;
+neither is behaviour-preserving, so they belong in their own reviewable change.
 
 ---
 

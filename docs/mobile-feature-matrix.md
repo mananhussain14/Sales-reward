@@ -35,8 +35,8 @@ full per-operation detail. This is the at-a-glance planning view.
 | Sign out | Shipped | 🟢 Ready | 🟢 Now | — | No | Use `scope: 'local'` as web does, so other sessions survive. | **1** |
 | Token refresh / session persistence | Shipped (`proxy.ts`) | 🟢 Ready | 🟢 Now | — | No | Dart SDK handles it. Store the session in `flutter_secure_storage`, never `SharedPreferences`. | **1** |
 | Resolve Vendor Super Admin context | Shipped | 🟢 Ready | 🟢 Now | `get_vendor_super_admin_context()` | No | Re-assert `row.user_id == session.user.id`, as the web client does. | **3** |
-| Resolve retailer portal role (owner/reader/submitter) | Shipped | 🟡 Partial | 🟡 After backend work | **New:** `get_my_portal_context()` | No | Today the role is inferred from *which list RPC returns 42501*. Authorization decided by error handling is fragile across clients. | **1** |
-| Role-based landing / first screen | Shipped (`selectLanding`) | 🟡 Partial | 🟡 After backend work | folded into `get_my_portal_context()` | No | Two copies of the precedence rule will drift. | **1** |
+| Resolve retailer portal role (owner/reader/submitter) | Shipped | 🟢 Ready | 🟢 Now | `get_my_portal_context()` ✅ **delivered** | No | Was inferred from *which list RPC returns 42501*. Now one trusted call. The web still probes — its migration is deferred, see AUTH-05. | **1** |
+| Role-based landing / first screen | Shipped (`selectLanding`) | 🟢 Ready | 🟢 Now | `get_my_portal_context().portal_kind` ✅ **delivered** | No | Vendor-first precedence now has one definition, in SQL. `vendor` and `retailer` are resolved independently so a dual-role caller gets both. | **1** |
 | Password policy | Shipped | 🟢 Ready | 🟢 Now | — | No | Port `lib/auth/password-policy.ts` verbatim; Supabase Auth is the real authority. | **1** |
 | Account switching (multi-Retailer user) | **Not supported** | 🔴 Blocked | 🔴 Blocked on decision | TBD | TBD | `resolve_retailer_*_organization` returns `NULL` when the caller qualifies at >1 Retailer — total silent denial. **Q2.** | **2** |
 
@@ -139,11 +139,13 @@ belongs on mobile at all.
 
 ## 8. Backend work items, ordered
 
-### New Postgres RPCs (6) — read-only, no secret
+### New Postgres RPCs — read-only, no secret
+
+**1 of 6 delivered.**
 
 | # | RPC | Unblocks | Priority |
 | --- | --- | --- | --- |
-| 1 | `get_my_portal_context()` | Role-based mobile navigation | **High — phase 1** |
+| 1 | ~~`get_my_portal_context()`~~ ✅ **shipped** — migration `20260729090000` | Role-based mobile navigation | ~~High — phase 1~~ **done** |
 | 2 | `get_vendor_admin_dashboard_summary()` | V-01 | Low — phase 3 |
 | 3 | `list_vendor_organization_members()` | V-02 | Low — phase 3 |
 | 4 | `list_vendor_audit_logs(p_limit, p_before)` | V-04 + pagination | Low — phase 3 |
@@ -179,6 +181,6 @@ belongs on mobile at all.
 
 | Phase | Scope | Backend prerequisites |
 | --- | --- | --- |
-| **1 — Sales Staff MVP** | Sign in, my shops, capture + submit receipt, my history, staff invitation acceptance & activation | 1 RPC (`get_my_portal_context`) + 3 Edge Functions (`submit-receipt`, `staff-invitation-context`, `activate-staff-account`) |
+| **1 — Sales Staff MVP** | Sign in, my shops, capture + submit receipt, my history, staff invitation acceptance & activation | ~~1 RPC (`get_my_portal_context`)~~ ✅ **done** + 3 Edge Functions (`submit-receipt`, `staff-invitation-context`, `activate-staff-account`) |
 | **2 — Retailer management** | Owner/Manager portal, staff roster, invitations, assigned products, receipt image viewing, owner-invitation acceptance | 2 Edge Functions (`send-staff-invitation`, `get-receipt-image-url`) + contract fixes 1–2 + answers to Q1–Q3 |
 | **3 — Vendor administration** *(optional)* | Retailer directory & detail, onboarding, shops, products, assignments, audit logs, owner invitations | 5 RPCs + 2 Edge Functions + contract fixes 4–6 + answer to Q4 |
