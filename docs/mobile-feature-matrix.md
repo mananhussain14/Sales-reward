@@ -141,21 +141,24 @@ belongs on mobile at all.
 
 ### New Postgres RPCs — read-only, no secret
 
-**3 of 6 delivered**, plus one justified companion read.
+**4 of 6 delivered**, plus two justified companion reads.
 
 | # | RPC | Unblocks | Priority |
 | --- | --- | --- | --- |
 | 1 | ~~`get_my_portal_context()`~~ ✅ **shipped** — migration `20260729090000` | Role-based mobile navigation | ~~High — phase 1~~ **done** |
 | 2 | `get_vendor_admin_dashboard_summary()` | V-01 | Low — phase 3 |
-| 3 | `list_vendor_organization_members()` | V-02 | Low — phase 3 |
+| 3 | ~~`list_vendor_organization_members()`~~ → shipped as **`list_vendor_users()`** ✅ — migration `20260801090000` | V-02 | ~~Low — phase 3~~ **done** |
+| 3a | `get_vendor_user_detail(p_membership_id)` ✅ **shipped** — migration `20260801090000` | A Vendor user detail screen — a companion, because **no web detail route exists** | **done** |
 | 4 | `list_vendor_audit_logs(p_limit, p_before)` | V-04 + pagination | Low — phase 3 |
 | 5 | ~~`list_vendor_retailers()`~~ ✅ **shipped** — migration `20260731090000` | V-05, cross-linking | ~~Low — phase 3~~ **done** |
 | 6 | ~~`get_vendor_retailer_detail(p_relationship_id)`~~ ✅ **shipped** — migration `20260731090000` | V-06 | ~~Low — phase 3~~ **done** |
 | 6a | `list_vendor_retailer_shops(p_relationship_id)` ✅ **shipped** — migration `20260731090000` | V-06's shop list — a companion rather than an unbounded nested payload | **done** |
 
-Item 5/6 detail: `docs/mobile-vendor-retailer-reads-audit.md`. Nothing in the Vendor shell
-beyond Retailers is unblocked — items 2, 3 and 4 remain untouched, and Vendor Users, Roles
-and Products still have **no** mobile contract.
+Item 5/6 detail: `docs/mobile-vendor-retailer-reads-audit.md`. Item 3/3a detail:
+`docs/mobile-vendor-user-reads-audit.md`. Items 2 and 4 remain untouched, and **Vendor Roles,
+Vendor Products and dashboard metrics still have no mobile contract.** Vendor user *writes* —
+inviting, editing, activating, role assignment — are also out of scope, and Vendor user
+invitations have no backend at all (both invitation tables are Retailer-scoped).
 
 ### New Edge Functions (7)
 
@@ -188,4 +191,4 @@ and Products still have **no** mobile contract.
 | --- | --- | --- |
 | **1 — Sales Staff MVP** | Sign in, my shops, capture + submit receipt, my history, staff invitation acceptance & activation | ~~1 RPC (`get_my_portal_context`)~~ ✅ **done** + 3 Edge Functions (`submit-receipt`, `staff-invitation-context`, `activate-staff-account`) |
 | **2 — Retailer management** | Owner/Manager portal, staff roster, invitations, assigned products, receipt image viewing, owner-invitation acceptance | 2 Edge Functions (`send-staff-invitation`, `get-receipt-image-url`) + contract fixes 1–2 + answers to Q1–Q3 |
-| **3 — Vendor administration** *(optional)* | Retailer directory & detail, onboarding, shops, products, assignments, audit logs, owner invitations | ~~5 RPCs~~ **3 RPCs remaining** (dashboard summary, members, audit logs) — the Retailer directory and detail reads are ✅ **shipped** in `20260731090000` — + 2 Edge Functions + contract fixes 4–5 + answer to Q4 |
+| **3 — Vendor administration** *(optional)* | Users directory & detail, Retailer directory & detail, onboarding, shops, products, assignments, audit logs, owner invitations | ~~5 RPCs~~ **2 RPCs remaining** (dashboard summary, audit logs) — the Retailer directory and detail reads are ✅ **shipped** in `20260731090000`, the Users list and detail reads in `20260801090000` — + 2 Edge Functions + contract fixes 4–5 + answer to Q4 |
