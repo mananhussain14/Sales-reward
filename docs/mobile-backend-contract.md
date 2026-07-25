@@ -8,11 +8,12 @@ it was first written:
 | `20260729090000_shared_portal_context.sql` | `public.get_my_portal_context()` | **AUTH-05** |
 | `20260730090000_sales_staff_receipt_product_and_submission_reads.sql` | `public.list_my_receipt_products()`, `public.get_my_receipt_submission(uuid)` | `docs/mobile-receipt-submission-audit.md` |
 | `20260731090000_mobile_vendor_retailer_reads.sql` | `public.list_vendor_retailers()`, `public.get_vendor_retailer_detail(uuid)`, `public.list_vendor_retailer_shops(uuid)`, and the internal `public.vendor_retailer_owner_state(uuid)` | **V-05**, **V-06**, and `docs/mobile-vendor-retailer-reads-audit.md` |
+| `20260801090000_mobile_vendor_user_reads.sql` | `public.list_vendor_users()`, `public.get_vendor_user_detail(uuid)` | **V-02**, and `docs/mobile-vendor-user-reads-audit.md` |
 
 Everything else below still describes the schema as audited: no other migration, RPC, RLS
 policy, grant, Storage policy, environment variable, or application file was created or
 changed. In particular **no existing function was edited, dropped, or replaced by any of
-the three**, and no web page changed behaviour.
+the four**, and no web page changed behaviour.
 
 **Purpose.** Establish which parts of the existing SalesReward backend can be shared, as-is,
 between the current Next.js web application and a future Flutter mobile application against
@@ -433,9 +434,17 @@ neither is behaviour-preserving, so they belong in their own reviewable change.
 | Storage bucket | — |
 | Idempotency | Read-only |
 | Flutter direct? | **Yes**, but it would duplicate a four-query client-side join |
-| Classification | **B** → recommend **C** |
-| Backend change | **Recommended:** `public.list_vendor_organization_members()`. The join is business shape, not presentation, and duplicating it in Dart is exactly the drift risk this audit exists to prevent. |
-| Tests | — |
+| Classification | **B** → **C, delivered** |
+| Backend change | **DONE.** `public.list_vendor_users()` was added in migration `20260801090000_mobile_vendor_user_reads.sql` — the name supersedes the `list_vendor_organization_members()` recommendation so that the pair below reads as one feature. Zero arguments; `authenticated`; requires **both** `ORGANIZATION_MEMBERS_READ` **and** `RBAC_READ`. Returns `(membership_id, display_name, profile_status, membership_status, membership_created_at, joined_at, role_names text[])`, ordered by `display_name, membership_id`. Roles come from a correlated `array_agg` filtered to **ACTIVE role definitions**, so a multi-role user is **one row** and no `DISTINCT` is needed; a user with no role gets an **empty array**, never `NULL` and never a default. One round trip instead of five. Unauthorized → `42501`; the caller's own row is always present, so the list is never truly empty (a Vendor with one administrator returns exactly one row). No email, `auth.users` id, role code, permission row, or invitation field is returned. The multi-query TypeScript assembly above is still what the *web* does — the web migration is deliberately deferred.<br><br>**Companion:** `public.get_vendor_user_detail(p_membership_id uuid)`, same grant and same permissions, returns the list columns **plus `deactivated_at`** for one user. It has **no web counterpart** — `app/(admin)/users/` has no detail route — so it is specified rather than translated. A foreign, Retailer-owned, unknown or `null` membership id returns **zero rows**, never a distinguishable refusal. The selector is the `organization_members` row id and never a profile or auth user id: a membership names one person *in one organization*, so tenant scoping is a predicate on the same row. |
+| Tests | pgTAP `supabase/tests/database/vendor_user_reads_test.sql` (106); static `lib/members/vendor-user-reads-contract.test.ts` (34) |
+
+> **There are no Vendor user invitations.** Both invitation tables in the schema are
+> Retailer-scoped by trigger (`retailer_invitations`, `retailer_staff_invitations`), so
+> nothing invites a user into a VENDOR organization. A Vendor user's "invited" state is
+> `organization_members.status = 'INVITED'` / `profiles.status = 'INVITED'` — ordinary column
+> data on rows this list already returns. There is therefore no combined typed list, no
+> second id address space, no invitation-detail companion, and no invitation token or hash
+> that could leak. See `docs/mobile-vendor-user-reads-audit.md` § 3.
 
 ---
 
@@ -1166,19 +1175,21 @@ uses a deep link + `flutter_secure_storage`. Tests:
 | --- | --- | --- |
 | `get_my_portal_context()` | AUTH-04's three-probe sequence | Pure authorization read; no secret involved |
 | `get_vendor_admin_dashboard_summary()` | V-01's four counts | Pure aggregate |
-| `list_vendor_organization_members()` | V-02's four-query join | Pure join |
+| ~~`list_vendor_organization_members()`~~ → shipped as **`list_vendor_users()`** ✅ — `20260801090000` | V-02's four-query join | Pure join |
 | `list_vendor_audit_logs(p_limit, p_before)` | V-04 | Pure read; adds pagination mobile needs |
 | ~~`list_vendor_retailers()`~~ ✅ **shipped** — `20260731090000` | V-05 | Pure aggregate |
 | ~~`get_vendor_retailer_detail(p_relationship_id)`~~ ✅ **shipped** — `20260731090000` | V-06's three reads | Pure read, already-proven ownership pattern |
 | `list_vendor_retailer_shops(p_relationship_id)` ✅ **shipped** — `20260731090000` | V-06's shop list | Justified companion: a shop list is unbounded and must not be nested in a detail payload |
+| `get_vendor_user_detail(p_membership_id)` ✅ **shipped** — `20260801090000` | A Vendor user detail screen | Justified companion: **no web counterpart exists**, so it is specified rather than translated |
 
 All are read-only, need no secret, and are enforceable by the existing resolvers. Putting
 them in SQL means **one definition for both clients** — which is the whole point.
 
-**Three of the six are delivered** (`get_my_portal_context`, `list_vendor_retailers`,
-`get_vendor_retailer_detail`), plus the one companion read above. None is consumed by the
-web yet: each shipped RPC is additive, and migrating a web page to it is a separate change
-with its own review.
+**Four of the six are delivered** (`get_my_portal_context`, `list_vendor_retailers`,
+`get_vendor_retailer_detail`, `list_vendor_users`), plus the two companion reads above. None
+is consumed by the web yet: each shipped RPC is additive, and migrating a web page to it is a
+separate change with its own review. **Two remain outstanding:**
+`get_vendor_admin_dashboard_summary()` and `list_vendor_audit_logs(…)`.
 
 ### 4.2 Must become a Supabase Edge Function
 
@@ -1294,6 +1305,13 @@ without a stable id. **Recommend:** add `shop_id`.
 `list_vendor_retailer_shops()` (`20260731090000`) returns `shop_id` from the start, so the
 Vendor shop list does not repeat the mistake — but the Retailer Owner portal function is
 unchanged and still returns none.
+
+**The same defect existed on the web Vendor Users list, and is closed for mobile.**
+`lib/members/vendor-organization-members.ts` returns rows carrying **no id at all** — every
+membership, profile and role id is used to join on the server and then dropped, and
+`app/(admin)/users/page.tsx` keys its rows by array index as a result. `list_vendor_users()`
+(`20260801090000`) returns `membership_id`, which is both the widget key and the detail
+selector. The web page is unchanged.
 
 ### 6.4 Errors discriminated by English message text
 
@@ -1411,7 +1429,7 @@ release, because § 6.1 shows this schema has already made three breaking functi
 | --- | --- | --- |
 | **A** — existing authenticated RPC, callable as-is | 26 | ~60 % |
 | **B** — existing RLS-protected table access | 5 (all also candidates for C) | ~12 % |
-| **C** — new shared RPC recommended | 6 — **3 delivered** (`get_my_portal_context`, `list_vendor_retailers`, `get_vendor_retailer_detail`), 3 outstanding | ~14 % |
+| **C** — new shared RPC recommended | 6 — **4 delivered** (`get_my_portal_context`, `list_vendor_retailers`, `get_vendor_retailer_detail`, `list_vendor_users`), 2 outstanding | ~14 % |
 | **D** — Edge Function required | 7 | ~16 % |
 | **E** — web-only UI to recreate | 7 surfaces | — |
 | **F** — needs a product decision | 9 questions | — |
