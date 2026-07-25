@@ -729,9 +729,34 @@ eligibility, and only then dispatches.
 | Storage bucket | — |
 | Idempotency | Read-only |
 | Flutter direct? | **Yes** |
-| Classification | **A** |
-| Backend change | None. `normalizeVendorProducts` is defensive shape validation, easily ported. |
-| Tests | `lib/products/product-normalization.test.ts` (20), `lib/products/product-source-safety.test.ts` (20) |
+| Classification | **A** — **reused verbatim** |
+| Backend change | **None, deliberately.** This is the one Vendor list in the schema that was already doing the right thing: zero arguments, Vendor derived from `auth.uid()`, the assignment count aggregated in SQL (a correlated `count(*)`, not transferred rows), no identity or tenant internals, `authenticated` only. The `20260803090000` milestone **reuses it unchanged** rather than adding a second catalogue read, which would be a second definition of "this Vendor's products". `normalizeVendorProducts` is defensive shape validation, easily ported. Its `active_assignment_count` semantics are now depended on by `get_vendor_product_detail()` and are asserted equal to it. |
+| Tests | `lib/products/product-normalization.test.ts` (20), `lib/products/product-source-safety.test.ts` (20); pgTAP `supabase/tests/database/vendor_product_reads_test.sql` (167) |
+
+---
+
+#### V-12a — Vendor product detail  *(new)*
+
+| Field | Value |
+| --- | --- |
+| Feature | One product: identity, identifiers, status and both assignment counts |
+| Role | Vendor Super Admin |
+| Permission | `PRODUCTS_READ` |
+| Web route | `/products/[productId]` |
+| Server Action | *(none — the web has no detail read; see below)* |
+| New RPC | `public.get_vendor_product_detail(p_product_id uuid)` — `authenticated` |
+| Inputs | `p_product_id` (uuid) — an address, never authorization |
+| Backend-resolved | Vendor org id; the product is matched on `(id, vendor_organization_id)` |
+| Returns | `(product_id, product_code, barcode, product_name, brand, description, status, assignment_count, active_assignment_count, created_at, updated_at)` |
+| Errors | `42501` for an unauthorized caller. **Zero rows** — never an error — for an unknown, foreign or null product id |
+| RLS & authorization | Context → `PRODUCTS_READ`; both product tables remain default-deny with zero policies |
+| Tables | `vendor_products`, `vendor_product_retailer_assignments` |
+| Storage bucket | — (**no product image exists anywhere** — no column, no bucket, no rendering) |
+| Idempotency | Read-only, `STABLE` |
+| Flutter direct? | **Yes** |
+| Classification | **C, delivered** |
+| Backend change | **DONE.** Added in `20260803090000_mobile_vendor_product_reads.sql`. The gap it closes: the web detail page has **no detail read at all** — it calls `list_vendor_products()` and then finds the row with `Array.find()` in TypeScript, so opening one product transfers the whole catalogue. The column set is the V-12 list set **plus `assignment_count`** and nothing else, byte-identical in name and type (`bigint` both sides), so one Flutter model deserializes both. `assignment_count` counts **every** assignment row, `active_assignment_count` only the `ACTIVE` ones — reproducing V-12's number predicate-for-predicate. Both come from **one** `LEFT JOIN LATERAL`, so the detail is one round trip and one row. |
+| Tests | pgTAP `supabase/tests/database/vendor_product_reads_test.sql` (167); static `lib/products/vendor-product-reads-contract.test.ts` (40) |
 
 ---
 
@@ -777,12 +802,45 @@ Audits `PRODUCT_ACTIVATED` / `PRODUCT_DEACTIVATED`. **Classification: A.**
 
 ---
 
-#### V-16 — List a product's Retailer assignments
+#### V-16 — List a product's Retailer assignments (the assign/withdraw **editor** matrix)
 
 RPC `public.list_vendor_product_retailer_assignments(uuid)`, `authenticated`, permission
 `PRODUCT_RETAILER_ASSIGN`. Returns **every** Retailer the Vendor manages with a LEFT JOIN to
 the assignment — so an unassigned Retailer appears with `assignment_status = null`. Web route
-`/products/[productId]`. **Classification: A.**
+`/products/[productId]`. **Classification: A.** **Unchanged by `20260803090000`** — the web
+matrix depends on exactly this behaviour, including its `42501` for a foreign product id and
+its `retailer_organization_id`-only addressing.
+
+It is **not** a read contract, for three reasons the `20260803090000` audit proved: it demands
+the permission to *change* assignments in order to read them; it answers "which Retailers
+could hold this product" rather than "which hold it"; and it returns no relationship id, so it
+cannot cross-link to the Retailer screens (§ 6.8). See V-16a.
+
+---
+
+#### V-16a — A product's assigned Retailers (read-only)  *(new)*
+
+| Field | Value |
+| --- | --- |
+| Feature | The Retailers one product is actually assigned to, with their statuses |
+| Role | Vendor Super Admin |
+| Permission | `PRODUCTS_READ` **and** `RETAILERS_READ` |
+| Web route | *(none — mobile-first; the web uses the V-16 editor matrix)* |
+| New RPC | `public.list_vendor_product_assigned_retailers(p_product_id uuid)` — `authenticated` |
+| Inputs | `p_product_id` (uuid) — the **same** selector V-12a takes, so the two cannot drift into two address spaces |
+| Backend-resolved | Vendor org id; ownership proved once against the derived Vendor |
+| Returns | `(relationship_id, retailer_organization_id, retailer_name, retailer_status, relationship_status, assignment_status, assigned_at, assignment_updated_at)`, ordered by `retailer_name, retailer_organization_id` |
+| Errors | `42501` for an unauthorized caller. **Zero rows** for an unknown, foreign or null product — identical to a genuinely unassigned product |
+| RLS & authorization | Context → both permissions; the relationship is matched on the derived Vendor |
+| Tables | `vendor_product_retailer_assignments`, `organizations`, `vendor_retailers` |
+| Storage bucket | — |
+| Idempotency | Read-only, `STABLE` |
+| Flutter direct? | **Yes** |
+| Classification | **C, delivered** |
+| Backend change | **DONE.** Added in `20260803090000`. Driven **from the assignment table**, so it returns one row per *existing* assignment: a never-assigned Retailer is **absent** rather than a null-status row, and `assignment_status` is never null. Withdrawn (`INACTIVE`) assignments **are** returned and marked — withdrawal never deletes. Its row count **equals** V-12a's `assignment_count` by construction (pgTAP-asserted). **`relationship_id` closes § 6.8 for this surface**: it is the same `vendor_retailers.id` that `list_vendor_retailers()` / `get_vendor_retailer_detail()` use, so an assignment row opens the shipped Vendor Retailer detail screen with no second lookup. It is **nullable** (the relationship join is `LEFT`, so a missing relationship surfaces as a null rather than as a silently shorter list that would contradict the count). The permission requirement is **split**: this read returns Retailer identity and therefore also needs `RETAILERS_READ`; V-12a returns only counts and does not. |
+| Tests | pgTAP `supabase/tests/database/vendor_product_reads_test.sql` (167); static `lib/products/vendor-product-reads-contract.test.ts` (40) |
+
+Full audit: `docs/mobile-vendor-product-reads-audit.md`.
 
 ---
 
@@ -1397,6 +1455,16 @@ contract so Dart wrappers are written the same way.
   accepts one, because `vendor_retailers.id` is the narrower selector (it names one Vendor's
   view of one Retailer, so a foreign value matches nothing). The naming inconsistency in the
   first bullet is unchanged.
+  ✅ **Closed for the Product surface too.**
+  `list_vendor_product_assigned_retailers()` (`20260803090000`) returns `relationship_id`
+  alongside `retailer_organization_id`, so a Flutter *product* screen can now open the shipped
+  Vendor Retailer detail screen directly. Same direction rule: `relationship_id` is an output,
+  never an input — both new product reads take only `p_product_id`. It is **nullable**, because
+  the relationship join is `LEFT` so that no assignment row can be dropped from a list whose
+  length must equal `get_vendor_product_detail().assignment_count`; treat a null as "not
+  cross-linkable", not as an error. The **old** `list_vendor_product_retailer_assignments()` is
+  unchanged and still returns no relationship id — it is the assign/withdraw editor matrix and
+  the web depends on it as it is.
 
 ### 6.9 `expire_stale_retailer_invitations` is a hidden write inside a read-ish path
 
@@ -1463,7 +1531,7 @@ release, because § 6.1 shows this schema has already made three breaking functi
 | --- | --- | --- |
 | **A** — existing authenticated RPC, callable as-is | 26 | ~60 % |
 | **B** — existing RLS-protected table access | 4 (all also candidates for C; V-03 has since moved to C) | ~10 % |
-| **C** — new shared RPC recommended | 7 — **5 delivered** (`get_my_portal_context`, `list_vendor_retailers`, `get_vendor_retailer_detail`, `list_vendor_users`, `list_vendor_roles`), 2 outstanding | ~16 % |
+| **C** — new shared RPC recommended | 7 — **6 delivered** (`get_my_portal_context`, `list_vendor_retailers`, `get_vendor_retailer_detail`, `list_vendor_users`, `list_vendor_roles`, `get_vendor_product_detail` + `list_vendor_product_assigned_retailers`), 1 outstanding (Vendor dashboard summary; Vendor audit logs remain unstarted) | ~16 % |
 | **D** — Edge Function required | 7 | ~16 % |
 | **E** — web-only UI to recreate | 7 surfaces | — |
 | **F** — needs a product decision | 9 questions | — |
