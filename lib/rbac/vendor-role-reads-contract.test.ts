@@ -14,7 +14,7 @@
  * properties that a careless later edit could silently break.
  *
  * They do NOT execute the functions. The BEHAVIOURAL suite is
- * supabase/tests/database/vendor_role_reads_test.sql — pgTAP, 153 assertions, covering the
+ * supabase/tests/database/vendor_role_reads_test.sql — pgTAP, 164 assertions, covering the
  * global-catalogue schema facts the contract rests on, every role denial, inactive callers,
  * status accuracy, permission-count and member-count semantics, tenant isolation of the
  * member count in both directions, duplicate-free aggregation, stable ordering, the

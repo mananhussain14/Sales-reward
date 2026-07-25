@@ -597,6 +597,10 @@ select ok(
       and column_name in ('organization_id', 'vendor_organization_id', 'tenant_id')),
   'the role and permission catalogue carries NO organization scope — it is global, and this contract does not pretend otherwise');
 
+-- AN INACTIVE ASSIGNED PERMISSION IS UNREPRESENTABLE, NOT MERELY UNSEEDED. Both halves are
+-- asserted: the definition table has no status, and neither does the assignment table. If
+-- either ever gains one, this contract must grow a permission_status column and an
+-- active_permission_count, and these two assertions are what force that conversation.
 select ok(
   not exists (
     select 1 from information_schema.columns
@@ -604,6 +608,36 @@ select ok(
       and table_name = 'permissions'
       and column_name = 'status'),
   'public.permissions has NO status column — there is no active/inactive permission distinction to report');
+
+select is(
+  (select array_agg(c.column_name::text order by c.column_name)
+   from information_schema.columns c
+   where c.table_schema = 'public' and c.table_name = 'permissions'),
+  array['code', 'created_at', 'description', 'id', 'module', 'name', 'updated_at'],
+  'public.permissions has exactly seven columns, and a status is not among them');
+
+select is(
+  (select array_agg(c.column_name::text order by c.column_name)
+   from information_schema.columns c
+   where c.table_schema = 'public' and c.table_name = 'role_permissions'),
+  array['created_at', 'permission_id', 'role_id'],
+  'public.role_permissions has exactly three columns — an ASSIGNMENT cannot carry a status either');
+
+-- THE EFFECTIVENESS GATE IS THE ROLE'S STATUS, AND NOTHING ELSE ABOUT A PERMISSION. Asserted
+-- against the deployed helper's own source, because this is the fact the whole
+-- permission-status question turns on: has_organization_permission() cannot filter on a
+-- permission status, since there is no column to filter on. It filters on r.status instead.
+select ok(
+  (select p.prosrc from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public' and p.proname = 'has_organization_permission')
+    like '%r.status = ''ACTIVE''%',
+  'has_organization_permission() gates on the ROLE status');
+
+select ok(
+  (select p.prosrc from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public' and p.proname = 'has_organization_permission')
+    not like '%perm.status%',
+  'and carries NO permission-status predicate — there is no such column to predicate on');
 
 select ok(
   not exists (
@@ -1135,6 +1169,63 @@ select ok(
 select ok(
   not exists (select 1 from public.list_vendor_users() u where 'Legacy Vendor Role' = any (u.role_names)),
   'while list_vendor_users() still hides that inactive DEFINITION from the holder''s role names — the documented, deliberate difference');
+
+-- ----------------------------------------------------------------------------
+-- AN INACTIVE ROLE'S MAPPED PERMISSIONS ARE LISTED BUT AUTHORIZE NOTHING
+-- ----------------------------------------------------------------------------
+-- This is the substance of the permission-status question, and it is a fact about ROLE
+-- status rather than permission status (Section B proves a permission has no status to
+-- have). LEGACY_VENDOR_ROLE is INACTIVE and Section J mapped FIXTURE_SCOPED_READ to it; Fay
+-- holds it through an ACTIVE membership of an ACTIVE profile in Vendor A. If role status
+-- were NOT the gate, she would hold that permission.
+select pg_temp.act_as(pg_temp.fx('fay'));
+
+select is(
+  public.has_organization_permission(pg_temp.fx('vendor_a'), 'FIXTURE_SCOPED_READ'),
+  false,
+  'a permission mapped to an INACTIVE role authorizes NOTHING, even for a member in good standing who holds that role');
+
+-- The same person, the same membership, the same mapping — only the ROLE's status changes.
+-- That is what proves role status is the effectiveness gate and nothing about the permission
+-- itself is.
+update public.roles set status = 'ACTIVE' where code = 'LEGACY_VENDOR_ROLE';
+
+select is(
+  public.has_organization_permission(pg_temp.fx('vendor_a'), 'FIXTURE_SCOPED_READ'),
+  true,
+  'activating the ROLE makes the very same mapped permission effective — nothing about the permission changed');
+
+update public.roles set status = 'INACTIVE' where code = 'LEGACY_VENDOR_ROLE';
+
+select is(
+  public.has_organization_permission(pg_temp.fx('vendor_a'), 'FIXTURE_SCOPED_READ'),
+  false,
+  'and deactivating it again withdraws the permission');
+
+-- Meanwhile the contract keeps LISTING and COUNTING that permission, which is correct rather
+-- than misleading: this operation answers "what is mapped to this role", and role_status —
+-- returned by both other reads — is the field that says whether the role is live. The web
+-- renders exactly this combination today. A client that hid these rows would make a retired
+-- role look permission-less, which is the opposite of what an administrator opened the
+-- screen to learn.
+select pg_temp.act_as(pg_temp.fx('ada'));
+
+select is(pg_temp.permission_names(pg_temp.role_id('LEGACY_VENDOR_ROLE')),
+  array['Fixture Scoped Read'],
+  'the INACTIVE role''s mapped permission is still LISTED — the operation reports mappings, not effective grants');
+
+select is(pg_temp.list_permission_count('Legacy Vendor Role'), 1,
+  'and is still COUNTED, so permission_count and the companion cannot disagree for an inactive role either');
+
+select is(pg_temp.list_status('Legacy Vendor Role'), 'INACTIVE',
+  'while role_status carries the fact that makes both of the above truthful — a client must render it alongside the permission list');
+
+-- The contract must expose NO other status, because there is no other status to expose.
+select is(
+  (select count(*) from unnest(pg_temp.table_columns('list_vendor_role_permissions')) c
+   where c ~ 'status'),
+  0::bigint,
+  'and the permission rows carry no status column of their own — an inactive assigned permission is unrepresentable, not merely unseeded');
 
 
 -- ============================================================================

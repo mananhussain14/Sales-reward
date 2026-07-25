@@ -471,7 +471,7 @@ neither is behaviour-preserving, so they belong in their own reviewable change.
 | Flutter direct? | **Yes**, but it would duplicate a three-query client-side join and would receive **no id** |
 | Classification | ~~**B**~~ → **C, delivered** |
 | Backend change | **DONE.** `public.list_vendor_roles()` was added in migration `20260802090000_mobile_vendor_role_reads.sql` — the name supersedes the `list_vendor_rbac_catalog()` recommendation, which was scoped as "optional, low priority". Zero arguments; `authenticated`; requires **both** `RBAC_READ` **and** `ORGANIZATION_MEMBERS_READ`. Returns `(role_id, role_name, role_description, role_status, role_created_at, permission_count, assigned_member_count)`, ordered by `role_name, role_id`. Both counts are **scalar aggregates**, so a role with twelve permissions or forty holders is still **one row** and no `DISTINCT` is needed; both are `0` rather than `NULL` when empty. Four round trips become one. **No role status filter** — an `INACTIVE` definition is listed and marked, exactly as the web does not hide it. Unauthorized → `42501`. No role code, permission row, permission code, module, organization id, or member personal field is returned. The multi-query TypeScript assembly above is still what the *web* does — the web migration is deliberately deferred.<br><br>**Companions:** `public.get_vendor_role_detail(p_role_id uuid)`, same grant and permissions, returns the **identical column set** for one role (`public.roles` has nothing further to show: its remaining columns are `code`, refused, and `updated_at`, which the seed upsert rewrites on every run). It has **no web counterpart** — `app/(admin)/roles/` has no detail route, and there is no role write surface anywhere in the product. And `public.list_vendor_role_permissions(p_role_id uuid)`, which requires **only `RBAC_READ`** because it reads no membership table, returning `(permission_name, permission_description)` ordered by name. An unknown, foreign-table or `null` role id returns **zero rows / an empty list**, indistinguishable from a real role that grants nothing — the detail read is the authoritative existence check. |
-| Tests | pgTAP `supabase/tests/database/vendor_role_reads_test.sql` (153); static `lib/rbac/vendor-role-reads-contract.test.ts` (36) |
+| Tests | pgTAP `supabase/tests/database/vendor_role_reads_test.sql` (164); static `lib/rbac/vendor-role-reads-contract.test.ts` (36) |
 
 > **The role catalogue is GLOBAL, and this contract does not pretend otherwise.**
 > `roles`, `permissions` and `role_permissions` carry **no `organization_id`**, so every
@@ -483,6 +483,15 @@ neither is behaviour-preserving, so they belong in their own reviewable change.
 > system/custom kind** (no such column), **no permission status** and therefore **no
 > `active_permission_count`**, and **no permission code or module** in the payload. See
 > `docs/mobile-vendor-role-reads-audit.md` §§ 1, 8, 9.
+>
+> **On permission status specifically:** an inactive assigned permission is
+> **unrepresentable** — neither `permissions` nor `role_permissions` has a status column, and
+> no migration adds one. What *can* make a mapped permission ineffective is the **role's**
+> status: `has_organization_permission()` gates on `r.status = 'ACTIVE'` and carries no
+> permission-status predicate, so an `INACTIVE` role grants nothing however many permissions
+> remain mapped to it. `list_vendor_role_permissions()` still lists those mappings, exactly as
+> `/roles` does; `role_status` is the field that makes the list truthful, and a client must
+> render it alongside. Audit § 8.1.
 
 ---
 

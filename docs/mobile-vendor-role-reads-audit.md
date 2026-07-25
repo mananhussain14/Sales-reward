@@ -158,7 +158,7 @@ narrowed to one role, and nothing more.
 | 13 | How does it decide a permission is assigned? | A row in `role_permissions`, joined in TypeScript. |
 | 14 | How does it count members per role? | **It does not.** No per-role member count exists anywhere in the web. (The dashboard counts *active roles* and *all permissions* globally — different questions.) |
 | 15 | Are inactive role definitions hidden, shown or marked? | **Shown and marked**, deliberately: "a catalogue that hid INACTIVE definitions would misrepresent what is stored". |
-| 16 | Are inactive permission definitions hidden, shown or marked? | Not applicable — permissions have no status. |
+| 16 | Are inactive permission definitions hidden, shown or marked? | Not applicable — permissions have no status. An inactive assigned permission is **unrepresentable**, not merely unseeded. See § 8.1. |
 | 17 | Are roles with no permissions permitted? | **Yes.** `CLAIM_REVIEWER` and `FINANCE_ADMIN` are seeded exactly that way, and the page renders "No permissions assigned". |
 | 18 | Are users with multiple roles counted once per role? | No count exists in the web. The new count is **once per role**, set-wise — see § 9. |
 | 19 | Can one role be assigned across multiple organizations? | **Yes** — the same global definition is assignable in any organization. `VENDOR_SUPER_ADMIN` is held in every Vendor. |
@@ -320,10 +320,66 @@ permission not mapped to the selected role. The whole-catalogue permission list 
 page renders in its second section is **not reachable** through this operation, which answers
 only "what does *this* role grant".
 
-**There is no permission status**, so there is no "inactive permission" question to answer:
-none may be excluded, none may be marked, and there is **no `active_permission_count`** — it
-would be a field whose value always equals `permission_count`, which is a promise about a
-distinction the schema does not make.
+### 8.1 Permission status: an inactive assigned permission is **unrepresentable**
+
+This is the question most likely to be asked of this contract, so it is answered from the
+schema rather than from the seeds.
+
+| # | Question | Answer |
+| --- | --- | --- |
+| 1 | Can an INACTIVE permission remain assigned through `role_permissions`? | **No — it cannot exist.** Neither `permissions` nor `role_permissions` has a status column, and no migration adds one. |
+| 2 | Does `has_organization_permission()` ignore INACTIVE permissions? | **The question does not arise.** It carries no permission-status predicate, because there is no column. It gates on `r.status = 'ACTIVE'` — the **role's** status. |
+| 3 | Does the web Roles page include INACTIVE assigned permissions? | Not applicable. It selects `id, name, description` with no status filter, and there is no status to filter. It **does** render an `INACTIVE` role's full permission list beside its status badge. |
+| 4 | Does `list_vendor_role_permissions()` include or exclude them? | Neither — there are none. It returns **every mapping** for the role, matching the web. |
+| 5 | Does `permission_count` include or exclude them? | Same: it counts every mapping, and equals the companion's row count for every role. |
+| 6 | Can the contract distinguish an inactive assigned permission from an active effective one? | **There is no such distinction to draw.** The distinction that *is* real — effective vs. not — is carried by **`role_status`**, returned by the list and the detail reads. |
+| 7 | Would Flutter display an inactive permission as active? | **No inactive permission can be displayed, because none can exist.** The one way a client could mislead is by rendering an `INACTIVE` role's permission list *without* `role_status`; § 16 makes rendering it mandatory, and the migration and pgTAP § K state and prove why. |
+
+| Table | Columns | Status column? |
+| --- | --- | --- |
+| `public.permissions` | `id`, `code`, `name`, `description`, `module`, `created_at`, `updated_at` | **No** |
+| `public.role_permissions` | `role_id`, `permission_id`, `created_at` | **No** |
+
+No migration in this repository ever adds one — `grep` finds exactly one `alter table
+public.permissions` in the whole history and it is `enable row level security`. An
+`INSERT … (…, status)` against either table is a hard error:
+
+```
+ERROR: column "status" of relation "permissions" does not exist
+ERROR: column "status" of relation "role_permissions" does not exist
+```
+
+So an inactive assigned permission **cannot exist**. It is not merely absent from the current
+catalogue; there is nowhere to record it. Returning a `permission_status` would mean returning
+a constant, and an `active_permission_count` would be a second name for `permission_count`.
+
+**What CAN make a mapped permission ineffective is the ROLE's status.**
+`public.has_organization_permission()` (`20260716131104`) joins
+`role_permissions → permissions`, filters on `perm.code`, on the profile / membership /
+organization statuses, and on **`r.status = 'ACTIVE'`**. There is no permission-status
+predicate in it, because there is no column to predicate on. **An `INACTIVE` role therefore
+grants nothing, however many permissions remain mapped to it.**
+
+`list_vendor_role_permissions()` **still lists those mappings**, and that is correct rather
+than misleading:
+
+- it answers *"what is mapped to this role"*, which is exactly what an administrator needs
+  before retiring a definition further;
+- it is what `app/(admin)/roles/page.tsx` shows today — an `INACTIVE` role's full permission
+  list beside its status badge;
+- filtering them out would make a retired role look permission-less, hide the very state the
+  screen exists to explain, and break the `permission_count` ↔ companion invariant.
+
+**The fact that makes the list truthful is `role_status`**, returned by both
+`list_vendor_roles()` and `get_vendor_role_detail()`. A client **must** render the role's
+status alongside the permission list — which is one more reason the documented Flutter
+sequence (§ 16) calls the detail read.
+
+pgTAP proves the whole chain: § B asserts both tables' exact column sets and that the helper
+carries no permission-status predicate but does gate on `r.status`; § K flips a single role
+between `ACTIVE` and `INACTIVE` and watches the *same* member's *same* mapped permission
+become effective and ineffective, while the contract keeps listing and counting it and
+`role_status` keeps reporting the truth.
 
 ---
 
@@ -510,7 +566,8 @@ unchanged either way.
 | `permission_description` | Nullable, returned verbatim. |
 | system / custom kind | **Not returned.** No such column exists; it could only be invented from the name or code. |
 | `is_editable` | **Not returned.** It would advertise a write path that does not exist. |
-| `active_permission_count` | **Not returned.** Permissions have no status; it would always equal `permission_count`. |
+| `permission_status` | **Not returned.** Neither `permissions` nor `role_permissions` has a status column, so an inactive assigned permission is unrepresentable and the field would be a constant. Role status is the effectiveness gate — § 8.1. |
+| `active_permission_count` | **Not returned.** Same reason: it would always equal `permission_count`. |
 
 ---
 
@@ -608,6 +665,9 @@ Migrating `/roles` onto the shared contract is a separate, reviewable change.
 3. Detail returns one row → render the same fields as the list; render the permission rows as
    `permission_name` over `permission_description`, in the order received (already sorted —
    do not re-sort).
+   **Always render `role_status` alongside the permission list.** The list reports what is
+   *mapped* to the role; an `INACTIVE` role grants none of it (§ 8.1). Never present a
+   permission list without the role's status, and never compute effectiveness on the client.
 4. An empty permission list with a present detail row → "No permissions assigned", exactly as
    the web renders it.
 
@@ -620,7 +680,7 @@ to these operations. There is no parameter for one.
 
 | Suite | File | Assertions |
 | --- | --- | --- |
-| pgTAP (behavioural) | `supabase/tests/database/vendor_role_reads_test.sql` | **153** |
+| pgTAP (behavioural) | `supabase/tests/database/vendor_role_reads_test.sql` | **164** |
 | Static contract guards | `lib/rbac/vendor-role-reads-contract.test.ts` | **36 tests** |
 
 **pgTAP sections:** A signature / security attributes / privileges / RLS-still-enabled ·

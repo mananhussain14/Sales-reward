@@ -469,6 +469,39 @@ grant  execute on function public.get_vendor_role_detail(uuid) to authenticated;
 -- `permission.description` — one component, used for both the per-role list and the whole
 -- catalogue section.
 --
+-- ============================================================================
+-- THERE IS NO SUCH THING AS AN INACTIVE PERMISSION. ROLE STATUS IS THE GATE.
+-- ============================================================================
+-- This is the one place a reader is most likely to expect a `permission_status` column, so
+-- the reason there is none is stated here rather than left to the audit document.
+--
+--   public.permissions has SEVEN columns — id, code, name, description, module, created_at,
+--   updated_at — and NO status column. public.role_permissions has THREE — role_id,
+--   permission_id, created_at — and no status either. No migration in this repository ever
+--   adds one. An inactive assigned permission therefore cannot EXIST; it is not merely
+--   absent from the current seeds, it is unrepresentable. Returning a permission_status
+--   would mean returning a constant, and an active_permission_count would be a second name
+--   for permission_count.
+--
+--   WHAT *CAN* MAKE A MAPPED PERMISSION INEFFECTIVE IS THE ROLE'S OWN STATUS.
+--   public.has_organization_permission() (20260716131104) joins
+--   role_permissions -> permissions and filters on `perm.code`, on the profile, membership
+--   and organization statuses, and on `r.status = 'ACTIVE'`. There is no permission-status
+--   predicate in it because there is no column to predicate on. So an INACTIVE role grants
+--   NOTHING, however many permissions are still mapped to it.
+--
+--   THIS OPERATION STILL LISTS THEM, and that is correct rather than misleading. It answers
+--   "what is mapped to this role", which is exactly what an administrator needs to see
+--   before retiring a definition further — and it is what app/(admin)/roles/page.tsx shows
+--   today, rendering an INACTIVE role's full permission list beside its status badge. The
+--   fact that makes the list truthful is role_status, which list_vendor_roles() and
+--   get_vendor_role_detail() both return. A client MUST render the role's status alongside
+--   this list; the documented Flutter sequence calls the detail read for exactly that
+--   reason, and it is also the authoritative existence check. Filtering an INACTIVE role's
+--   permissions out here would make a retired role look permission-less, would hide the
+--   very state an administrator opened the screen to understand, and would break the
+--   permission_count <-> this-list invariant.
+--
 -- PERMISSION CODES ARE NOT RETURNED. The milestone rule is that a code may appear only when
 -- the existing product intentionally shows it as a user-facing catalogue value. It does
 -- not: lib/rbac/vendor-rbac-catalog.ts states in terms that `code` is "deliberately never
