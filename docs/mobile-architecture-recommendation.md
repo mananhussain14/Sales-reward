@@ -17,6 +17,11 @@ are:
   **V-02** (`docs/mobile-vendor-user-reads-audit.md`).
 - `20260802090000_mobile_vendor_role_reads.sql` — the Vendor Role list, role detail and
   role-permission reads for **V-03** (`docs/mobile-vendor-role-reads-audit.md`).
+- `20260803090000_mobile_vendor_product_reads.sql` — the Vendor Product detail and
+  assigned-Retailers reads for **V-13** (`docs/mobile-vendor-product-reads-audit.md`).
+- `20260804090000_mobile_vendor_audit_log_reads.sql` — the keyset-paginated Vendor Audit Log
+  read for **V-04** (`docs/mobile-vendor-audit-log-reads-audit.md`). List-only: the web
+  exposes no audit detail surface to share.
 
 **No RLS policy, table grant, or existing RPC was modified by any of them**, and no web page
 changed behaviour. Each is purely additive.
