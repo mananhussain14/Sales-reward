@@ -10,11 +10,13 @@ it was first written:
 | `20260731090000_mobile_vendor_retailer_reads.sql` | `public.list_vendor_retailers()`, `public.get_vendor_retailer_detail(uuid)`, `public.list_vendor_retailer_shops(uuid)`, and the internal `public.vendor_retailer_owner_state(uuid)` | **V-05**, **V-06**, and `docs/mobile-vendor-retailer-reads-audit.md` |
 | `20260801090000_mobile_vendor_user_reads.sql` | `public.list_vendor_users()`, `public.get_vendor_user_detail(uuid)` | **V-02**, and `docs/mobile-vendor-user-reads-audit.md` |
 | `20260802090000_mobile_vendor_role_reads.sql` | `public.list_vendor_roles()`, `public.get_vendor_role_detail(uuid)`, `public.list_vendor_role_permissions(uuid)` | **V-03**, and `docs/mobile-vendor-role-reads-audit.md` |
+| `20260803090000_mobile_vendor_product_reads.sql` | `public.get_vendor_product_detail(uuid)`, `public.list_vendor_product_assigned_retailers(uuid)` | **V-13**, and `docs/mobile-vendor-product-reads-audit.md` |
+| `20260804090000_mobile_vendor_audit_log_reads.sql` | `public.list_vendor_audit_logs(integer, timestamptz, uuid)` | **V-04**, and `docs/mobile-vendor-audit-log-reads-audit.md` |
 
 Everything else below still describes the schema as audited: no other migration, RPC, RLS
 policy, grant, Storage policy, environment variable, or application file was created or
 changed. In particular **no existing function was edited, dropped, or replaced by any of
-the five**, and no web page changed behaviour. No role seed, permission seed, or
+the seven**, and no web page changed behaviour. No role seed, permission seed, or
 role→permission mapping was altered by any of them either.
 
 **Purpose.** Establish which parts of the existing SalesReward backend can be shared, as-is,
@@ -502,21 +504,21 @@ neither is behaviour-preserving, so they belong in their own reviewable change.
 | Feature | Latest 100 audit records with actor names |
 | Role | Vendor Super Admin |
 | Permission | `AUDIT_LOGS_READ` |
-| Web route | `/audit-logs` |
+| Web route | `/audit-logs` (two files: `page.tsx`, `loading.tsx` — **no detail view of any kind**) |
 | Server Action | `lib/audit/vendor-audit-logs.ts` |
-| Existing table op | `audit_logs` (limit 100, desc) then `profiles` for actor names |
+| Existing table op | `audit_logs` (limit 100, desc) then `profiles` for actor names — **2 reads, batched, not N+1** |
 | Inputs | none |
 | Backend-resolved | `organizationId` |
 | Returns | `occurredAt`, `actorDisplayName`, `action`, `entityType` |
-| Errors | Fails to null |
+| Errors | Fails to null (`null` ≠ `[]`, deliberately) |
 | RLS & authorization | `audit_logs_select_authorized` — note it **excludes null-organization rows** in both branches, deliberately |
 | Tables | `audit_logs`, `profiles` |
 | Storage bucket | — |
 | Idempotency | Read-only |
-| Flutter direct? | **Yes**, at the cost of the actor-name join and the label formatting |
-| Classification | **B** → recommend **C** |
-| Backend change | **Recommended:** `public.list_vendor_audit_logs(p_limit int default 100, p_before timestamptz default null)` — mobile needs cursor pagination, which the current fixed 100-row read does not offer. |
-| Tests | — |
+| Flutter direct? | **No** — see the audit § 8.1: `SELECT *` would carry `metadata`, `entity_id`, `ip_address`, `user_agent` and `actor_profile_id` (**the auth user id**); the actor join and the tie-break would become client responsibilities. |
+| Classification | **B** → **C, shipped** |
+| Backend change | **DONE.** Added in `20260804090000_mobile_vendor_audit_log_reads.sql` as `public.list_vendor_audit_logs(p_limit integer default 50, p_before_occurred_at timestamptz default null, p_before_audit_log_id uuid default null)`. Three gaps closed: **(1) no pagination at all** — record 101 was unreachable forever, now keyset on `(created_at, id)`, both cursor parts required together; **(2) the actor join lived in TypeScript** and resolved a caller-dependent subset — now one SQL join scoped to the audit row's *own* Vendor membership, yielding `actor_type ∈ {USER, SYSTEM, UNKNOWN}` — note **`SYSTEM` means “no actor identity remains”, not “a system process acted”**: `ON DELETE SET NULL` makes a deleted user byte-identical to a genuine system event, so clients must render neutral wording such as *“System or unavailable actor”* (audit § 5.5); **(3) the affected entity was typed but never named** — now a **closed whitelist** of metadata name snapshots (`product_name` / `retailer_name` / `shop_name`), type-guarded to `jsonb_typeof = 'string'`. Action and entity codes are returned **raw** — no DB label map exists, so clients map known codes and humanize unknown ones neutrally. **List-only by decision:** the web exposes no detail surface to share, so adding one would invent a new, more sensitive capability rather than share an existing one. Limit default 50, hard max 100, out-of-range → `22023`. No index added (measured: 51 rows read to return 50, at any depth). |
+| Tests | `supabase/tests/database/vendor_audit_log_reads_test.sql` (130 pgTAP assertions), `lib/audit/vendor-audit-log-reads-contract.test.ts` (26 static tests) |
 
 ---
 
