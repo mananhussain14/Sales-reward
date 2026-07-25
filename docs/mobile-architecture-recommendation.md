@@ -15,6 +15,8 @@ are:
   reads for **V-05 / V-06** (`docs/mobile-vendor-retailer-reads-audit.md`).
 - `20260801090000_mobile_vendor_user_reads.sql` — the Vendor User list and detail reads for
   **V-02** (`docs/mobile-vendor-user-reads-audit.md`).
+- `20260802090000_mobile_vendor_role_reads.sql` — the Vendor Role list, role detail and
+  role-permission reads for **V-03** (`docs/mobile-vendor-role-reads-audit.md`).
 
 **No RLS policy, table grant, or existing RPC was modified by any of them**, and no web page
 changed behaviour. Each is purely additive.

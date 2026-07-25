@@ -9,11 +9,13 @@ it was first written:
 | `20260730090000_sales_staff_receipt_product_and_submission_reads.sql` | `public.list_my_receipt_products()`, `public.get_my_receipt_submission(uuid)` | `docs/mobile-receipt-submission-audit.md` |
 | `20260731090000_mobile_vendor_retailer_reads.sql` | `public.list_vendor_retailers()`, `public.get_vendor_retailer_detail(uuid)`, `public.list_vendor_retailer_shops(uuid)`, and the internal `public.vendor_retailer_owner_state(uuid)` | **V-05**, **V-06**, and `docs/mobile-vendor-retailer-reads-audit.md` |
 | `20260801090000_mobile_vendor_user_reads.sql` | `public.list_vendor_users()`, `public.get_vendor_user_detail(uuid)` | **V-02**, and `docs/mobile-vendor-user-reads-audit.md` |
+| `20260802090000_mobile_vendor_role_reads.sql` | `public.list_vendor_roles()`, `public.get_vendor_role_detail(uuid)`, `public.list_vendor_role_permissions(uuid)` | **V-03**, and `docs/mobile-vendor-role-reads-audit.md` |
 
 Everything else below still describes the schema as audited: no other migration, RPC, RLS
 policy, grant, Storage policy, environment variable, or application file was created or
 changed. In particular **no existing function was edited, dropped, or replaced by any of
-the four**, and no web page changed behaviour.
+the five**, and no web page changed behaviour. No role seed, permission seed, or
+role→permission mapping was altered by any of them either.
 
 **Purpose.** Establish which parts of the existing SalesReward backend can be shared, as-is,
 between the current Next.js web application and a future Flutter mobile application against
@@ -466,10 +468,30 @@ neither is behaviour-preserving, so they belong in their own reviewable change.
 | Tables | `roles`, `permissions`, `role_permissions` |
 | Storage bucket | — |
 | Idempotency | Read-only |
-| Flutter direct? | **Yes** |
-| Classification | **B** |
-| Backend change | None required. `list_vendor_rbac_catalog()` optional, low priority — the catalogue is small and static. |
-| Tests | — |
+| Flutter direct? | **Yes**, but it would duplicate a three-query client-side join and would receive **no id** |
+| Classification | ~~**B**~~ → **C, delivered** |
+| Backend change | **DONE.** `public.list_vendor_roles()` was added in migration `20260802090000_mobile_vendor_role_reads.sql` — the name supersedes the `list_vendor_rbac_catalog()` recommendation, which was scoped as "optional, low priority". Zero arguments; `authenticated`; requires **both** `RBAC_READ` **and** `ORGANIZATION_MEMBERS_READ`. Returns `(role_id, role_name, role_description, role_status, role_created_at, permission_count, assigned_member_count)`, ordered by `role_name, role_id`. Both counts are **scalar aggregates**, so a role with twelve permissions or forty holders is still **one row** and no `DISTINCT` is needed; both are `0` rather than `NULL` when empty. Four round trips become one. **No role status filter** — an `INACTIVE` definition is listed and marked, exactly as the web does not hide it. Unauthorized → `42501`. No role code, permission row, permission code, module, organization id, or member personal field is returned. The multi-query TypeScript assembly above is still what the *web* does — the web migration is deliberately deferred.<br><br>**Companions:** `public.get_vendor_role_detail(p_role_id uuid)`, same grant and permissions, returns the **identical column set** for one role (`public.roles` has nothing further to show: its remaining columns are `code`, refused, and `updated_at`, which the seed upsert rewrites on every run). It has **no web counterpart** — `app/(admin)/roles/` has no detail route, and there is no role write surface anywhere in the product. And `public.list_vendor_role_permissions(p_role_id uuid)`, which requires **only `RBAC_READ`** because it reads no membership table, returning `(permission_name, permission_description)` ordered by name. An unknown, foreign-table or `null` role id returns **zero rows / an empty list**, indistinguishable from a real role that grants nothing — the detail read is the authoritative existence check. |
+| Tests | pgTAP `supabase/tests/database/vendor_role_reads_test.sql` (164); static `lib/rbac/vendor-role-reads-contract.test.ts` (36) |
+
+> **The role catalogue is GLOBAL, and this contract does not pretend otherwise.**
+> `roles`, `permissions` and `role_permissions` carry **no `organization_id`**, so every
+> authorized Vendor reads the same six role definitions — including the three Retailer roles,
+> exactly as `/roles` shows them today. There is no Vendor-scoped subset to return and no
+> "other Vendor's role" to leak. The one tenant-scoped value is `assigned_member_count`, which
+> counts only the **calling** Vendor's own memberships (no membership-, profile- or
+> role-status filter, matching the Vendor Users directory). There is likewise **no
+> system/custom kind** (no such column), **no permission status** and therefore **no
+> `active_permission_count`**, and **no permission code or module** in the payload. See
+> `docs/mobile-vendor-role-reads-audit.md` §§ 1, 8, 9.
+>
+> **On permission status specifically:** an inactive assigned permission is
+> **unrepresentable** — neither `permissions` nor `role_permissions` has a status column, and
+> no migration adds one. What *can* make a mapped permission ineffective is the **role's**
+> status: `has_organization_permission()` gates on `r.status = 'ACTIVE'` and carries no
+> permission-status predicate, so an `INACTIVE` role grants nothing however many permissions
+> remain mapped to it. `list_vendor_role_permissions()` still lists those mappings, exactly as
+> `/roles` does; `role_status` is the field that makes the list truthful, and a client must
+> render it alongside. Audit § 8.1.
 
 ---
 
@@ -1181,15 +1203,18 @@ uses a deep link + `flutter_secure_storage`. Tests:
 | ~~`get_vendor_retailer_detail(p_relationship_id)`~~ ✅ **shipped** — `20260731090000` | V-06's three reads | Pure read, already-proven ownership pattern |
 | `list_vendor_retailer_shops(p_relationship_id)` ✅ **shipped** — `20260731090000` | V-06's shop list | Justified companion: a shop list is unbounded and must not be nested in a detail payload |
 | `get_vendor_user_detail(p_membership_id)` ✅ **shipped** — `20260801090000` | A Vendor user detail screen | Justified companion: **no web counterpart exists**, so it is specified rather than translated |
+| ~~`list_vendor_rbac_catalog()`~~ → shipped as **`list_vendor_roles()`** ✅ — `20260802090000` | V-03's three-query join | Pure join + two aggregates; the web emits no id at all |
+| `get_vendor_role_detail(p_role_id)` ✅ **shipped** — `20260802090000` | A Vendor role detail screen | Justified companion: **no web counterpart exists**, and it is the authoritative existence check for the permission list below |
+| `list_vendor_role_permissions(p_role_id)` ✅ **shipped** — `20260802090000` | V-03's per-role permission list | Justified companion: a permission is a **pair** (name, description), so it cannot be a typed `text[]`, and the catalogue grows with every module — nesting it would make the detail row unbounded |
 
 All are read-only, need no secret, and are enforceable by the existing resolvers. Putting
 them in SQL means **one definition for both clients** — which is the whole point.
 
-**Four of the six are delivered** (`get_my_portal_context`, `list_vendor_retailers`,
-`get_vendor_retailer_detail`, `list_vendor_users`), plus the two companion reads above. None
-is consumed by the web yet: each shipped RPC is additive, and migrating a web page to it is a
-separate change with its own review. **Two remain outstanding:**
-`get_vendor_admin_dashboard_summary()` and `list_vendor_audit_logs(…)`.
+**Five of the seven are delivered** (`get_my_portal_context`, `list_vendor_retailers`,
+`get_vendor_retailer_detail`, `list_vendor_users`, `list_vendor_roles`), plus the four
+companion reads above. None is consumed by the web yet: each shipped RPC is additive, and
+migrating a web page to it is a separate change with its own review. **Two remain
+outstanding:** `get_vendor_admin_dashboard_summary()` and `list_vendor_audit_logs(…)`.
 
 ### 4.2 Must become a Supabase Edge Function
 
@@ -1313,6 +1338,15 @@ membership, profile and role id is used to join on the server and then dropped, 
 (`20260801090000`) returns `membership_id`, which is both the widget key and the detail
 selector. The web page is unchanged.
 
+**And on the web Vendor Roles page, twice over — also closed for mobile.**
+`lib/rbac/vendor-rbac-catalog.ts` selects `roles.id`, `permissions.id` and both
+`role_permissions` columns purely to join in memory, then **drops every one of them**, so
+`app/(admin)/roles/page.tsx` keys *both* its role list and each permission list by array
+index (with a comment saying so). `list_vendor_roles()` (`20260802090000`) returns `role_id`,
+which is the widget key and the selector for both companion reads. Permission rows are
+deliberately still id-free — they are never navigated to, only rendered — so the fix is
+applied where a client actually needs it and nowhere else. The web page is unchanged.
+
 ### 6.4 Errors discriminated by English message text
 
 - `reserve_retailer_staff_invitation` signals a role/shop conflict only through the message
@@ -1428,8 +1462,8 @@ release, because § 6.1 shows this schema has already made three breaking functi
 | Category | Operations | Share |
 | --- | --- | --- |
 | **A** — existing authenticated RPC, callable as-is | 26 | ~60 % |
-| **B** — existing RLS-protected table access | 5 (all also candidates for C) | ~12 % |
-| **C** — new shared RPC recommended | 6 — **4 delivered** (`get_my_portal_context`, `list_vendor_retailers`, `get_vendor_retailer_detail`, `list_vendor_users`), 2 outstanding | ~14 % |
+| **B** — existing RLS-protected table access | 4 (all also candidates for C; V-03 has since moved to C) | ~10 % |
+| **C** — new shared RPC recommended | 7 — **5 delivered** (`get_my_portal_context`, `list_vendor_retailers`, `get_vendor_retailer_detail`, `list_vendor_users`, `list_vendor_roles`), 2 outstanding | ~16 % |
 | **D** — Edge Function required | 7 | ~16 % |
 | **E** — web-only UI to recreate | 7 surfaces | — |
 | **F** — needs a product decision | 9 questions | — |
