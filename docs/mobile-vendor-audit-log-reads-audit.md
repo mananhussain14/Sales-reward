@@ -56,7 +56,7 @@ it is a join *in TypeScript*.
 | --- | --- |
 | Timestamp formatting | `Intl.DateTimeFormat("en-GB", { timeZone: "UTC", … })` — fixed locale, fixed zone. |
 | Action / entity humanising | `toReadableLabel()` — a **generic** humanizer: underscores → spaces, sentence case. |
-| Actor resolution | `null → "System"`, resolved → `"First Last"`, unresolvable → `"Unknown user"`. |
+| Actor resolution | `null → "System"`, resolved → `"First Last"`, unresolvable → `"Unknown user"`. ⚠️ The web's bare *"System"* is the same overclaim § 5.5 documents — it is recorded here as existing behaviour, **not endorsed**, and is not changed by this milestone. |
 | Join | `Map<actorId, displayName>` built in memory. |
 
 The module's own comment states that `toReadableLabel()` is a temporary stand-in to be replaced
@@ -114,10 +114,10 @@ exist anywhere**; rows are inserted explicitly by trusted `SECURITY DEFINER` fun
 
 | Index | Columns |
 | --- | --- |
-| `audit_logs_org_created_idx` | `(organization_id, created_at desc)` ← **the one this contract uses** |
+| `audit_logs_org_created_idx` | `(organization_id, created_at desc)` ← **either of these can serve the read** |
+| `audit_logs_created_idx` | `(created_at desc)` ← **↑ planner's choice; see § 12** |
 | `audit_logs_actor_created_idx` | `(actor_profile_id, created_at desc)` |
 | `audit_logs_entity_idx` | `(entity_type, entity_id)` |
-| `audit_logs_created_idx` | `(created_at desc)` |
 
 ### RLS and grants (unchanged by this milestone)
 
@@ -334,9 +334,62 @@ phone. See § 11.3 for the future cross-linking note.
 
 | `actor_type` | Condition | `actor_display_name` |
 | --- | --- | --- |
-| `'USER'` | `actor_profile_id` resolves to a **member of this same Vendor organization** | `"First Last"` |
-| `'SYSTEM'` | `actor_profile_id IS NULL` — no actor was recorded | `null` |
-| `'UNKNOWN'` | present, but not a member of this Vendor | `null` |
+| `'USER'` | `actor_profile_id` resolves to a **member of this same Vendor organization** (any membership status, any profile status) | `"First Last"` |
+| `'SYSTEM'` | `actor_profile_id IS NULL` — **no actor identity remains**. See § 5.5. | `null` |
+| `'UNKNOWN'` | `actor_profile_id` is present but resolves to no membership in this Vendor | `null` |
+
+The exact expressions, from the deployed `pg_proc.prosrc`:
+
+```sql
+case when a.actor_profile_id is null then 'SYSTEM'
+     when actor.first_name    is null then 'UNKNOWN'
+     else                                  'USER'  end,
+case when actor.first_name is null then null
+     else actor.first_name || ' ' || actor.last_name end
+```
+
+### 5.4.1 Every database state, resolved — verified against the live database
+
+| # | Database state | `actor_type` | `actor_display_name` |
+| --- | --- | --- | --- |
+| 1 | Written with a null actor (genuine system event) | `SYSTEM` | `null` |
+| 2 | Actor recorded, then nulled by `ON DELETE SET NULL` | `SYSTEM` | `null` |
+| 3 | Actor is a member of the audit row's Vendor | `USER` | `"First Last"` |
+| 4 | Actor is a real profile with **no membership anywhere** | `UNKNOWN` | `null` |
+| 5 | Actor's **profile status is `SUSPENDED`** | `USER` | `"First Last"` |
+| 6 | Actor's **membership is `DEACTIVATED`** | `USER` | `"First Last"` |
+| 7 | Actor belongs to **another Vendor** | `UNKNOWN` | `null` |
+| 8 | Actor's profile/membership **deleted** | `SYSTEM` | `null` |
+| 9 | `actor_display_name` is null | ⇔ type is **not** `USER` | — |
+
+Rows **5 and 6** are deliberate: a suspended or deactivated person's past actions are exactly
+the history an operator reviews *after* suspending them. Requiring `ACTIVE` would erase an
+actor's name as a side effect of an unrelated administrative act.
+
+**`UNKNOWN` is reachable by two distinct states** — 4 and 7 — and both are covered by
+deterministic pgTAP fixtures (`F_NO_MEMBER` / `E_OTHER_VEND` shapes; suite § E).
+
+### 5.5 The one genuine ambiguity — `SYSTEM` does **not** prove a system process
+
+**The function cannot distinguish state 1 from state 2, and neither can the schema.**
+
+`public.profiles.id REFERENCES auth.users ON DELETE CASCADE`, and
+`audit_logs.actor_profile_id REFERENCES profiles ON DELETE SET NULL`. Deleting an auth user
+therefore cascades to the profile and its memberships and **nulls the audit row's actor, while
+leaving the audit row intact**.
+
+Verified directly against the local database: a row reading `USER` / `"Gone Forever"` became
+`SYSTEM` / `null` after `delete from auth.users`, and was then **byte-identical in every emitted
+actor field** to a row born with a null actor.
+
+No *application* code path deletes a profile — there is no SQL delete and no `admin.deleteUser`
+call anywhere in this repository. But the **Supabase Admin API and the Studio user list both
+expose auth-user deletion to an operator**, so this state is reachable in operation even though
+no product feature causes it. Calling it "unreachable" would be too strong.
+
+**Therefore `SYSTEM` must be read as "no actor identity remains", never as "a system process did
+this".** Client wording must be neutral — see § 11.3. The correct fix is an actor-name snapshot
+column on `audit_logs`, which is a schema change a read-only milestone must not make.
 
 **The membership scope is a privacy boundary, not an optimization.** The function is
 `SECURITY DEFINER`, so an unscoped join to `public.profiles` would bypass the `profiles` RLS
@@ -387,14 +440,17 @@ needed.
 audit-write semantics, which this read-only milestone must not do. It is recorded here so the
 Flutter screen's copy does not imply completeness it does not have.
 
-### 7.2 A deleted actor is indistinguishable from a system action
+### 7.2 A deleted actor is indistinguishable from a genuine system event
 
-`actor_profile_id` is `ON DELETE SET NULL`, so deleting a profile would make its rows read
-`SYSTEM`. **The audit found no profile-deletion path anywhere in this repository** — no SQL
-delete, no `admin.deleteUser` call, nothing — so the branch is unreachable today, and `SYSTEM`
-is the truthful reading of null. The correct fix is an **actor name snapshot column** on
-`audit_logs`, which is a schema change a read-only milestone must not make. Recorded, not
-papered over.
+**Proven, not theorised** — see § 5.5 for the verification. `SYSTEM` means *"no actor identity
+remains"*, and covers both a row born without an actor and a row whose actor was erased by
+`ON DELETE SET NULL` when an auth user was deleted. No application code path deletes a profile,
+but the Supabase Admin API and Studio both expose auth-user deletion to an operator, so the
+state is reachable in operation.
+
+**Consequence for clients:** never render `SYSTEM` as a confident *"System"*. Use neutral
+wording (§ 11.3). The correct fix is an **actor-name snapshot column** on `audit_logs` — a
+schema change a read-only milestone must not make.
 
 ### 7.3 No cross-linking from an audit row
 
@@ -590,10 +646,16 @@ were taken at different instants.
 | Field | Rule |
 | --- | --- |
 | `entity_display_name == null` | show the humanized `entity_type` alone. **Never hide the row.** |
-| `actor_type == 'SYSTEM'` | show *"System"*. Do not describe it as a person's action. |
+| `actor_type == 'SYSTEM'` | show **"System or unavailable actor"** (or an equivalent neutral phrase). **Do NOT render a bare "System"** — the value does not prove a system process acted; it means no actor identity remains, and a deleted user produces the same value. See § 5.5. |
 | `actor_type == 'UNKNOWN'` | show a neutral *"Unknown actor"*. Do **not** substitute the caller. |
+| `actor_display_name` | render verbatim; it is already the only name the caller is entitled to see. Never append an id or email — neither is returned. |
 | unknown `action_code` | humanize neutrally, **neutral styling**, still visible. |
-| any field | never drive an authorization or visibility decision from a label. |
+| any field | never drive an authorization, navigation or visibility decision from a label. |
+
+**Why the `SYSTEM` wording matters.** A bare *"System"* on an audit line is a claim about *who
+acted*. The schema cannot support that claim (§ 5.5), and an audit surface is the last place to
+state something stronger than the evidence. Neutral wording costs nothing and stays true if an
+actor-name snapshot column is ever added.
 
 ### 11.4 Filters — deliberately none, yet
 
@@ -614,23 +676,37 @@ The Vendor context is resolved **once per call** and the permission checked **on
 statically asserted (`get_vendor_super_admin_context` and `has_organization_permission` each
 appear exactly once in the body).
 
-### Measured
+### Measured — local reset, 200 000 audit rows
 
-Local reset, **200 000 audit rows across 40 Vendor organizations**, `EXPLAIN (ANALYZE)` of both
-the null-cursor page and a cursor **90 000 rows deep**:
+**The chosen index is planner-dependent, and the contract does not rely on which one wins.**
+Two shipped indexes can serve this query — `audit_logs_org_created_idx` `(organization_id,
+created_at desc)` and `audit_logs_created_idx` `(created_at desc)` — and the choice moves with
+table statistics, row width and Vendor cardinality. Both were observed; both are bounded by the
+limit. Measured at both extremes:
+
+| Shape | Cursor depth | Plan | Rows read | Filtered |
+| --- | --- | --- | --- | --- |
+| **1 Vendor** (what this product is) | **150 000 rows deep** | `Index Scan using audit_logs_created_idx` | **51** | 1 |
+| **40 Vendors** | null cursor | `Index Scan using audit_logs_created_idx` | **51** | 1 984 |
+| **40 Vendors** | deep cursor | `Index Scan using audit_logs_created_idx` | **51** | 1 984 |
 
 ```
 Limit
   -> Incremental Sort   (Sort Key: created_at DESC, id DESC; Presorted Key: created_at)
-       -> Index Scan using audit_logs_org_created_idx
-            Index Cond: (organization_id = $1 AND created_at <= $2)
+       -> Index Scan  (peak sort memory 27 kB throughout)
 ```
 
-* Both predicates are **index conditions**, not filters — `Rows Removed by Filter: 0`.
-* **51 rows read to return 50, at both depths.** Page cost is proportional to the *page*, not to
-  how deep the cursor sits. An `OFFSET` deep page would have walked 90 000 rows.
-* The Incremental Sort is the id tie-break, presorted on `created_at`, so it sorts one timestamp
-  group at a time. Peak memory 27 kB.
+**The property that matters holds in every plan observed: cost is proportional to the *page*,
+not to how deep the cursor sits.** A cursor **150 000 rows** into the history still read 51 rows.
+
+**Contrast with `OFFSET`, measured on the same data.** `OFFSET 4500 LIMIT 50` planned a Bitmap
+Heap Scan of **5 000 rows** and sorted **4 550** of them to emit 50 — and that cost grows with
+every page, while the keyset cost does not.
+
+**The worst case is bounded by (number of Vendor *organizations* × limit) index entries, never by
+history depth.** When the planner uses the `created_at`-leading index it walks past other
+Vendors' interleaved rows: ~2 000 index entries per page at 40 Vendors, ~51 at the single Vendor
+this product is built around.
 
 The `created_at <= coalesce(cursor, 'infinity')` line exists so that bound is **unconditional**
 and therefore usable as an index qual. Written as `cursor is null or created_at <= cursor`, the
@@ -638,20 +714,17 @@ planner could not use it at all and every page would walk the organization's who
 
 ### Indexes
 
-**Reused:** `audit_logs_org_created_idx` `(organization_id, created_at desc)`,
-`organization_members_unique_membership` `(organization_id, user_id)`, the `profiles` primary
-key.
+**Reused:** `audit_logs_created_idx` / `audit_logs_org_created_idx` (planner's choice),
+`organization_members_unique_membership` `(organization_id, user_id)`, the `profiles` primary key.
 
-**Added: none.** A covering `(organization_id, created_at desc, id desc)` index would remove a
-sort of a **one-element group** (every shipped writer emits one audit row per transaction), at
-the cost of a second index to maintain on every audit insert — a permanent write cost on every
-administrative action, plus storage on the largest append-only table in the schema, for no
-measured read benefit.
+**Added: none.** A covering `(organization_id, created_at desc, id desc)` index would pin the
+better plan and remove the id sort — but it buys a **bounded constant factor that is ≈1× for a
+single-Vendor product**, in exchange for a third index to maintain on every audit insert: a
+permanent write cost on every administrative action plus storage on the largest append-only
+table in the schema.
 
-*(At very low Vendor cardinality the planner may instead pick `audit_logs_created_idx` and
-filter `organization_id` afterwards — measured at 2 organizations, also 51 rows read. Both plans
-are bounded by the limit; the org-leading index is the one that keeps that true as the number of
-Vendors grows.)*
+**If this ever becomes a multi-Vendor deployment with a deep history, that index is the correct
+and purely additive answer** — and the table above is the measurement that would justify it.
 
 ---
 
@@ -704,7 +777,7 @@ RLS is not weakened anywhere; no table grant is added; `service_role` is granted
 
 | Suite | File | Assertions |
 | --- | --- | --- |
-| pgTAP (behavioural) | `supabase/tests/database/vendor_audit_log_reads_test.sql` | **113** |
+| pgTAP (behavioural) | `supabase/tests/database/vendor_audit_log_reads_test.sql` | **130** |
 | Static contract guards | `lib/audit/vendor-audit-log-reads-contract.test.ts` | **26 tests** |
 
 pgTAP sections: **A** catalogue, signature, attributes, grants and the unchanged table posture ·
@@ -712,7 +785,8 @@ pgTAP sections: **A** catalogue, signature, attributes, grants and the unchanged
 type and the name snapshot · **E** actor semantics · **F** privacy against a hostile row ·
 **G** limits, cursor validation and full traversal · **H** new events and foreign cursors ·
 **I** tenant isolation and the empty history · **J** the exact permission requirement, proved by
-removing the seeded mapping · **K** the read writes nothing.
+removing the seeded mapping · **K** the read writes nothing · **L** the actor ambiguity, proved by
+actually deleting an auth user and observing the row flip from `USER`/named to `SYSTEM`/null.
 
 ---
 

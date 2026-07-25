@@ -14,10 +14,11 @@
  * structural properties that a careless later edit could silently break.
  *
  * They do NOT execute the function. The BEHAVIOURAL suite is
- * supabase/tests/database/vendor_audit_log_reads_test.sql — pgTAP, 113 assertions, covering
+ * supabase/tests/database/vendor_audit_log_reads_test.sql — pgTAP, 130 assertions, covering
  * every role denial, inactive callers, the exact permission requirement proved by REMOVING the
  * seeded mapping, actor and entity accuracy across system / foreign / deactivated / deleted
- * cases, the metadata whitelist against a deliberately hostile row, tenant isolation in both
+ * cases (including the actor ambiguity proved by actually deleting an auth user), the metadata
+ * whitelist against a deliberately hostile row, tenant isolation in both
  * directions, the limit bounds, cursor validation, and a full paginated traversal at four page
  * sizes compared against an unpaginated read. It requires Docker and is run with:
  *

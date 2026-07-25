@@ -1192,5 +1192,115 @@ select is(
    where a.action in ('AUDIT_LOG_READ', 'AUDIT_LOGS_READ', 'AUDIT_LOG_VIEWED')),
   0::bigint, 'reading the history is not itself recorded as an event');
 
+-- ============================================================================
+-- SECTION L — the actor ambiguity, proved by DELETION rather than argued
+-- ============================================================================
+-- Runs last and adds its own rows, so nothing above depends on the counts it changes.
+--
+-- WHY THIS SECTION EXISTS. 'SYSTEM' is the one value in this contract that cannot be read as
+-- a fact about who acted, and the reason is a cascade the schema makes invisible:
+--
+--     public.profiles.id          REFERENCES auth.users ON DELETE CASCADE
+--     audit_logs.actor_profile_id REFERENCES profiles   ON DELETE SET NULL
+--
+-- Deleting an auth user therefore erases the profile AND the membership, nulls the audit row's
+-- actor, and leaves the audit row itself standing. The row then reads exactly like one that
+-- never had an actor. Asserting that here turns a documented caveat into a tested property, so
+-- a future actor-name snapshot column cannot be added without this section noticing.
+select pg_temp.act_as(pg_temp.fx('ada'));
+
+insert into pg_temp.fx (k, v) values
+  -- A SUSPENDED profile that is still a member of Vendor A.
+  ('suspended_actor', pg_temp.new_person('Suspended', 'Actor', 'SUSPENDED')),
+  -- A real profile with NO membership in ANY organization.
+  ('orphan_actor',    pg_temp.new_person('Orphan',    'Actor')),
+  -- A normal Vendor A member who will be deleted mid-section.
+  ('doomed_actor',    pg_temp.new_person('Doomed',    'Actor'));
+
+select pg_temp.add_member(pg_temp.fx('suspended_actor'), pg_temp.fx('vendor_a'), 'ACTIVE');
+select pg_temp.add_member(pg_temp.fx('doomed_actor'),    pg_temp.fx('vendor_a'), 'ACTIVE');
+-- orphan_actor deliberately gets NO membership anywhere.
+
+insert into pg_temp.fx (k, v) values
+  ('l_susp',   pg_temp.new_audit(pg_temp.fx('vendor_a'), pg_temp.fx('suspended_actor'),
+     'L_SUSPENDED_PROFILE', 'VENDOR_PRODUCT', timestamptz '2026-07-01 11:03:00+00')),
+  ('l_orphan', pg_temp.new_audit(pg_temp.fx('vendor_a'), pg_temp.fx('orphan_actor'),
+     'L_NO_MEMBERSHIP',     'VENDOR_PRODUCT', timestamptz '2026-07-01 11:02:00+00')),
+  ('l_doomed', pg_temp.new_audit(pg_temp.fx('vendor_a'), pg_temp.fx('doomed_actor'),
+     'L_WILL_BE_DELETED',   'VENDOR_PRODUCT', timestamptz '2026-07-01 11:01:00+00'));
+
+-- --- state 5: an INACTIVE PROFILE still names its actor --------------------
+-- Deliberate, and the same rule as the DEACTIVATED membership in Section E: suspending a
+-- person must not retroactively strip their name off the actions they took.
+select is(pg_temp.f_actor_type(pg_temp.fx('l_susp')), 'USER',
+  'a SUSPENDED profile is still actor_type USER');
+select is(pg_temp.f_actor_name(pg_temp.fx('l_susp')), 'Suspended Actor',
+  'and it still resolves to the real name');
+
+-- --- state 4: a profile with NO membership anywhere -> UNKNOWN -------------
+-- The second, distinct route to UNKNOWN. Section E covers the first (a member of ANOTHER
+-- Vendor); this one has no membership at all, and must not be confused with SYSTEM.
+select is(pg_temp.f_actor_type(pg_temp.fx('l_orphan')), 'UNKNOWN',
+  'an actor with no membership in ANY organization is UNKNOWN, not SYSTEM');
+select is(pg_temp.f_actor_name(pg_temp.fx('l_orphan')), null,
+  'and carries no name');
+
+-- --- state 3 -> state 2: the cascade, observed ----------------------------
+select is(pg_temp.f_actor_type(pg_temp.fx('l_doomed')), 'USER',
+  'before deletion the doomed actor reads USER');
+select is(pg_temp.f_actor_name(pg_temp.fx('l_doomed')), 'Doomed Actor',
+  'and is fully named');
+
+delete from auth.users where id = pg_temp.fx('doomed_actor');
+
+-- The cascade did what the FKs say it does.
+select ok(not exists (select 1 from public.profiles p where p.id = pg_temp.fx('doomed_actor')),
+  'deleting the auth user cascaded away the profile');
+select ok(not exists (select 1 from public.organization_members m
+                      where m.user_id = pg_temp.fx('doomed_actor')),
+  'and the membership');
+select ok(exists (select 1 from public.audit_logs a where a.id = pg_temp.fx('l_doomed')),
+  'but the AUDIT ROW SURVIVED — an audit record outlives the actor it names');
+select is(
+  (select a.actor_profile_id from public.audit_logs a where a.id = pg_temp.fx('l_doomed')),
+  null,
+  'and its actor_profile_id was set to null by ON DELETE SET NULL');
+
+-- --- the ambiguity itself -------------------------------------------------
+select is(pg_temp.f_actor_type(pg_temp.fx('l_doomed')), 'SYSTEM',
+  'a DELETED actor now reads SYSTEM — identical to a genuine system event');
+select is(pg_temp.f_actor_name(pg_temp.fx('l_doomed')), null,
+  'and carries no name');
+
+-- e8 was written with a null actor from the start. The deleted-actor row and the
+-- never-had-an-actor row must now be indistinguishable in every emitted actor field. THIS IS
+-- THE ASSERTION THAT PINS THE LIMITATION: if it ever fails, the schema gained the ability to
+-- tell them apart, and docs § 5.5 / § 7.2 and the Flutter wording must be revisited.
+select is(
+  (select count(distinct (l.actor_type, coalesce(l.actor_display_name, '~')))
+   from public.list_vendor_audit_logs(100, null, null) l
+   where l.audit_log_id in (pg_temp.fx('e8'), pg_temp.fx('l_doomed'))),
+  1::bigint,
+  'a genuine system event and a deleted actor are BYTE-IDENTICAL — SYSTEM means "no actor identity remains", not "a system process acted"');
+
+-- The row is still readable in full: losing an actor costs the record its attribution, never
+-- its existence or its content.
+select is(pg_temp.f_action(pg_temp.fx('l_doomed')), 'L_WILL_BE_DELETED',
+  'the orphaned row keeps its action code');
+select is(pg_temp.f_entity_type(pg_temp.fx('l_doomed')), 'VENDOR_PRODUCT',
+  'and its entity type');
+select is(
+  (select count(*) from public.list_vendor_audit_logs(100, null, null) l
+   where l.audit_log_id in (pg_temp.fx('l_susp'), pg_temp.fx('l_orphan'), pg_temp.fx('l_doomed'))),
+  3::bigint,
+  'all three rows remain visible — no actor state removes a record');
+
+-- And the biconditional still holds across every actor state in the suite.
+select is(
+  (select count(*) from public.list_vendor_audit_logs(100, null, null) l
+   where (l.actor_type = 'USER') <> (l.actor_display_name is not null)),
+  0::bigint,
+  'actor_display_name is non-null if and only if actor_type is USER, across all states');
+
 select * from finish();
 rollback;

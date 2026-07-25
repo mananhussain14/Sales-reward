@@ -297,16 +297,32 @@
 -- their access was revoked, silently rewriting history as a side effect of an unrelated
 -- administrative act.
 --
--- 'SYSTEM' IS THE TRUTHFUL READING OF NULL TODAY, WITH ONE DOCUMENTED CAVEAT. Null is
--- reachable now: retailer_invitations.invited_by_profile_id and
--- retailer_staff_invitations.invited_by_profile_id are both nullable, and audit rows copy them
--- straight through. Separately, actor_profile_id is ON DELETE SET NULL, so deleting a profile
--- WOULD also produce null — making a deleted actor indistinguishable from a system action at
--- the schema level. The audit found NO profile-deletion path anywhere in this repository (no
--- SQL delete, no admin.deleteUser call, nothing), so that branch is unreachable today; it is
--- recorded as a limitation in docs § 7.2 rather than papered over, because the correct fix is
--- an actor-name snapshot column on audit_logs, which is a schema change this read-only
--- milestone must not make.
+-- 'SYSTEM' MEANS "NO ACTOR IDENTITY REMAINS" — IT DOES NOT PROVE A SYSTEM PROCESS ACTED.
+-- This is the one genuinely ambiguous value in the contract, and it is stated here as a
+-- limitation rather than smoothed over, because a client that renders it as a confident
+-- "System" would be asserting something the schema cannot support.
+--
+-- TWO DIFFERENT DATABASE STATES PRODUCE actor_profile_id IS NULL, AND THIS FUNCTION CANNOT
+-- TELL THEM APART:
+--   a. NO ACTOR WAS EVER RECORDED. retailer_invitations.invited_by_profile_id and
+--      retailer_staff_invitations.invited_by_profile_id are both nullable and the audit
+--      writers copy them straight through, so a row can be born with a null actor.
+--   b. AN ACTOR WAS RECORDED AND LATER ERASED. public.profiles.id REFERENCES auth.users
+--      ON DELETE CASCADE, and audit_logs.actor_profile_id REFERENCES profiles ON DELETE SET
+--      NULL. Deleting an auth user therefore cascades to the profile and its memberships and
+--      NULLS the audit row's actor — while leaving the audit row itself intact. This was
+--      verified directly against the local database: a row reading USER / 'Gone Forever'
+--      became SYSTEM / null after `delete from auth.users`, and the two rows were then
+--      byte-identical in every emitted actor field.
+--
+-- NO APPLICATION CODE PATH DELETES A PROFILE — the audit found no SQL delete and no
+-- admin.deleteUser call anywhere in this repository. But the Supabase Admin API and the
+-- Studio user list both expose auth-user deletion to an operator, so state (b) is REACHABLE
+-- IN OPERATION even though no product feature causes it. "Unreachable" would be too strong.
+--
+-- The correct fix is an actor-name snapshot column on audit_logs — a schema change this
+-- read-only milestone must not make. Until then, clients must use neutral wording such as
+-- "System or unavailable actor"; see docs § 7.2 and § 11.3.
 --
 -- A ROW IS NEVER DROPPED FOR LACK OF AN ACTOR. Both joins below are LEFT joins for exactly
 -- this reason: an audit log that discards records whose context is incomplete is not an audit
@@ -548,38 +564,44 @@ grant  execute on function public.list_vendor_audit_logs(integer, timestamptz, u
 -- public.audit_logs, public.profiles and public.organization_members in particular keep
 -- exactly the SELECT-only, RLS-governed posture 20260716131930 left them in.
 --
--- NO INDEX IS ADDED, and that is a MEASURED conclusion rather than an omission. The final
--- query needs equality on organization_id, a descending range on created_at, and DESC output
--- order. audit_logs_org_created_idx (organization_id, created_at desc), created by
--- 20260716130351, provides all three.
+-- NO INDEX IS ADDED, and that is a MEASURED conclusion rather than an omission.
 --
--- Measured on a local reset with 200,000 audit rows spread over 40 Vendor organizations —
--- EXPLAIN (ANALYZE) of both the null-cursor page and a cursor 90,000 rows deep:
+-- WHICH INDEX THE PLANNER PICKS IS NOT FIXED, AND THE CONTRACT DOES NOT DEPEND ON IT. Two
+-- shipped indexes can serve this query — audit_logs_org_created_idx (organization_id,
+-- created_at desc) and audit_logs_created_idx (created_at desc) — and the choice moves with
+-- table statistics, row width and Vendor cardinality. Measured on a local reset, 200,000 audit
+-- rows, EXPLAIN (ANALYZE) at both extremes:
 --
---     Limit
---       -> Incremental Sort   (Sort Key: created_at DESC, id DESC; Presorted Key: created_at)
---            -> Index Scan using audit_logs_org_created_idx
---                 Index Cond: (organization_id = $1 AND created_at <= $2)
+--   ONE Vendor (the shape this product actually has — SalesReward is controlled by a single
+--   vendor company), cursor 150,000 rows deep:
+--     Limit -> Incremental Sort -> Index Scan using audit_logs_created_idx
+--     51 rows read, Rows Removed by Filter: 1.
 --
---   * Both predicates are INDEX CONDITIONS, not filters: `Rows Removed by Filter: 0`.
---   * 51 rows were read to return 50, at BOTH depths. Page cost is proportional to the PAGE,
---     not to how far into the history the cursor sits — which is the entire difference from
---     OFFSET, whose deep page would have walked 90,000 rows.
---   * The Incremental Sort is the id tie-break, and it is presorted on created_at, so it sorts
---     one timestamp group at a time rather than the result set. Peak memory 27 kB.
+--   FORTY Vendors, null cursor and a deep cursor alike:
+--     Limit -> Incremental Sort -> Index Scan using audit_logs_created_idx
+--     51 rows returned, Rows Removed by Filter: 1984  (~ 40 x 51 index entries touched).
 --
--- The only work the index cannot do is order by id WITHIN one created_at value, and that group
--- is as large as the number of audit rows one transaction wrote — one, for every shipped
--- writer. A covering (organization_id, created_at desc, id desc) index would remove a sort of
--- a one-element group, at the cost of a second index to maintain on every audit insert: a
--- permanent write cost on every administrative action, and additional storage on the largest
--- append-only table in the schema, for no measured read benefit. A speculative index would be
--- a write cost with no measured cause.
+-- THE PROPERTY THAT MATTERS HOLDS IN EVERY PLAN OBSERVED: cost is proportional to the PAGE,
+-- not to how deep the cursor sits. A cursor 150,000 rows into the history still read 51 rows.
+-- That is the whole difference from OFFSET, measured on the same data: `OFFSET 4500 LIMIT 50`
+-- planned a Bitmap Heap Scan of 5,000 rows and sorted 4,550 of them to emit 50, and that cost
+-- grows with every page while the keyset cost does not.
 --
--- (At very LOW Vendor cardinality the planner may instead pick audit_logs_created_idx and
--- filter organization_id afterwards — measured at 2 organizations, also 51 rows read. Both
--- plans are bounded by the limit; the org-leading index is the one that keeps that true as the
--- number of Vendors grows, which is why it is the one this contract relies on.)
+-- The worst case is bounded by (number of Vendor ORGANIZATIONS x limit) index entries, never
+-- by history depth — when the planner uses the created_at-leading index it walks past other
+-- Vendors' interleaved rows. At 40 Vendors that is ~2,000 index entries per page; at the one
+-- Vendor this product is built around it is ~51. That is why a covering
+-- (organization_id, created_at desc, id desc) index is NOT added: it would pin the better plan
+-- and remove the id sort, but it buys a bounded constant factor that is ~1x for this product,
+-- in exchange for a third index to maintain on every audit insert — a permanent write cost on
+-- every administrative action plus storage on the largest append-only table in the schema.
+-- Should this ever become a multi-Vendor deployment with a deep history, that index is the
+-- correct and purely additive answer, and this note is the measurement that would justify it.
+--
+-- The Incremental Sort is the id tie-break. It is presorted on created_at, so it sorts one
+-- timestamp group at a time rather than the result set; peak memory 27 kB throughout. The
+-- group is as large as the number of audit rows one transaction wrote — one, for every
+-- shipped writer.
 --
 -- The actor lateral uses organization_members_unique_membership (organization_id, user_id) and
 -- the profiles primary key; the entity snapshot uses no index because it reads a column already
