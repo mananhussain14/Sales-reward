@@ -136,8 +136,16 @@
 --
 -- THE COLUMN SET IS list_vendor_products() PLUS assignment_count. Every shared column is
 -- byte-identical in NAME, TYPE and MEANING — including active_assignment_count, which is
--- `bigint` there and `bigint` here — so ONE Flutter model deserializes a list row and a
--- detail row, and a future addition has to be made to both or to neither.
+-- `bigint` there and `bigint` here — so the two contracts can share one mapper for the
+-- overlap, and a future addition has to be made to both or to neither.
+--
+--   THIS IS NOT ONE MODEL. A list row genuinely has NO assignment_count field: the list is
+--   unchanged and does not return one. A client that modelled both with a single entity
+--   would have to make that count nullable, and a NULLABLE COUNT IS AMBIGUOUS — "zero
+--   assignments" and "this row came from the list, so the total was never asked for" would
+--   become the same value, which is precisely the kind of ambiguity every other field in
+--   this contract avoids. Two entities over one shared set of common fields is the correct
+--   shape; see docs/mobile-vendor-product-reads-audit.md § 5.1.
 --
 --   assignment_count is the one addition, and it is the count the list has no column for:
 --   EVERY assignment row for this product, ACTIVE and INACTIVE alike. It exists so a detail

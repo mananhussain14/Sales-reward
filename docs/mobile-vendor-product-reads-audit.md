@@ -226,10 +226,40 @@ granted to authenticated · revoked from PUBLIC and anon · not granted to servi
 
 **The column set is `list_vendor_products()` plus `assignment_count`, and nothing else.**
 Every shared column is byte-identical in name, type and meaning — including
-`active_assignment_count`, which is `bigint` in both — so one Flutter model deserializes a
-list row and a detail row. That relationship is asserted structurally in
-`lib/products/vendor-product-reads-contract.test.ts` (test 23) by parsing the shipped list
-contract out of migration `20260727210000` rather than restating it.
+`active_assignment_count`, which is `bigint` in both. That relationship is asserted
+structurally in `lib/products/vendor-product-reads-contract.test.ts` (test 23) by parsing the
+shipped list contract out of migration `20260727210000` rather than restating it.
+
+### 5.1 One Flutter entity, or two? — **two**
+
+An earlier summary of this milestone said "one Flutter model deserializes both". Verified
+against the deployed signatures, that is **overstated**, and the correction matters because it
+drives client architecture rather than file count.
+
+```
+list_vendor_products()        →  10 columns, NO assignment_count
+get_vendor_product_detail()   →  11 columns, WITH assignment_count
+```
+
+The list genuinely does not return `assignment_count`, and it was deliberately left unchanged.
+So a single strict entity is only possible if `assignmentCount` is made **nullable or
+optional** — and **a nullable count is ambiguous**: `null` would mean both "this product has
+zero assignments" *(impossible here — the detail returns `0`, never `null`)* and "this row came
+from the list, where the total was never computed". Collapsing a real value with an absent one
+is exactly what every other field in this contract refuses to do.
+
+**Recommendation — option B: two entities over one shared set of common fields.**
+
+| Layer | Shape |
+| --- | --- |
+| `VendorProductSummary` | the 10 list columns; `activeAssignmentCount` **non-null** |
+| `VendorProductDetail` | the same 10 **plus** `assignmentCount` **non-null** |
+| shared | one mapper/mixin for the 10 common fields — the byte-identical names and types are what make that safe, and what the static guard protects |
+
+Do **not** model the detail as a subtype that widens the list, and do not make either count
+nullable. If a later milestone adds `assignment_count` to `list_vendor_products()`, the two
+entities can collapse into one at that point — but that would be a change to a shipped
+contract the web already consumes, and is not made here.
 
 ### `public.list_vendor_product_assigned_retailers(p_product_id uuid)`
 
@@ -644,13 +674,61 @@ it opens `get_vendor_retailer_detail()` successfully.
 Every capability from `get_my_portal_context()` is a **presentation hint**. The database
 re-derives authority on every call.
 
+### 17.1 The detail read must come first — it is the only disambiguator
+
+Both reads return an empty set for a product the caller cannot address, and the companion
+returns an empty set for a product that simply has no assignments. **Those two are
+indistinguishable from the companion alone**, and that ambiguity is deliberate: closing it
+would mean telling a caller whether another Vendor's product exists.
+
+The detail read is what separates them, so the sequence is **not** interchangeable and the two
+calls must **not** be issued in parallel:
+
+| Case | `get_vendor_product_detail` | then `list_vendor_product_assigned_retailers` | Render |
+| --- | --- | --- | --- |
+| Valid product, **zero assignments** | **1 row** | `[]` | detail + "Not assigned to any Retailer yet" |
+| **Unknown** product | **0 rows** | *(not called)* | "Not found" |
+| **Foreign** product (another Vendor's) | **0 rows** | *(not called)* | "Not found" — byte-identical to unknown |
+| **Null** selector | **0 rows** | *(not called)* | "Not found" |
+| Unauthorized caller | `42501` | `42501` | one generic denial |
+
+Unknown and foreign are **intentionally** indistinguishable, at both layers. A client must not
+attempt to tell them apart, and must not present them differently.
+
+### 17.2 Malformed selectors: reject in Flutter, before the call
+
+A selector that is not a valid UUID never reaches either function. PostgreSQL rejects it while
+casting the argument, **before the body runs and therefore before any authorization check**:
+
+```
+select * from public.get_vendor_product_detail('not-a-uuid');
+→ 22P02  invalid input syntax for type uuid: "not-a-uuid"
+```
+
+`22P02` (`invalid_text_representation`) is a **fourth, distinct outcome** — not `42501`, not
+zero rows. It leaks nothing (it describes only the literal the caller sent, and the function
+never executed), but it is a raw database error surfacing in a client.
+
+**Flutter should validate the UUID locally and never issue the call.** Three reasons:
+
+1. A malformed id can only come from a client bug or a hand-crafted deep link — it is never a
+   state a user can reach through the UI, so it deserves a local guard, not a round trip.
+2. Handling `22P02` at the call site means teaching every product screen a PostgreSQL error
+   code, when the same condition is decidable offline in one line.
+3. It keeps the client's error model to the three the contract actually defines: **denied**
+   (`42501`), **not found / empty** (zero rows), and **unavailable** (transport or other
+   failure).
+
+A malformed id should therefore be treated exactly as "not found" in the UI — the same screen
+an unknown or foreign id produces — decided locally rather than by the database.
+
 ---
 
 ## 18. Tests
 
 ### pgTAP — `supabase/tests/database/vendor_product_reads_test.sql`
 
-**167 assertions**, all passing. Sections:
+**180 assertions**, all passing. Sections:
 
 | Section | Covers |
 | --- | --- |
@@ -666,6 +744,7 @@ re-derives authority on every call.
 | J | ordering stability across repeat calls and under a duplicated Retailer name |
 | K | the permission requirement proved by **removing** seeded mappings: `PRODUCTS_READ` gates all three; `RETAILERS_READ` gates only the companion; `PRODUCT_RETAILER_ASSIGN` still gates only the old editor read |
 | L | no permission was seeded and no mapping changed; `SALES_STAFF` still holds none of the four catalogue permissions (and still holds only the narrow `RECEIPT_PRODUCTS_READ`) |
+| M | a **deleted** Vendor–Retailer relationship: the assignment row survives, `relationship_id` and `relationship_status` are genuinely `NULL` (never fabricated), the Retailer's own name/status/id are unaffected, `assignment_count` still equals the companion's row count, ordering is unchanged, only one row loses its id, and the tenant boundary still holds |
 
 ### Static — `lib/products/vendor-product-reads-contract.test.ts`
 
@@ -688,8 +767,8 @@ fabrication · and the four web-compatibility guards.
 | --- | --- |
 | Migrations | **37** |
 | Database test files | **6** |
-| pgTAP assertions (all files) | **698** |
-| pgTAP assertions added here | **167** |
+| pgTAP assertions (all files) | **711** |
+| pgTAP assertions added here | **180** |
 | `npm test` tests | **897** |
 | `npm test` tests added here | **40** |
 

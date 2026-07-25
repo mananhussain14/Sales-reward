@@ -731,7 +731,7 @@ eligibility, and only then dispatches.
 | Flutter direct? | **Yes** |
 | Classification | **A** — **reused verbatim** |
 | Backend change | **None, deliberately.** This is the one Vendor list in the schema that was already doing the right thing: zero arguments, Vendor derived from `auth.uid()`, the assignment count aggregated in SQL (a correlated `count(*)`, not transferred rows), no identity or tenant internals, `authenticated` only. The `20260803090000` milestone **reuses it unchanged** rather than adding a second catalogue read, which would be a second definition of "this Vendor's products". `normalizeVendorProducts` is defensive shape validation, easily ported. Its `active_assignment_count` semantics are now depended on by `get_vendor_product_detail()` and are asserted equal to it. |
-| Tests | `lib/products/product-normalization.test.ts` (20), `lib/products/product-source-safety.test.ts` (20); pgTAP `supabase/tests/database/vendor_product_reads_test.sql` (167) |
+| Tests | `lib/products/product-normalization.test.ts` (20), `lib/products/product-source-safety.test.ts` (20); pgTAP `supabase/tests/database/vendor_product_reads_test.sql` (180) |
 
 ---
 
@@ -755,8 +755,8 @@ eligibility, and only then dispatches.
 | Idempotency | Read-only, `STABLE` |
 | Flutter direct? | **Yes** |
 | Classification | **C, delivered** |
-| Backend change | **DONE.** Added in `20260803090000_mobile_vendor_product_reads.sql`. The gap it closes: the web detail page has **no detail read at all** — it calls `list_vendor_products()` and then finds the row with `Array.find()` in TypeScript, so opening one product transfers the whole catalogue. The column set is the V-12 list set **plus `assignment_count`** and nothing else, byte-identical in name and type (`bigint` both sides), so one Flutter model deserializes both. `assignment_count` counts **every** assignment row, `active_assignment_count` only the `ACTIVE` ones — reproducing V-12's number predicate-for-predicate. Both come from **one** `LEFT JOIN LATERAL`, so the detail is one round trip and one row. |
-| Tests | pgTAP `supabase/tests/database/vendor_product_reads_test.sql` (167); static `lib/products/vendor-product-reads-contract.test.ts` (40) |
+| Backend change | **DONE.** Added in `20260803090000_mobile_vendor_product_reads.sql`. The gap it closes: the web detail page has **no detail read at all** — it calls `list_vendor_products()` and then finds the row with `Array.find()` in TypeScript, so opening one product transfers the whole catalogue. The column set is the V-12 list set **plus `assignment_count`** and nothing else, byte-identical in name and type (`bigint` both sides). **Two Flutter entities, not one** — the list does *not* return `assignment_count`, and making it nullable to share an entity would collapse "zero assignments" with "never asked for"; share a mapper for the 10 common fields instead (audit § 5.1). `assignment_count` counts **every** assignment row, `active_assignment_count` only the `ACTIVE` ones — reproducing V-12's number predicate-for-predicate. Both come from **one** `LEFT JOIN LATERAL`, so the detail is one round trip and one row. |
+| Tests | pgTAP `supabase/tests/database/vendor_product_reads_test.sql` (180); static `lib/products/vendor-product-reads-contract.test.ts` (40) |
 
 ---
 
@@ -838,7 +838,7 @@ cannot cross-link to the Retailer screens (§ 6.8). See V-16a.
 | Flutter direct? | **Yes** |
 | Classification | **C, delivered** |
 | Backend change | **DONE.** Added in `20260803090000`. Driven **from the assignment table**, so it returns one row per *existing* assignment: a never-assigned Retailer is **absent** rather than a null-status row, and `assignment_status` is never null. Withdrawn (`INACTIVE`) assignments **are** returned and marked — withdrawal never deletes. Its row count **equals** V-12a's `assignment_count` by construction (pgTAP-asserted). **`relationship_id` closes § 6.8 for this surface**: it is the same `vendor_retailers.id` that `list_vendor_retailers()` / `get_vendor_retailer_detail()` use, so an assignment row opens the shipped Vendor Retailer detail screen with no second lookup. It is **nullable** (the relationship join is `LEFT`, so a missing relationship surfaces as a null rather than as a silently shorter list that would contradict the count). The permission requirement is **split**: this read returns Retailer identity and therefore also needs `RETAILERS_READ`; V-12a returns only counts and does not. |
-| Tests | pgTAP `supabase/tests/database/vendor_product_reads_test.sql` (167); static `lib/products/vendor-product-reads-contract.test.ts` (40) |
+| Tests | pgTAP `supabase/tests/database/vendor_product_reads_test.sql` (180); static `lib/products/vendor-product-reads-contract.test.ts` (40) |
 
 Full audit: `docs/mobile-vendor-product-reads-audit.md`.
 

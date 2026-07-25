@@ -14,7 +14,7 @@
  * properties that a careless later edit could silently break.
  *
  * They do NOT execute the functions. The BEHAVIOURAL suite is
- * supabase/tests/database/vendor_product_reads_test.sql — pgTAP, 167 assertions, covering
+ * supabase/tests/database/vendor_product_reads_test.sql — pgTAP, 180 assertions, covering
  * every role denial, inactive callers, the split permission requirement proved by REMOVING a
  * seeded mapping, field and status accuracy on both a fully-populated and an all-null
  * product, the exact assignment-count semantics against four status combinations, the
@@ -793,8 +793,12 @@ describe("mobile Vendor Product reads — output contract", () => {
   test("23. the detail column set is the SHIPPED list set plus assignment_count", () => {
     // Parsed from 20260727210000 rather than restated, so this is a relationship between two
     // live contracts and not two literals free to drift. Every shared column is
-    // byte-identical in name and order, so one Flutter model deserializes a list row and a
-    // detail row, and a future addition has to be made to both or to neither.
+    // byte-identical in name and order, so the two can share one mapper for the overlap and a
+    // future addition has to be made to both or to neither.
+    //
+    // NOTE: the list does NOT return assignment_count, so this is a superset relationship and
+    // NOT a single model. See docs/mobile-vendor-product-reads-audit.md § 5.1 for why a
+    // client should use two entities rather than one with a nullable count.
     const list = shippedListColumns();
     assert.deepEqual(
       list,

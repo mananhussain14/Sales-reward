@@ -1501,5 +1501,82 @@ select is(
   1::bigint,
   '...and its one product-shaped permission is still the narrow receipt-matching read');
 
+-- ============================================================================
+-- SECTION M — a MISSING Vendor–Retailer relationship
+-- ============================================================================
+-- The companion joins vendor_retailers with a LEFT join, and relationship_id and
+-- relationship_status are documented NULLABLE because of it. That nullability had no
+-- assertion until this section: a documented behaviour with no test is a claim, not a
+-- contract.
+--
+-- WHY THE LEFT JOIN EXISTS. vendor_product_assignment_assert_link() requires a
+-- vendor_retailers row when an assignment is CREATED, so in practice every assignment has
+-- one, and no RPC in this schema deletes a relationship. But nothing forbids a direct DELETE,
+-- and an INNER join would then make the assignment row VANISH from this list while
+-- assignment_count — taken from the assignment table alone — kept counting it. The list and
+-- the count would silently contradict each other, and a client could not tell which was
+-- wrong. A null relationship_id says "not cross-linkable" out loud instead.
+--
+-- This runs LAST and deletes a fixture row on purpose. Everything is rolled back with the
+-- transaction, and no later section depends on the relationship it removes.
+
+select pg_temp.act_as(pg_temp.fx('ada'));
+
+delete from public.vendor_retailers where id = pg_temp.fx('rel_alpha');
+
+-- The assignment row SURVIVES. This is the whole point.
+select is(pg_temp.assigned_rows(pg_temp.fx('p_widget')), 4::bigint,
+  'deleting a relationship does not remove its assignment row from the list');
+
+select is(
+  pg_temp.assigned_names(pg_temp.fx('p_widget')),
+  array['Alpha Retail', 'Bravo Stores', 'Cedar Mart', 'Delta Shops'],
+  '...and the ordering is unchanged, because it never depended on the relationship');
+
+-- ...and the invariant holds. An INNER join would break exactly this.
+select is(
+  pg_temp.detail_total(pg_temp.fx('p_widget')),
+  pg_temp.assigned_rows(pg_temp.fx('p_widget')),
+  'assignment_count still equals the companion row count with a relationship missing');
+
+select is(pg_temp.detail_active(pg_temp.fx('p_widget')), 2::bigint,
+  'the active count is unchanged — neither count ever consulted the relationship');
+
+-- The two relationship columns are NULL, and say so truthfully. Nothing is fabricated: no
+-- placeholder id, and no relationship status invented from the assignment's own.
+select is(pg_temp.a_rel_id(pg_temp.fx('p_widget'), 'Alpha Retail'), null,
+  'relationship_id is NULL when the relationship row is gone — never a fabricated id');
+select is(pg_temp.a_rel_status(pg_temp.fx('p_widget'), 'Alpha Retail'), null,
+  'relationship_status is NULL too — it is not inferred from the assignment status');
+
+-- The Retailer's OWN facts are unaffected: they come from public.organizations through a
+-- primary-key join, which the relationship never mediated.
+select is(pg_temp.a_status(pg_temp.fx('p_widget'), 'Alpha Retail'), 'ACTIVE',
+  'the assignment status is still reported exactly');
+select is(pg_temp.a_retailer_status(pg_temp.fx('p_widget'), 'Alpha Retail'), 'ACTIVE',
+  'the Retailer organization status is still reported exactly');
+select is(pg_temp.a_org_id(pg_temp.fx('p_widget'), 'Alpha Retail'), pg_temp.fx('alpha'),
+  'retailer_organization_id is still the real organization id');
+
+-- Every OTHER row is untouched — a missing relationship is one row's problem, not the list's.
+select is(pg_temp.a_rel_id(pg_temp.fx('p_widget'), 'Bravo Stores'), pg_temp.fx('rel_bravo'),
+  'the other rows keep their relationship ids');
+select is(
+  (select count(*) from public.list_vendor_product_assigned_retailers(pg_temp.fx('p_widget')) l
+   where l.relationship_id is null),
+  1::bigint,
+  'exactly one row lost its relationship id');
+
+-- AND THE BOUNDARY STILL HOLDS. A missing relationship must not become a way to see a
+-- Retailer this Vendor does not manage: the rows are still reached through the product's own
+-- assignments, which only this Vendor's products can have.
+select is(
+  (select count(*) from public.list_vendor_product_assigned_retailers(pg_temp.fx('p_widget')) l
+   where l.retailer_name = 'Foxtrot Group'),
+  0::bigint,
+  'a missing relationship does not expose another Vendor''s Retailer');
+select is(pg_temp.assigned_rows(pg_temp.fx('p_bravo')), 0::bigint,
+  'and Vendor B''s product is still unreadable to Vendor A');
+
 select * from finish();
 rollback;
