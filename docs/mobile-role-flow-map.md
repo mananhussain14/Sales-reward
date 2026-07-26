@@ -7,19 +7,20 @@
 | Repository | `salesreward-admin` (Next.js 16.2.10 + Supabase) |
 | Branch | `main` |
 | Commit (original audit) | `510331e5fed8293f6af95c339fee8c082b4ea458` |
-| Latest migration | `supabase/migrations/20260729090000_shared_portal_context.sql` |
+| Latest migration | `supabase/migrations/20260806090000_mobile_vendor_company_profile_reads.sql` |
 | Date of audit | 2026-07-24 |
-| Last updated | 2026-07-24 — for `get_my_portal_context()` (§ 2.3, D-1, D-6) |
+| Last updated | 2026-07-26 — for `get_my_vendor_profile()` (§ 3.1 V-18) |
 
 Companion documents: [`mobile-backend-contract.md`](./mobile-backend-contract.md) (per-RPC
 detail), [`mobile-feature-matrix.md`](./mobile-feature-matrix.md) (readiness and phasing),
 [`mobile-architecture-recommendation.md`](./mobile-architecture-recommendation.md) (layering),
 [`mobile-ui-design-handoff.md`](./mobile-ui-design-handoff.md) (visual identity).
 
-**Status:** originally an audit and specification. One backend change has since been made —
-migration `20260729090000_shared_portal_context.sql`, which adds
-`public.get_my_portal_context()` and resolves **D-1** (and D-6 for Flutter). No RLS policy,
-existing RPC, or application code was changed.
+**Status:** originally an audit and specification. Backend changes have since been made, all
+of them purely additive read RPCs — `20260729090000_shared_portal_context.sql`
+(`get_my_portal_context()`, resolving **D-1** and D-6 for Flutter), then the mobile Vendor read
+migrations `20260731090000` … `20260806090000`. **No RLS policy, no existing RPC, no seed row,
+and no application code was changed by any of them**, and no web page changed behaviour.
 
 ---
 
@@ -206,6 +207,10 @@ this milestone cannot meet.
 | Audit Logs | `/audit-logs` | ✅ |
 | Campaigns · Claims · Coins · Payouts · Reports · Settings | — | ⬜ "Soon" |
 
+The **Settings** placeholder is where the Vendor company & administrator profile screen (V-18)
+belongs on mobile. It is the only one of the six whose backend read now exists; the other five
+have no backend at all.
+
 ### 3.1 Screens and actions
 
 | ID | Feature | RPC(s) | Class | Notes |
@@ -229,6 +234,7 @@ this milestone cannot meet.
 | V-15 | List a product's Retailer assignments (**editor** matrix) | `list_vendor_product_retailer_assignments()` | **C** | Returns `retailer_organization_id`, while Retailer screens are addressed by `vendor_retailers.id`. **Two address spaces** — do not cross-link from this one. **Unchanged**; the web assign/withdraw matrix depends on it exactly as it is. ✅ For a mobile *read*, use V-12b, which returns `relationship_id` and needs no write permission. |
 | V-16 | Assign / withdraw a product | `assign_vendor_product_to_retailer()`, `unassign_…()` | **C** | `void` return hides "changed" from "already so". |
 | V-17 | Receipt review | — | **E** | **Does not exist.** No approve/reject RPC, no reviewer permission, no review screen. See D-7. |
+| V-18 | Vendor company & signed-in administrator profile (read-only) | `get_my_portal_context()` for the company name (**reused verbatim**) + `get_my_vendor_profile()` ✅ **shipped** (`20260806090000`) | **C** | Was **E**: the web has **no** company or profile surface — no `/settings`, `/company`, `/organization`, `/profile` or `/account` route exists, and Settings is a `disabled: true` nav placeholder. The only real surface is the admin **header**: the organization name plus the caller's name, both from `getVendorSuperAdminAccess()`. **The company half needed no backend at all** — the entire Vendor company surface in the product is one field, `organizations.name`, and `get_my_portal_context()` already returns it as `vendor.organization_name` through the same authorization chain, so the new RPC returns **no company field** and Flutter **must** read the name from PortalContext. `organizations.status`, `country_code`, `default_currency` and every timestamp are never displayed for the caller's own Vendor, and **no legal-name, trading-name, registration, tax, website, business-phone, business-email, address or logo column exists anywhere in the schema** — nothing was withheld, because nothing is stored. The real gap was **self-identification**: `list_vendor_users()` returns every user's roles but marks no row as the caller, so rendering "your role" meant downloading the whole directory and guessing by display name. The new zero-argument read returns exactly `administrator_display_name` (composed in SQL, so Dart never re-joins name parts) and `administrator_role_names text[]` (ACTIVE definitions only, names never codes, same type/filter/ordering as the directory row). **No status and no timestamp**: an authorized caller has an ACTIVE profile, membership and organization *by construction*, so such a field could only ever say `ACTIVE` — clients must render neither three badges nor one combined "Account status". Requires `RBAC_READ` (the role *name* comes from the global catalogue) and deliberately **not** `ORGANIZATION_MEMBERS_READ`, because a caller's own rows are gated by ownership under RLS. Multi-Vendor callers get the **lowest-organization-id** Vendor, the same one PortalContext picks. Full audit: `docs/mobile-vendor-company-profile-reads-audit.md`. |
 
 ### 3.2 Data the Vendor can view
 

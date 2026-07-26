@@ -12,11 +12,14 @@ it was first written:
 | `20260802090000_mobile_vendor_role_reads.sql` | `public.list_vendor_roles()`, `public.get_vendor_role_detail(uuid)`, `public.list_vendor_role_permissions(uuid)` | **V-03**, and `docs/mobile-vendor-role-reads-audit.md` |
 | `20260803090000_mobile_vendor_product_reads.sql` | `public.get_vendor_product_detail(uuid)`, `public.list_vendor_product_assigned_retailers(uuid)` | **V-13**, and `docs/mobile-vendor-product-reads-audit.md` |
 | `20260804090000_mobile_vendor_audit_log_reads.sql` | `public.list_vendor_audit_logs(integer, timestamptz, uuid)` | **V-04**, and `docs/mobile-vendor-audit-log-reads-audit.md` |
+| `20260805090000_mobile_vendor_dashboard_summary.sql` | `public.get_vendor_admin_dashboard_summary()` | **V-01**, and `docs/mobile-vendor-dashboard-summary-audit.md` |
+| `20260806090000_mobile_vendor_company_profile_reads.sql` | `public.get_my_vendor_profile()` | **V-19**, and `docs/mobile-vendor-company-profile-reads-audit.md` |
 
 Everything else below still describes the schema as audited: no other migration, RPC, RLS
 policy, grant, Storage policy, environment variable, or application file was created or
 changed. In particular **no existing function was edited, dropped, or replaced by any of
-the seven**, and no web page changed behaviour. No role seed, permission seed, or
+them** — `get_my_portal_context()` above is consumed by later migrations' *documentation*, never
+altered by them — and no web page changed behaviour. No role seed, permission seed, or
 role→permission mapping was altered by any of them either.
 
 **Purpose.** Establish which parts of the existing SalesReward backend can be shared, as-is,
@@ -872,6 +875,38 @@ assignment `INACTIVE`; never deletes. Silent no-op if absent or already `INACTIV
 
 ---
 
+#### V-19 — Vendor company & signed-in administrator profile (read-only)
+
+| Field | Value |
+| --- | --- |
+| Feature | "Which company am I administering, and who am I in it?" |
+| Role | Vendor Super Admin |
+| Permission | `RBAC_READ` (and **not** `ORGANIZATION_MEMBERS_READ` — see below) |
+| Web route | **NONE EXISTS.** There is no `/settings`, `/company`, `/organization`, `/profile` or `/account` route. Settings is a `disabled: true` nav placeholder |
+| Server Action | — (the header values come from `getVendorSuperAdminAccess()`, `lib/auth/vendor-admin-access.ts`) |
+| Existing table op | None for the company. The web reads nothing from its own `organizations` row anywhere |
+| Inputs | **none** — zero arguments |
+| Backend-resolved | Everything: the caller from `auth.uid()`, the Vendor from `get_vendor_super_admin_context()` |
+| Returns | `(administrator_display_name text, administrator_role_names text[])` — exactly one row, both fields **non-null** |
+| Errors | One generic `42501` for every denial. Never zero rows, never a placeholder row |
+| RLS & authorization | `SECURITY DEFINER`, `STABLE`, empty `search_path`. Delegates the whole chain to `get_vendor_super_admin_context()` and the permission to `has_organization_permission()`; reimplements neither |
+| Tables | `organization_members`, `profiles`, `member_roles`, `roles` |
+| Storage bucket | — (**no logo or avatar column exists anywhere in the schema**) |
+| Idempotency | Read-only; no audit row |
+| Flutter direct? | **Yes**, composed with `get_my_portal_context()` |
+| Classification | **E → C, delivered** (the web surface is a placeholder; the contract is specified, not translated) |
+| Backend change | **DONE.** `public.get_my_vendor_profile()` was added in migration `20260806090000_mobile_vendor_company_profile_reads.sql`. **Zero arguments**; `authenticated` only (never `anon`, `PUBLIC` or `service_role`).<br><br>**THE COMPANY HALF OF THE SCREEN NEEDED NO NEW BACKEND.** The audit found that the *entire* Vendor company surface in the shipped web application is one field — `organizations.name` — and `get_my_portal_context()` already returns it as `vendor.organization_name`, resolved through the same authorization chain. This function therefore returns **no company field at all**, and Flutter **must** take the company name from PortalContext. `organizations.status`, `country_code`, `default_currency`, `created_at` and `updated_at` are never displayed for the caller's own Vendor by any web surface, so none is returned. There is **no legal name, trading name, registration id, tax id, website, business phone, business email, postal address or logo column anywhere in the schema** — nothing was withheld, because nothing is stored.<br><br>**THE GAP WAS SELF-IDENTIFICATION.** `list_vendor_users()` already returns every Vendor user's roles, but carries no marker for which row is the caller — so rendering "your role" would have meant downloading the whole directory and guessing by display name. Two fields close that: the caller's own composed display name (PortalContext returns no caller name; `get_vendor_super_admin_context()` returns only raw name *parts*, and composing them in Dart would be the third implementation of that rule) and the caller's own **ACTIVE** role names as a `text[]`, byte-identical in type, filter and ordering to `list_vendor_users().role_names`.<br><br>**NO STATUS AND NO TIMESTAMP IS RETURNED, DELIBERATELY.** An authorized caller has an ACTIVE profile, ACTIVE membership and ACTIVE organization **by construction**, so such a column could only ever hold `'ACTIVE'`. This follows `get_vendor_super_admin_context()`'s own convention — *"the statuses are CONDITIONS here, not output"*. Clients must not render three status badges, and must never combine the three into one "Account status". No timestamp is returned because no web surface shows one for the caller.<br><br>**`RBAC_READ` ONLY.** The role *name* comes from the global `roles` catalogue, whose policy requires it. `ORGANIZATION_MEMBERS_READ` is deliberately **not** required: the migration-5 policies admit a caller's own `profiles`, `organization_members` and `member_roles` rows unconditionally, so demanding the directory permission to read your own name would assert something untrue. Requiring the role **and** `RBAC_READ` is narrower than the RLS `OR`s, so this read can never be more permissive than `list_vendor_users()`. Never returned: the auth user id, profile id, membership id, organization id, email, mobile number, role or permission codes, raw metadata, tokens, or any other member's data. Full audit: `docs/mobile-vendor-company-profile-reads-audit.md`. |
+| Tests | pgTAP `supabase/tests/database/vendor_company_profile_reads_test.sql` (132); static `lib/portal/vendor-company-profile-reads-contract.test.ts` (34) |
+
+> **There is no company or profile WRITE path anywhere in this product** — on web or mobile.
+> No route edits an organization or a profile; no RPC updates `organizations.name`,
+> `profiles.first_name`, `profiles.last_name` or `mobile_number`; there is no Vendor user
+> invitation table (both invitation tables are Retailer-scoped); and there is no avatar or logo
+> upload of any kind. Company editing, profile editing, and image upload are therefore not
+> "deferred to mobile" — they do not exist yet at all.
+
+---
+
 ### 3.3 Retailer Owner
 
 ---
@@ -1540,7 +1575,7 @@ release, because § 6.1 shows this schema has already made three breaking functi
 | --- | --- | --- |
 | **A** — existing authenticated RPC, callable as-is | 26 | ~60 % |
 | **B** — existing RLS-protected table access | 4 (all also candidates for C; V-03 has since moved to C) | ~10 % |
-| **C** — new shared RPC recommended | 7 — **6 delivered** (`get_my_portal_context`, `list_vendor_retailers`, `get_vendor_retailer_detail`, `list_vendor_users`, `list_vendor_roles`, `get_vendor_product_detail` + `list_vendor_product_assigned_retailers`), 1 outstanding (Vendor dashboard summary; Vendor audit logs remain unstarted) | ~16 % |
+| **C** — new shared RPC recommended | 8 — **all 8 delivered** (`get_my_portal_context`, `list_vendor_retailers`, `get_vendor_retailer_detail`, `list_vendor_users`, `list_vendor_roles`, `get_vendor_product_detail` + `list_vendor_product_assigned_retailers`, `list_vendor_audit_logs`, `get_vendor_admin_dashboard_summary`), plus **V-19** `get_my_vendor_profile` — a surface the web has only as a placeholder, so it was specified rather than translated | ~18 % |
 | **D** — Edge Function required | 7 | ~16 % |
 | **E** — web-only UI to recreate | 7 surfaces | — |
 | **F** — needs a product decision | 9 questions | — |
