@@ -413,9 +413,16 @@ neither is behaviour-preserving, so they belong in their own reviewable change.
 | Storage bucket | — |
 | Idempotency | Read-only |
 | Flutter direct? | **Yes, but four round trips.** Technically B; practically poor on mobile. |
-| Classification | **B** → recommend **C** |
-| Backend change | **Recommended:** `public.get_vendor_admin_dashboard_summary()` returning one row of four `bigint`s. |
-| Tests | — |
+| Classification | **B** → **C, delivered** |
+| Backend change | **DONE.** `public.get_vendor_admin_dashboard_summary()` was added in migration `20260805090000_mobile_vendor_dashboard_summary.sql`. **Zero arguments**; `authenticated` only (never `anon`, `PUBLIC` or `service_role`); `SECURITY DEFINER`, `STABLE`, empty `search_path`. Requires the Vendor Super Admin role **AND all three** of `ORGANIZATION_MEMBERS_READ`, `RBAC_READ`, `AUDIT_LOGS_READ` — the union of what the four counted relations already require under the migration-5 policies, so **the summary can never be more permissive than the screens it summarises**. Deliberately **non-partial**: a Vendor Super Admin missing any one permission is denied the whole summary with `42501`, where the web would still render all four cards (narrower than RLS, which is an `OR` — safe by construction).<br><br>Returns `(active_member_count, catalog_active_role_count, catalog_permission_count, audit_event_count)`, all `bigint`, all **non-null**. **Exactly one row** for an authorized Vendor — structurally, because the body is a single `select` with **no from-clause** and four scalar aggregate subqueries; a Vendor with no data gets one row of zeros, and zero rows is unreachable. A denial is `42501` and is **never** a row of zeros. **One round trip replaces five** (1 auth RPC + 4 parallel counts, each of which re-walked the authorization chain through its RLS policy).<br><br>**THE KEY FINDING: two of the four counts are GLOBAL, not Vendor metrics.** `public.roles` and `public.permissions` carry **no `organization_id`**, so "Active Roles" and "Permissions" show the **same number to every Vendor**. That leaks nothing (they count catalogue definitions written by migrations, not tenant data) but it is a semantic trap for a second client, so the contract names it: the two global fields carry a `catalog_` prefix and must **not** be labelled as belonging to the Vendor. `audit_event_count` is **all-time and unwindowed** — the product defines no "today"/"this week"/"last 30 days", so none was invented; do not label it "recent". `active_member_count` requires `status='ACTIVE'` on the membership and deliberately does **not** join `profiles`, exactly as the web query does. No Retailer, Product, shop, assignment or invitation count is returned, because **no such card exists on the web**. The four direct reads above are still what the *web* does — the web migration is deliberately deferred. |
+| Tests | pgTAP `supabase/tests/database/vendor_dashboard_summary_test.sql` (66); static `lib/dashboard/vendor-dashboard-summary-contract.test.ts` (32) |
+
+> **Two dashboard card labels are semantically inaccurate, and this milestone did not change
+> them.** "Active Roles" and "Permissions" are deployment-wide RBAC catalogue figures rendered
+> on a page described as an overview of *"your organization's members, access control, and
+> recorded activity"*. Changing a visible web label is out of scope for a read-only backend
+> milestone, so the finding is recorded here and encoded in the RPC's field names instead. See
+> `docs/mobile-vendor-dashboard-summary-audit.md` § 3.1.
 
 ---
 
@@ -1256,7 +1263,7 @@ uses a deep link + `flutter_secure_storage`. Tests:
 | Proposed RPC | Replaces | Why RPC and not Edge Function |
 | --- | --- | --- |
 | `get_my_portal_context()` | AUTH-04's three-probe sequence | Pure authorization read; no secret involved |
-| `get_vendor_admin_dashboard_summary()` | V-01's four counts | Pure aggregate |
+| ~~`get_vendor_admin_dashboard_summary()`~~ ✅ **shipped** — `20260805090000` | V-01's four counts | Pure aggregate |
 | ~~`list_vendor_organization_members()`~~ → shipped as **`list_vendor_users()`** ✅ — `20260801090000` | V-02's four-query join | Pure join |
 | `list_vendor_audit_logs(p_limit, p_before)` | V-04 | Pure read; adds pagination mobile needs |
 | ~~`list_vendor_retailers()`~~ ✅ **shipped** — `20260731090000` | V-05 | Pure aggregate |
@@ -1270,11 +1277,11 @@ uses a deep link + `flutter_secure_storage`. Tests:
 All are read-only, need no secret, and are enforceable by the existing resolvers. Putting
 them in SQL means **one definition for both clients** — which is the whole point.
 
-**Five of the seven are delivered** (`get_my_portal_context`, `list_vendor_retailers`,
-`get_vendor_retailer_detail`, `list_vendor_users`, `list_vendor_roles`), plus the four
-companion reads above. None is consumed by the web yet: each shipped RPC is additive, and
-migrating a web page to it is a separate change with its own review. **Two remain
-outstanding:** `get_vendor_admin_dashboard_summary()` and `list_vendor_audit_logs(…)`.
+**All seven are delivered** (`get_my_portal_context`, `get_vendor_admin_dashboard_summary`,
+`list_vendor_users`, `list_vendor_audit_logs`, `list_vendor_retailers`,
+`get_vendor_retailer_detail`, `list_vendor_roles`), plus the four companion reads above. **None
+is consumed by the web yet:** each shipped RPC is additive, and migrating a web page to it is a
+separate change with its own review.
 
 ### 4.2 Must become a Supabase Edge Function
 
