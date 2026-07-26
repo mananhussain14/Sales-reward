@@ -591,10 +591,10 @@ to a raw constraint error.
 | `npm run lint` | **PASS** |
 | `npm run build` | **PASS** |
 | `git diff --check` | clean |
-| `npx supabase db reset` | applies 42 migrations cleanly |
+| `npx supabase db reset` | applies all 41 migrations cleanly |
 | `npx supabase test db` | **PASS** — 11 files, **1 459 assertions**, 0 failures |
 
-**Migration count:** 42 total, **0 added by this milestone**.
+**Migration count:** 41 total, **0 added by this milestone**.
 **Database test files:** 11 (**1 added**).
 **Assertions added:** **195** (pgTAP) + **47** (static contract tests).
 
