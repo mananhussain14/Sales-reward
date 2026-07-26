@@ -908,7 +908,7 @@ Full audit: `docs/mobile-vendor-product-reads-audit.md`.
 | Classification | **A** |
 | Backend change | **None. Reused unchanged** by the assignment-writes milestone, which added **no migration and no RPC**. The audit traced the whole web path and found no direct table write, no service-role client, no caller-supplied tenant id and **no TypeScript-only validation rule** — the function accepts no text input at all, so unlike V-13/V-14 it has no normalization path to a raw constraint error and needed no repair. Full audit: `docs/mobile-vendor-product-assignment-writes-audit.md`. |
 | Semantics (exact) | **Create and reactivate are ONE call.** Inserts when no row exists; flips an existing `INACTIVE` row back to `ACTIVE`. Assigning an already-`ACTIVE` pairing is a **silent no-op — no row version written, no audit row**. Requires product `ACTIVE` **and** relationship `ACTIVE` **and** Retailer org `ACTIVE`; reactivation goes through the same gate. **`assigned_at` is OVERWRITTEN with `now()` on reactivation** — it is the *current* assignment's start, **not** the pairing's first-ever assignment; `assigned_by_profile_id` becomes the current caller. Audit: `PRODUCT_ASSIGNED_TO_RETAILER` / `VENDOR_PRODUCT` / product id, five whitelisted display-only metadata keys, **in the same transaction** (an audit failure rolls the mutation back — proved, not asserted). |
-| Tests | pgTAP `supabase/tests/database/vendor_product_assignment_writes_test.sql` (195, shared with V-18); static `lib/products/vendor-product-assignment-writes-contract.test.ts` (47, shared) |
+| Tests | pgTAP `supabase/tests/database/vendor_product_assignment_writes_test.sql` (196, shared with V-18); static `lib/products/vendor-product-assignment-writes-contract.test.ts` (47, shared) |
 
 ---
 

@@ -19,7 +19,7 @@ documentation; this milestone supplies both and adds no migration.**
 | Modified RPC | **None.** |
 | Modified web file | **None.** |
 | Modified Flutter file | **None.** |
-| Added | one pgTAP suite (195 assertions), one static contract suite (47 tests), this document, and updates to the three mobile contract documents |
+| Added | one pgTAP suite (196 assertions), one static contract suite (47 tests), this document, and updates to the three mobile contract documents |
 
 The two shipped functions
 
@@ -592,11 +592,11 @@ to a raw constraint error.
 | `npm run build` | **PASS** |
 | `git diff --check` | clean |
 | `npx supabase db reset` | applies all 41 migrations cleanly |
-| `npx supabase test db` | **PASS** — 11 files, **1 459 assertions**, 0 failures |
+| `npx supabase test db` | **PASS** — 11 files, **1 460 assertions**, 0 failures |
 
 **Migration count:** 41 total, **0 added by this milestone**.
 **Database test files:** 11 (**1 added**).
-**Assertions added:** **195** (pgTAP) + **47** (static contract tests).
+**Assertions added:** **196** (pgTAP) + **47** (static contract tests).
 
 ---
 

@@ -696,6 +696,10 @@ insert into pg_temp.fx (k, v) values
   ('p_hist',     pg_temp.raw_product(pg_temp.fx('vendor_a'), 'A-HIST',    'History Widget',  pg_temp.fx('admin_a'))),
   ('p_audit',    pg_temp.raw_product(pg_temp.fx('vendor_a'), 'A-AUDIT',   'Audit Widget',    pg_temp.fx('admin_a'))),
   ('p_reads',    pg_temp.raw_product(pg_temp.fx('vendor_a'), 'A-READS',   'Reads Widget',    pg_temp.fx('admin_a'))),
+  -- The multi-Vendor tie-break needs one product per Vendor, used NOWHERE else. Sharing a
+  -- subject with another section would make that section's result depend on which random uuid
+  -- sorted first, which is exactly the nondeterminism a fixture exists to remove.
+  ('p_multi',    pg_temp.raw_product(pg_temp.fx('vendor_a'), 'A-MULTI',   'Tie-break Widget A', pg_temp.fx('admin_a'))),
   ('p_c',        pg_temp.raw_product(pg_temp.fx('vendor_c'), 'C-1',       'Vendor C Widget', pg_temp.fx('multi'))),
   ('p_foreign',  pg_temp.raw_product(pg_temp.fx('vendor_b'), 'B-1',       'Foreign Widget',  pg_temp.fx('admin_b')));
 
@@ -964,19 +968,24 @@ select is((select count(*) from public.vendor_product_retailer_assignments
 -- MULTI-VENDOR CALLER: the lowest organization id wins, deterministically. Reproduced from
 -- the shipped rule rather than asserted as a preference; the expected Vendor is COMPUTED from
 -- the fixture, so the test does not depend on which random uuid sorted first.
+--
+-- BOTH SUBJECTS ARE DEDICATED. p_multi (Vendor A) and p_c (Vendor C) are used by this block and
+-- by nothing else, so whichever way the two organization ids happen to sort, no other section's
+-- assignment rows or audit rows change. An earlier draft reused p_matrix here and was therefore
+-- green or red depending on a random uuid comparison — the suite passed roughly half the time.
+insert into pg_temp.fx (k, v) values
+  ('p_lower',  case when pg_temp.fx('vendor_a') < pg_temp.fx('vendor_c')
+                    then pg_temp.fx('p_multi') else pg_temp.fx('p_c') end),
+  ('p_higher', case when pg_temp.fx('vendor_a') < pg_temp.fx('vendor_c')
+                    then pg_temp.fx('p_c') else pg_temp.fx('p_multi') end);
+
 select pg_temp.act_as(pg_temp.fx('multi'));
 select is(
-  pg_temp.sqlstate_of(pg_temp.assign_sql(
-    case when pg_temp.fx('vendor_a') < pg_temp.fx('vendor_c')
-         then pg_temp.fx('p_matrix') else pg_temp.fx('p_c') end,
-    pg_temp.fx('ret_ok'))),
+  pg_temp.sqlstate_of(pg_temp.assign_sql(pg_temp.fx('p_lower'), pg_temp.fx('ret_ok'))),
   null,
   'a two-Vendor Super Admin acts as the LOWEST organization id, and may assign that Vendor''s product');
 select is(
-  pg_temp.sqlstate_of(pg_temp.assign_sql(
-    case when pg_temp.fx('vendor_a') < pg_temp.fx('vendor_c')
-         then pg_temp.fx('p_c') else pg_temp.fx('p_matrix') end,
-    pg_temp.fx('ret_ok'))),
+  pg_temp.sqlstate_of(pg_temp.assign_sql(pg_temp.fx('p_higher'), pg_temp.fx('ret_ok'))),
   '42501',
   'and may NOT assign the higher-id Vendor''s product — the tie-break is total, not a fallback');
 
@@ -990,12 +999,12 @@ select is(
   0::bigint,
   'every assignment audit row written here belongs to a Vendor the caller genuinely acted as');
 
--- Undo the multi-Vendor writes so the later count assertions start from a known state.
-select pg_temp.act_as(pg_temp.fx('multi'));
-select public.unassign_vendor_product_from_retailer(
-  case when pg_temp.fx('vendor_a') < pg_temp.fx('vendor_c')
-       then pg_temp.fx('p_matrix') else pg_temp.fx('p_c') end,
-  pg_temp.fx('ret_ok'));
+-- Withdraw the tie-break assignment, so the only ACTIVE row left against the shared Retailer is
+-- Vendor A's own. The row itself survives — withdrawal is not deletion — but it belongs to a
+-- product no later section reads, so it changes no count that is asserted anywhere.
+select public.unassign_vendor_product_from_retailer(pg_temp.fx('p_lower'), pg_temp.fx('ret_ok'));
+select is(pg_temp.assignment_status(pg_temp.fx('p_lower'), pg_temp.fx('ret_ok')), 'INACTIVE',
+  'the tie-break assignment is withdrawn, and its row survives like every other');
 select pg_temp.act_as(pg_temp.fx('admin_a'));
 
 
@@ -1662,8 +1671,8 @@ select is(pg_temp.arg_names('list_vendor_product_retailer_assignments', array['t
 -- still exists, and every assignment row ever created here still exists.
 select is(
   (select count(*) from public.vendor_products where vendor_organization_id = pg_temp.fx('vendor_a')),
-  6::bigint,
-  'all six of Vendor A''s products still exist — no assignment operation removed one');
+  7::bigint,
+  'all seven of Vendor A''s products still exist — no assignment operation removed one');
 select is(
   (select count(*) from public.vendor_retailers where vendor_organization_id = pg_temp.fx('vendor_a')),
   5::bigint,
