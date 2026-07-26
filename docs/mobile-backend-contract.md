@@ -792,8 +792,9 @@ eligibility, and only then dispatches.
 | Idempotency | `vendor_products_code_unique_idx`, `vendor_products_barcode_unique_idx` (partial) |
 | Flutter direct? | **Yes** |
 | Classification | **A** |
-| Backend change | None functionally, but see § 6.4 — the duplicate discrimination relies on English message substrings. |
-| Tests | `lib/products/product-input.test.ts` (24) |
+| Backend change | **REPAIRED** in `20260807090000_repair_vendor_product_write_normalization.sql` — signature, return type, grants and semantics all unchanged. The function normalized with `btrim` (which removes **only U+0020**) *before* collapsing whitespace, so a leading or trailing tab, newline, CR, form feed, vertical tab or Unicode space separator survived, became a plain space, and was never trimmed — hitting a table `CHECK` constraint and returning PostgreSQL's raw error text, naming `vendor_products` and the constraint, to the caller. The web never triggered it because `product-input.ts` trims in JavaScript first, which made the rule **TypeScript-only in practice**. Normalization is now collapse-then-trim over an explicit character class equal to JavaScript's `\s`, so web and Flutter cannot disagree about what a value means. **No input can reach a constraint any more** — proved as a property of the whole input space in pgTAP. Full audit: `docs/mobile-vendor-product-writes-audit.md`. |
+| Normalization (exact) | code → trim + collapse + **upper**; name → trim + collapse; brand → trim + collapse, `''` → null; description → **trim only** (internal formatting preserved), `''` → null; barcode → strip whitespace **and hyphens**, `''` → null. Lengths counted in **characters**, not bytes. |
+| Tests | pgTAP `supabase/tests/database/vendor_product_writes_test.sql` (205); static `lib/products/vendor-product-writes-contract.test.ts` (50); `lib/products/product-input.test.ts` (24) |
 
 ---
 
@@ -801,16 +802,38 @@ eligibility, and only then dispatches.
 
 Same shape as V-13. RPC `public.update_vendor_product(uuid, text, text, text, text)`,
 `authenticated`. `product_code`, `vendor_organization_id` and `created_by_profile_id` are
-**immutable by trigger**. No-op when nothing changed (returns early, writes no audit row).
-**Classification: A.** Tests: `product-input.test.ts`.
+**immutable by trigger**, and the code is not even a parameter. No-op when nothing changed
+(returns early, does not move `updated_at`, writes no audit row) — and because normalization
+runs first, a **whitespace-only difference is also a no-op**. A no-op is a *success*: a client
+must not have to distinguish it from a failed write. The target row is taken `FOR UPDATE` and
+matched on **both** its id and the derived Vendor, so unknown, foreign and null ids are all
+refused with a byte-identical `42501`. A failed edit rolls back **completely** — a call that
+renames the product *and* duplicates another's barcode leaves the name unchanged and writes no
+audit row. **Classification: A.** **REPAIRED by `20260807090000`** — same defect and same fix
+as V-13. Tests: `vendor_product_writes_test.sql`, `vendor-product-writes-contract.test.ts`,
+`product-input.test.ts`.
 
 ---
 
 #### V-15 — Activate / deactivate a product
 
-RPC `public.set_vendor_product_status(uuid, text)`, `authenticated`. `p_status` is
-normalized `upper(btrim(...))` and must be `ACTIVE`/`INACTIVE`. No-op when unchanged.
-Audits `PRODUCT_ACTIVATED` / `PRODUCT_DEACTIVATED`. **Classification: A.**
+RPC `public.set_vendor_product_status(uuid, text)`, `authenticated`, permission
+`PRODUCTS_MANAGE` — the **same** permission as create and edit; verified, not assumed.
+`p_status` is normalized `upper(btrim(...))` and must be `ACTIVE`/`INACTIVE`; anything else is
+`23514` "Choose a valid product status". Both transitions are permitted in both directions.
+No-op when unchanged — no write, no `updated_at` movement, no audit row, which is what stops a
+mobile double-tap producing two audit rows for one decision. Audits `PRODUCT_ACTIVATED` /
+`PRODUCT_DEACTIVATED`.
+
+**Deactivation does not touch assignment rows**, not even their `updated_at`. It makes the
+product ineligible for a *new* assignment (V-17 raises `55000`) and removes it from the
+Retailer-facing list, which is exactly "unavailable for future matching". It is **not** a
+deletion: the product row, its `created_at` and all assignment history survive, and an
+INACTIVE product remains editable.
+
+**Classification: A. NOT modified by `20260807090000`** — its only normalization feeds a closed
+`in ('ACTIVE','INACTIVE')` test, so it has no path to a raw constraint error and needed no
+repair. Tests: `vendor_product_writes_test.sql`, `vendor-product-writes-contract.test.ts`.
 
 ---
 
@@ -1456,6 +1479,11 @@ applied where a client actually needs it and nowhere else. The web page is uncha
   `lib/staff/retailer-staff-invitations.ts`.
 - `create_vendor_product` / `update_vendor_product` distinguish duplicate **code** from
   duplicate **barcode** by substring, in `lib/products/vendor-products.ts`.
+  **Mitigated, not solved:** `lib/products/vendor-product-writes-contract.test.ts` now pins the
+  exact allowlist of messages those two functions may raise, and
+  `vendor_product_writes_test.sql` asserts both literals by value. A rewording therefore fails
+  a test instead of silently breaking a client — but the discrimination is still by text, and
+  the recommendation below stands.
 
 Message text is not an API. Any rewording silently breaks both clients.
 **Recommend:** distinct SQLSTATEs (e.g. `55000` for the conflict) or an `errcode` + stable
@@ -1474,6 +1502,12 @@ is the direct blocker for "secure account switching" on mobile. **Recommend:** a
 `update_vendor_product` and `set_vendor_product_status` all return `void` and silently no-op
 when the state already matches. A client cannot tell "changed" from "already so".
 **Recommend:** return a `boolean` (changed) or a small status enum.
+
+**Deliberately left as-is by the product-writes milestone.** Changing a return type needs a
+`DROP` + re-`CREATE` of a function the web calls, which is not an additive change, and the
+information is recoverable: `get_vendor_product_detail(id)` returns the authoritative row
+after any write, on a primary-key lookup. Both no-ops are *successes*, so a client that treats
+them as such loses nothing today. See `docs/mobile-vendor-product-writes-audit.md` § 11.
 
 ### 6.7 `setof` for logically singleton contexts
 
