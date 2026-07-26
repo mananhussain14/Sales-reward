@@ -16,7 +16,9 @@
  * They do NOT execute the functions. The BEHAVIOURAL suite is
  * supabase/tests/database/vendor_product_writes_test.sql — pgTAP, covering every role denial,
  * the permission requirement proved by REMOVING a seeded mapping, field-by-field validation
- * at both length boundaries, normalization against all 25 whitespace characters, per-Vendor
+ * at both length boundaries, normalization against 16 representative whitespace characters
+ * (every distinct member of JavaScript's `\s` plus both endpoints of the U+2000–U+200A range —
+ * the FULL 25-code-point set equality is proven by test 35 below, not by pgTAP), per-Vendor
  * uniqueness including case and separator variants, no-op edit semantics, status transitions,
  * the assignment non-interaction, tenant isolation in both directions, and the property that
  * NO input can produce a raw constraint error. It requires Docker and is run with:

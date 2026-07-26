@@ -705,18 +705,31 @@ already make a repeated identical submission harmless.
 
 ## 14. Performance and indexes
 
-**No index was added.** Every predicate the writes use is already served. Measured on a
-local database with **5,000 products** in one Vendor's catalogue, after `ANALYZE`:
+**No index was added.** Every predicate the writes use is already served.
 
-| Operation | Plan |
-| --- | --- |
-| Edit/status target lookup (`id` + Vendor, `FOR UPDATE`) | `LockRows → Index Scan using vendor_products_pkey` |
-| Product-code uniqueness | `Index Only Scan using vendor_products_code_unique_idx` |
-| Barcode uniqueness | `Index Only Scan using vendor_products_barcode_unique_idx` |
-| Read-after-write (`get_vendor_product_detail`) | `Nested Loop Left Join` → PK index scan + `Bitmap Index Scan on vendor_product_assign_product_status_idx` |
+Measured on a local database holding **10,000 products — 5,000 for each of two Vendors**,
+after `ANALYZE`. The two catalogues deliberately use the **same 5,000 product codes**
+(`PERF-1` … `PERF-5000`), so a plan that ignored the Vendor predicate would both return the
+wrong row and touch twice the pages:
 
-No sequential scan appears in any of them. The audit insert is an unqualified single-row
-`INSERT` with no lookup.
+| Operation | Plan | Buffers | Exec time | Other Vendor's rows scanned |
+| --- | --- | --- | --- | --- |
+| Edit/status target lookup (`id` + Vendor, `FOR UPDATE`) | `LockRows → Index Scan using vendor_products_pkey` | 4 | **0.048 ms** | none |
+| `product_code` uniqueness | `Index Only Scan using vendor_products_code_unique_idx` | 3 | **0.055 ms** | none |
+| `barcode` uniqueness | `Index Only Scan using vendor_products_barcode_unique_idx` (partial) | 3 | **0.042 ms** | none |
+| Audit insertion | `Insert on audit_logs` + 2 FK triggers, **no lookup** | 14 | **0.444 ms** | n/a |
+| Read-after-write (`get_vendor_product_detail`) | `Nested Loop Left Join` → PK scan + `Bitmap Index Scan on vendor_product_assign_product_status_idx` | 4 | **0.073 ms** | none |
+
+**No sequential scan appears in any plan**, and no growing table is scanned: 3–4 shared
+buffers is an index page plus one heap page, where a 10,000-row sequential scan would touch
+roughly 60. The uniqueness probes return `rows=1` even though the *other* Vendor holds a
+product with the identical code — the composite `(vendor_organization_id, product_code)` index
+is what makes that both correct and cheap.
+
+**Why no new index is justified:** every write predicate is already the leading-column prefix
+of an existing index — the primary key for the target lookup, and the two unique indexes that
+are themselves the concurrency authorities. An added index would be pure write cost against a
+measured 0.05 ms read.
 
 The writes avoid every anti-pattern the brief lists: no Vendor-wide product fetch before
 writing, no client-side duplicate check as the authority (the indexes are), one
@@ -794,7 +807,7 @@ For every input the browser can produce, the stored result is byte-identical (§
 
 ### pgTAP — `supabase/tests/database/vendor_product_writes_test.sql`
 
-**205 assertions.** New file; the three write functions previously had **no** database test
+**211 assertions.** New file; the three write functions previously had **no** database test
 of any kind.
 
 | Section | Covers |
@@ -807,15 +820,40 @@ of any kind.
 | F | Edit authorization and tenant isolation, byte-identical refusals, Vendor B's row unchanged, cross-tenant duplicate values permitted |
 | G | Edit semantics — every mutable field, clearing to null, normalization parity with create, code immutability (including the trigger), `created_at` preserved, no-op and whitespace-only-no-op, one audit row per meaningful change, full rollback on conflict |
 | H | Status transitions both ways, idempotent same-status, invalid statuses, status/edit independence, assignment non-interaction, history preserved, INACTIVE products still editable |
-| I | **The regression suite for the repaired defect** — all 25 whitespace characters against name, code, brand and description; whitespace-only optionals; and the whole-input-space property that nothing but a safe message can be returned |
+| I | **The regression suite for the repaired defect** — 16 representative whitespace characters against name, code, brand and description (every distinct member of JavaScript's `\s`, plus both endpoints of the U+2000–U+200A range; the **full 25-code-point set equality is proven by the static test**, not here); whitespace-only optionals; and the whole-input-space property that nothing but a safe message can be returned |
 | J | Writes expose nothing sensitive; read-after-write through the existing detail read |
 | K | Uniqueness authorities are real per-Vendor unique indexes, the barcode one partial; no audit row without its product; every audit row on the trusted Vendor |
 | L | Assignment boundary untouched; full lifecycle produces zero assignment rows and exactly four audit rows in order; no action code outside the six shipped; nothing deleted |
 
-Verified to **fail without the repair**: with the migration removed and the database reset,
-the hostile-input property returns
-`new row for relation "vendor_products" violates check constraint
-"vendor_products_code_normalized"`, and Section A fails on the missing helpers.
+Verified to **fail without the repair**, in two independent ways:
+
+1. **Migration removed + `db reset`** — Section A fails on the missing helpers (`function
+   "public.normalize_product_line(text)" does not exist`).
+2. **Helpers kept, only the two function bodies reverted to the pre-repair `btrim`-first
+   versions** — the stronger proof, because it isolates the behaviour rather than the
+   objects. Test 116 fails (`a TAB-padded spelling is also refused as a duplicate`) and
+   Section I then aborts with the defect itself:
+   `new row for relation "vendor_products" violates check constraint
+   "vendor_products_name_trimmed"`.
+
+### The `updated_at` witness — corrected during final verification
+
+Three no-op assertions originally compared `updated_at` before and after. **That comparison is
+vacuous inside this suite**: `set_updated_at` assigns `now()`, which is the *transaction*
+timestamp, so every row created here has `created_at = updated_at` and the check would have
+passed even if the no-op had performed a full `UPDATE`. Verified directly against the database.
+
+They now assert on **`ctid`, the physical row version**. PostgreSQL implements `UPDATE` as
+insert-new-version + mark-old-dead, so any row-touching write changes it and a statement that
+writes nothing leaves it alone — proving the stronger claim the no-op branches actually make.
+Mirror assertions prove a *real* edit and a *real* status change **do** change the version, so
+"unchanged" cannot pass vacuously. The same correction was applied to the assignment-row check
+in Section H, and two audit-ordering assertions were re-anchored from `created_at` (which ties
+for every row in one transaction) to `ctid`.
+
+Validated by simulation: with the no-op short-circuit deleted from the live
+`update_vendor_product`, **three** assertions now fail (146, 148, 150) where only the audit-row
+one would have failed before.
 
 ### Static — `lib/products/vendor-product-writes-contract.test.ts`
 
@@ -835,7 +873,7 @@ untouched.
 | --- | --- | --- |
 | Migrations | 40 | **41** |
 | Database test files | 9 | **10** |
-| pgTAP assertions | 1,053 | **1,258** (+205) |
+| pgTAP assertions | 1,053 | **1,264** (+211) |
 | Node test suites | 242 | **243** |
 | Node assertions | 989 | **1,039** (+50) |
 

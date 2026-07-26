@@ -794,7 +794,7 @@ eligibility, and only then dispatches.
 | Classification | **A** |
 | Backend change | **REPAIRED** in `20260807090000_repair_vendor_product_write_normalization.sql` — signature, return type, grants and semantics all unchanged. The function normalized with `btrim` (which removes **only U+0020**) *before* collapsing whitespace, so a leading or trailing tab, newline, CR, form feed, vertical tab or Unicode space separator survived, became a plain space, and was never trimmed — hitting a table `CHECK` constraint and returning PostgreSQL's raw error text, naming `vendor_products` and the constraint, to the caller. The web never triggered it because `product-input.ts` trims in JavaScript first, which made the rule **TypeScript-only in practice**. Normalization is now collapse-then-trim over an explicit character class equal to JavaScript's `\s`, so web and Flutter cannot disagree about what a value means. **No input can reach a constraint any more** — proved as a property of the whole input space in pgTAP. Full audit: `docs/mobile-vendor-product-writes-audit.md`. |
 | Normalization (exact) | code → trim + collapse + **upper**; name → trim + collapse; brand → trim + collapse, `''` → null; description → **trim only** (internal formatting preserved), `''` → null; barcode → strip whitespace **and hyphens**, `''` → null. Lengths counted in **characters**, not bytes. |
-| Tests | pgTAP `supabase/tests/database/vendor_product_writes_test.sql` (205); static `lib/products/vendor-product-writes-contract.test.ts` (50); `lib/products/product-input.test.ts` (24) |
+| Tests | pgTAP `supabase/tests/database/vendor_product_writes_test.sql` (211); static `lib/products/vendor-product-writes-contract.test.ts` (50); `lib/products/product-input.test.ts` (24) |
 
 ---
 

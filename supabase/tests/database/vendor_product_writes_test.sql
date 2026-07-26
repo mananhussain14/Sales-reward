@@ -317,6 +317,33 @@ language sql stable as $$
     and (p_action is null or a.action = p_action);
 $$;
 
+/*
+ * The physical row version of one product — the ONLY non-vacuous witness that a write
+ * actually wrote something, inside a suite that runs in one transaction.
+ *
+ * WHY updated_at CANNOT BE THAT WITNESS. set_updated_at assigns now(), and now() is the
+ * TRANSACTION timestamp — constant for the whole of this suite. So `created_at = updated_at`
+ * for every row created here, and an assertion that a no-op "did not move updated_at" would
+ * pass even if the no-op had performed a full UPDATE. Verified directly: inside one
+ * transaction, created_at = updated_at is TRUE immediately after create.
+ *
+ * ctid is the tuple's physical location. PostgreSQL implements UPDATE as insert-new-version +
+ * mark-old-dead, so ANY row-touching UPDATE changes it, and a statement that writes nothing
+ * leaves it alone. Asserting on ctid therefore proves the stronger claim the no-op branches
+ * actually make — "no row version was written at all" — which implies updated_at could not
+ * have moved, in this transaction or any other.
+ */
+create function pg_temp.row_version(p_id uuid) returns text
+language sql stable as $$
+  select ctid::text from public.vendor_products where id = p_id;
+$$;
+
+create function pg_temp.assignment_row_version(p_product uuid) returns text
+language sql stable as $$
+  select ctid::text from public.vendor_product_retailer_assignments
+  where vendor_product_id = p_product;
+$$;
+
 create table pg_temp.fx (k text primary key, v uuid);
 create function pg_temp.fx(p_k text) returns uuid
 language sql stable as $$ select v from pg_temp.fx where k = p_k; $$;
@@ -1058,20 +1085,38 @@ select ok(
   (select updated_at >= created_at from public.vendor_products where id = pg_temp.fx('p1')),
   'updated_at is at or after created_at');
 
+-- updated_at is trigger-owned and cannot be forged by a caller: no write function assigns it,
+-- and set_updated_at_on_vendor_products is the only thing that does.
+select is(
+  (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public'
+     and p.proname in ('create_vendor_product', 'update_vendor_product', 'set_vendor_product_status')
+     and p.prosrc ~* 'updated_at'),
+  0::bigint,
+  'no write function mentions updated_at — the trigger owns it exclusively');
+
 -- THE NO-OP EDIT. Submitting the form unchanged must not write, must not move updated_at, and
 -- must not write an audit row: an audit trail whose entries do not correspond to changes is
 -- worse than a shorter one.
 create temporary table pg_temp.before_noop as
-select updated_at, pg_temp.audit_count(pg_temp.fx('p1')) as audits
+select updated_at,
+       pg_temp.row_version(pg_temp.fx('p1')) as version,
+       pg_temp.audit_count(pg_temp.fx('p1')) as audits
 from public.vendor_products where id = pg_temp.fx('p1');
 
 select public.update_vendor_product(pg_temp.fx('p1'), 'Spaced Name', '111222333444',
                                     'Brand Name', E'Body\n\nText');
 
+-- THE REAL ASSERTION: no row version was written. See pg_temp.row_version — comparing
+-- updated_at alone would be vacuous here, because now() is constant within this transaction.
+select is(
+  pg_temp.row_version(pg_temp.fx('p1')),
+  (select version from pg_temp.before_noop),
+  'a no-op edit writes NO row version at all — so it cannot have moved updated_at');
 select is(
   (select updated_at from public.vendor_products where id = pg_temp.fx('p1')),
   (select updated_at from pg_temp.before_noop),
-  'a no-op edit does not move updated_at');
+  'and updated_at is unchanged');
 select is(
   pg_temp.audit_count(pg_temp.fx('p1')),
   (select audits from pg_temp.before_noop),
@@ -1089,15 +1134,22 @@ select is(pg_temp.sqlstate_of(
 select public.update_vendor_product(pg_temp.fx('p1'), '  Spaced    Name  ', ' 111 222 333 444 ',
                                     ' Brand  Name ', E'\tBody\n\nText\t');
 select is(
-  (select updated_at from public.vendor_products where id = pg_temp.fx('p1')),
-  (select updated_at from pg_temp.before_noop),
-  'a whitespace-only difference is recognized as no change at all');
+  pg_temp.row_version(pg_temp.fx('p1')),
+  (select version from pg_temp.before_noop),
+  'a whitespace-only difference is recognized as no change at all — no row version written');
 
--- A MEANINGFUL EDIT WRITES EXACTLY ONE AUDIT ROW.
+-- A MEANINGFUL EDIT WRITES EXACTLY ONE AUDIT ROW — and a NEW ROW VERSION, which is the
+-- mirror that makes the no-op assertions above non-vacuous.
 create temporary table pg_temp.before_real as
-select pg_temp.audit_count(pg_temp.fx('p1'), 'PRODUCT_UPDATED') as updates;
+select pg_temp.audit_count(pg_temp.fx('p1'), 'PRODUCT_UPDATED') as updates,
+       pg_temp.row_version(pg_temp.fx('p1')) as version;
 
 select public.update_vendor_product(pg_temp.fx('p1'), 'Truly Different');
+
+select isnt(
+  pg_temp.row_version(pg_temp.fx('p1')),
+  (select version from pg_temp.before_real),
+  'a REAL edit writes a NEW row version — so the no-op checks above can discriminate');
 select is(
   pg_temp.audit_count(pg_temp.fx('p1'), 'PRODUCT_UPDATED'),
   (select updates + 1 from pg_temp.before_real),
@@ -1106,7 +1158,9 @@ select is(
   (select array_agg(k order by k) from jsonb_object_keys(
      (select metadata from public.audit_logs
       where entity_id = pg_temp.fx('p1')::text and action = 'PRODUCT_UPDATED'
-      order by created_at desc limit 1)) k),
+      -- ctid desc, not created_at desc: every audit row in this transaction shares one
+      -- created_at, so only physical order identifies the row most recently written.
+      order by ctid desc limit 1)) k),
   array['product_code', 'product_name', 'product_status'],
   'the update audit metadata carries exactly three display keys');
 
@@ -1166,16 +1220,37 @@ select is(pg_temp.audit_count(pg_temp.fx('p_status'), 'PRODUCT_ACTIVATED'), 1::b
 -- SETTING THE CURRENT STATUS IS AN IDEMPOTENT NO-OP. A double-tap on a mobile button must not
 -- produce two audit rows describing one decision.
 create temporary table pg_temp.before_same as
-select updated_at, pg_temp.audit_count(pg_temp.fx('p_status')) as audits
+select updated_at,
+       pg_temp.row_version(pg_temp.fx('p_status')) as version,
+       pg_temp.audit_count(pg_temp.fx('p_status')) as audits
 from public.vendor_products where id = pg_temp.fx('p_status');
 
 select public.set_vendor_product_status(pg_temp.fx('p_status'), 'ACTIVE');
 select is(pg_temp.audit_count(pg_temp.fx('p_status')), (select audits from pg_temp.before_same),
   'setting the status it already has writes no audit row');
 select is(
+  pg_temp.row_version(pg_temp.fx('p_status')),
+  (select version from pg_temp.before_same),
+  'and writes NO row version — so it cannot have moved updated_at');
+select is(
   (select updated_at from public.vendor_products where id = pg_temp.fx('p_status')),
   (select updated_at from pg_temp.before_same),
-  'and does not move updated_at');
+  'and updated_at is unchanged');
+
+-- THE MIRROR, and the reason the check above is not vacuous: a REAL status change DOES write
+-- a new row version. Without this, "the version did not change" would also pass for a function
+-- that never writes anything at all, and the no-op assertion would prove nothing.
+create temporary table pg_temp.before_real_status as
+select pg_temp.row_version(pg_temp.fx('p_status')) as version;
+
+select public.set_vendor_product_status(pg_temp.fx('p_status'), 'INACTIVE');
+
+select isnt(
+  pg_temp.row_version(pg_temp.fx('p_status')),
+  (select version from pg_temp.before_real_status),
+  'a REAL status change writes a NEW row version — so the no-op check above can discriminate');
+
+select public.set_vendor_product_status(pg_temp.fx('p_status'), 'ACTIVE');
 
 -- INVALID TARGET STATUSES ARE REFUSED, with the function's own message.
 select is(pg_temp.sqlstate_of(
@@ -1209,7 +1284,9 @@ insert into public.vendor_product_retailer_assignments
 values (pg_temp.fx('p_status'), pg_temp.fx('alpha'), 'ACTIVE', pg_temp.fx('ada'));
 
 create temporary table pg_temp.before_deact as
-select status, updated_at from public.vendor_product_retailer_assignments
+select status, updated_at,
+       pg_temp.assignment_row_version(pg_temp.fx('p_status')) as version
+from public.vendor_product_retailer_assignments
 where vendor_product_id = pg_temp.fx('p_status');
 
 select public.set_vendor_product_status(pg_temp.fx('p_status'), 'INACTIVE');
@@ -1220,10 +1297,14 @@ select is(
   (select status from pg_temp.before_deact),
   'deactivating a product does NOT change its assignment rows');
 select is(
+  pg_temp.assignment_row_version(pg_temp.fx('p_status')),
+  (select version from pg_temp.before_deact),
+  'and writes NO new version of the assignment row — the row is not touched at all');
+select is(
   (select updated_at from public.vendor_product_retailer_assignments
    where vendor_product_id = pg_temp.fx('p_status')),
   (select updated_at from pg_temp.before_deact),
-  'and does not even touch the assignment row''s updated_at');
+  'and the assignment row''s updated_at is unchanged');
 select is(
   (select count(*) from public.vendor_product_retailer_assignments
    where vendor_product_id = pg_temp.fx('p_status')),
@@ -1531,8 +1612,12 @@ select is(
   'create, edit and two status changes created no assignment row of any kind');
 select is(pg_temp.audit_count(pg_temp.fx('p_life')), 4::bigint,
   'and produced exactly four audit rows: created, updated, deactivated, activated');
+-- ORDERED BY ctid, NOT created_at. now() is the TRANSACTION timestamp, so all four audit rows
+-- written by this suite carry the SAME created_at and `order by created_at` is an unspecified
+-- ordering that happens to work. ctid is physical insertion order, which for four appended
+-- rows in one transaction is exactly the order the operations ran in.
 select is(
-  (select array_agg(action order by created_at) from public.audit_logs
+  (select array_agg(action order by ctid) from public.audit_logs
    where entity_id = pg_temp.fx('p_life')::text),
   array['PRODUCT_CREATED', 'PRODUCT_UPDATED', 'PRODUCT_DEACTIVATED', 'PRODUCT_ACTIVATED'],
   'in exactly that order, with exactly those four action codes');
