@@ -15,6 +15,14 @@ it was first written:
 | `20260805090000_mobile_vendor_dashboard_summary.sql` | `public.get_vendor_admin_dashboard_summary()` | **V-01**, and `docs/mobile-vendor-dashboard-summary-audit.md` |
 | `20260806090000_mobile_vendor_company_profile_reads.sql` | `public.get_my_vendor_profile()` | **V-19**, and `docs/mobile-vendor-company-profile-reads-audit.md` |
 
+**The Vendor Product-to-Retailer assignment-writes milestone added NO migration and NO RPC.**
+It audited `public.assign_vendor_product_to_retailer(uuid, uuid)` and
+`public.unassign_vendor_product_from_retailer(uuid, uuid)` (both shipped in
+`20260727210000_vendor_product_catalog_operations.sql`), found them already safe for a second
+client, and **reused them unchanged** — adding only a behavioural pgTAP suite, static contract
+guards and documentation. See **V-17**, **V-18**, § 6.6, § 6.8, and
+`docs/mobile-vendor-product-assignment-writes-audit.md`.
+
 Everything else below still describes the schema as audited: no other migration, RPC, RLS
 policy, grant, Storage policy, environment variable, or application file was created or
 changed. In particular **no existing function was edited, dropped, or replaced by any of
@@ -879,22 +887,65 @@ Full audit: `docs/mobile-vendor-product-reads-audit.md`.
 
 ---
 
-#### V-17 — Assign a product to a Retailer
+#### V-17 — Assign a product to a Retailer (**and reactivate a withdrawn one — one operation**)
 
-RPC `public.assign_vendor_product_to_retailer(uuid, uuid)`, `authenticated`, permission
-`PRODUCT_RETAILER_ASSIGN`. Requires the product to be `ACTIVE` (`55000` otherwise) and the
-relationship *and* Retailer org to be `ACTIVE`. Re-activates an `INACTIVE` assignment rather
-than inserting a duplicate; returns silently if already `ACTIVE`. Returns `void`.
-**Classification: A.** See § 6.6 — `void` + silent no-op is a weak contract for a client that
-wants to know whether anything changed.
+| Field | Value |
+| --- | --- |
+| Feature | Make an `ACTIVE` product visible to one of this Vendor's `ACTIVE` Retailers |
+| Role | Vendor Super Admin |
+| Permission | **`PRODUCT_RETAILER_ASSIGN`** — **distinct from `PRODUCTS_MANAGE`**, which neither grants nor is required |
+| Web route | `/products/[productId]` — the only assignment surface in the product |
+| Server Action | `assignProductAction` |
+| Existing RPC | `public.assign_vendor_product_to_retailer(p_product_id uuid, p_retailer_organization_id uuid)` — `authenticated` |
+| Inputs | exactly two opaque addresses. **No** status, note, date, relationship id, assignment id or idempotency key; **no** defaults |
+| Backend-resolved | Vendor org (from `auth.uid()` → `get_vendor_super_admin_context()`, lowest org id), `assigned_by_profile_id`, `assigned_at`, status |
+| Returns | `void` — see § 6.6 |
+| Errors | `55000` ineligible product · `42501` for everything else, **one identical message** for unauthorized / unknown / foreign / suspended / deactivated · `23505` under a race (unreachable in practice) |
+| RLS & authorization | Context → permission → product matched on **id AND derived Vendor** → Retailer reached only through the derived Vendor's own `vendor_retailers` row |
+| Tables | `vendor_product_retailer_assignments`, `audit_logs` |
+| Idempotency | `vendor_product_retailer_assign_unique_idx (vendor_product_id, retailer_organization_id)` — **UNIQUE and UNPARTIAL**: one row per pairing **for all time** |
+| Flutter direct? | **Yes** |
+| Classification | **A** |
+| Backend change | **None. Reused unchanged** by the assignment-writes milestone, which added **no migration and no RPC**. The audit traced the whole web path and found no direct table write, no service-role client, no caller-supplied tenant id and **no TypeScript-only validation rule** — the function accepts no text input at all, so unlike V-13/V-14 it has no normalization path to a raw constraint error and needed no repair. Full audit: `docs/mobile-vendor-product-assignment-writes-audit.md`. |
+| Semantics (exact) | **Create and reactivate are ONE call.** Inserts when no row exists; flips an existing `INACTIVE` row back to `ACTIVE`. Assigning an already-`ACTIVE` pairing is a **silent no-op — no row version written, no audit row**. Requires product `ACTIVE` **and** relationship `ACTIVE` **and** Retailer org `ACTIVE`; reactivation goes through the same gate. **`assigned_at` is OVERWRITTEN with `now()` on reactivation** — it is the *current* assignment's start, **not** the pairing's first-ever assignment; `assigned_by_profile_id` becomes the current caller. Audit: `PRODUCT_ASSIGNED_TO_RETAILER` / `VENDOR_PRODUCT` / product id, five whitelisted display-only metadata keys, **in the same transaction** (an audit failure rolls the mutation back — proved, not asserted). |
+| Tests | pgTAP `supabase/tests/database/vendor_product_assignment_writes_test.sql` (195, shared with V-18); static `lib/products/vendor-product-assignment-writes-contract.test.ts` (47, shared) |
 
 ---
 
 #### V-18 — Withdraw a product from a Retailer
 
-RPC `public.unassign_vendor_product_from_retailer(uuid, uuid)`, `authenticated`. Sets the
-assignment `INACTIVE`; never deletes. Silent no-op if absent or already `INACTIVE`.
-**Classification: A.**
+| Field | Value |
+| --- | --- |
+| Feature | End an assignment. **Not deletion** — the row survives as the record that this product was once available at this Retailer |
+| Role | Vendor Super Admin |
+| Permission | **`PRODUCT_RETAILER_ASSIGN`** — the same gate as V-17, and again not `PRODUCTS_MANAGE` |
+| Web route | `/products/[productId]` |
+| Server Action | `unassignProductAction` |
+| Existing RPC | `public.unassign_vendor_product_from_retailer(p_product_id uuid, p_retailer_organization_id uuid)` — `authenticated` |
+| Inputs | the same two addresses, and nothing else |
+| Backend-resolved | Vendor org, status, `updated_at` |
+| Returns | `void` |
+| Errors | `42501` only — unauthorized, unknown, foreign or not-this-Vendor's, **all one message** |
+| RLS & authorization | as V-17 |
+| Tables | `vendor_product_retailer_assignments`, `audit_logs` |
+| Flutter direct? | **Yes** |
+| Classification | **A** |
+| Backend change | **None. Reused unchanged.** |
+| Semantics (exact) | **Deliberately weaker than V-17: withdrawal requires NO status to be `ACTIVE`** — not the product's, not the relationship's, not the Retailer organization's. A Vendor must be able to withdraw a product from a Retailer it has since suspended, which is exactly when withdrawal matters most. Sets `status = 'INACTIVE'`; **there is no `DELETE` in either function**, and neither browser role holds `DELETE` on the table. **`assigned_at` is PRESERVED**; `updated_at` moves. Withdrawing an already-`INACTIVE` pairing — or one that never existed — is a **silent no-op that does not create a row**, so "no row" and "`INACTIVE` row" stay distinct. Audit: `PRODUCT_UNASSIGNED_FROM_RETAILER`, same entity, same five keys, same transaction. |
+| Tests | as V-17 |
+
+**Read-after-write for both.** The `void` return means a client re-reads canonically:
+`get_vendor_product_detail(id)` (V-12a) and `list_vendor_product_assigned_retailers(id)`
+(V-16a). After a withdrawal `assignment_count` is **unchanged** while
+`active_assignment_count` drops, and the withdrawn row is **still listed**, marked `INACTIVE` —
+which is how a client tells ending an assignment apart from erasing one. **Treat a no-op as
+success.**
+
+**Concurrency.** `assign` locks the product row `FOR UPDATE` before it decides, and both writes
+lock the assignment row `FOR UPDATE`, so all four races (create/create, create/withdraw,
+withdraw/create, withdraw/withdraw) serialize with **zero errors, zero duplicate rows, and an
+audit-row count equal to the number of *real* transitions**. Run against a live two-session
+database; recorded in the audit § 9. No client idempotency key is needed or added.
 
 ---
 
@@ -1509,6 +1560,14 @@ information is recoverable: `get_vendor_product_detail(id)` returns the authorit
 after any write, on a primary-key lookup. Both no-ops are *successes*, so a client that treats
 them as such loses nothing today. See `docs/mobile-vendor-product-writes-audit.md` § 11.
 
+**Reaffirmed by the assignment-writes milestone, for the two assignment functions.** Same
+reasoning, plus one that is specific to them: the no-op branch is what makes a **double-tap
+harmless** — it writes no row version *and no audit row*, so a repeated request cannot produce
+two audit entries for one decision. A `boolean` return would be nice to have; an audit trail
+whose entries do not correspond to changes would not. Canonical state after either write comes
+from `get_vendor_product_detail(id)` and `list_vendor_product_assigned_retailers(id)`. See
+`docs/mobile-vendor-product-assignment-writes-audit.md` § 11.
+
 ### 6.7 `setof` for logically singleton contexts
 
 `get_vendor_super_admin_context()`, `get_retailer_owner_portal_context()`,
@@ -1543,6 +1602,18 @@ contract so Dart wrappers are written the same way.
   cross-linkable", not as an error. The **old** `list_vendor_product_retailer_assignments()` is
   unchanged and still returns no relationship id — it is the assign/withdraw editor matrix and
   the web depends on it as it is.
+  ✅ **Settled for the assignment WRITES, with no change to them.** The assignment-writes
+  audit examined whether V-17/V-18 should be re-addressed by `p_relationship_id` and concluded
+  **no**: `vendor_product_retailer_assignments` stores `retailer_organization_id` directly and
+  has **no relationship_id column**, so a relationship-id parameter would need a translation
+  step whose failure modes have no correct answer; and `relationship_id` is **nullable** in the
+  read contract, which would make the write un-callable for exactly the historical rows that
+  most need withdrawing. The two address spaces are reconciled **by the reads** instead —
+  `list_vendor_retailers()` and `list_vendor_product_assigned_retailers()` each carry **both**
+  ids on the same row, so a client opens the Retailer screen by `relationship_id` and calls the
+  write with `retailer_organization_id` without a second lookup. The Retailer organization id is
+  not authorization: the same Retailer may legitimately be managed by two Vendors, and the write
+  reaches it only through the **derived** Vendor's own relationship row.
 
 ### 6.9 `expire_stale_retailer_invitations` is a hidden write inside a read-ish path
 
