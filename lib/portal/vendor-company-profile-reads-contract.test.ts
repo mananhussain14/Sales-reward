@@ -952,7 +952,71 @@ describe("Vendor company profile reads — the web is untouched", () => {
     );
   });
 
-  test("33. the shared authorization module is unchanged in shape", () => {
+  test("33. the nameless-profile fallback divergence is pinned, and stays unreachable", () => {
+    // FINDING, recorded rather than fixed. The web header falls back to "Vendor Admin"
+    // (lib/auth/vendor-admin-access.ts) while this migration, list_vendor_users() and
+    // get_vendor_user_detail() fall back to 'Member'. The divergence is only OBSERVABLE if a
+    // profile can hold two blank name parts, and public.profiles forbids that — both name columns
+    // are NOT NULL with a `length(trim(...)) > 0` CHECK (20260716124419). pgTAP proves the
+    // unreachability behaviourally (Section I: five rejected writes, INSERT and UPDATE).
+    //
+    // This test pins BOTH literals so the divergence cannot silently widen: if someone changes the
+    // web floor, or the SQL floor, this fails and the finding has to be revisited rather than
+    // quietly becoming a real inconsistency. The web literal is deliberately NOT changed — that
+    // would be a visible web change this milestone forbids.
+    const web = readFileSync(join(ROOT, "lib/auth/vendor-admin-access.ts"), "utf8");
+    assert.match(
+      web,
+      /FALLBACK_USER_DISPLAY_NAME\s*=\s*"Vendor Admin"/,
+      "the web header floor must still be \"Vendor Admin\" — unchanged by this milestone",
+    );
+
+    assert.match(
+      statement(),
+      /'Member'/,
+      "the new RPC must use the 'Member' floor, matching the other SQL reads",
+    );
+
+    // And the two other SQL reads it must agree with.
+    const users = readFileSync(
+      join(MIGRATIONS_DIR, "20260801090000_mobile_vendor_user_reads.sql"),
+      "utf8",
+    );
+    assert.equal(
+      (users.match(/'Member'/g) ?? []).length,
+      2,
+      "list_vendor_users() and get_vendor_user_detail() must both still use the 'Member' floor",
+    );
+
+    // The constraints that make the divergence unreachable must still be in the schema. Asserted
+    // against the migration text, because if they were ever relaxed the two literals would become
+    // observably different in two clients.
+    const identity = readFileSync(
+      join(MIGRATIONS_DIR, "20260716124419_core_identity_tables.sql"),
+      "utf8",
+    );
+    for (const constraint of [
+      "profiles_first_name_not_empty",
+      "profiles_last_name_not_empty",
+    ]) {
+      assert.ok(
+        identity.includes(constraint),
+        `${constraint} must still exist — it is what makes the fallback divergence unreachable`,
+      );
+    }
+    assert.match(
+      identity,
+      /first_name\s+text\s+not null/i,
+      "profiles.first_name must remain NOT NULL",
+    );
+    assert.match(
+      identity,
+      /last_name\s+text\s+not null/i,
+      "profiles.last_name must remain NOT NULL",
+    );
+  });
+
+  test("34. the shared authorization module is unchanged in shape", () => {
     // getVendorSuperAdminAccess() remains the web's single source for the header identity, and it
     // still returns the four display/identity values it always did. A change here would be a
     // visible web change smuggled in under a backend milestone.

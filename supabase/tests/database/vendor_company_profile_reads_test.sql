@@ -984,6 +984,326 @@ select is(
   'calling the self-read inserts, updates and deletes NOTHING — including no audit row');
 
 
+-- ============================================================================
+-- SECTION I — display-name composition, and its UNREACHABLE fallback
+-- ============================================================================
+-- Section B proves the composition for the two shapes the schema actually permits ("Ada Admin",
+-- and padded parts trimmed to "Pia Padded"). This section pins the FULL semantics of the
+-- expression AND proves that every other shape is impossible to store — which is what makes the
+-- 'Member' floor a defensive floor rather than a branch a client must handle.
+--
+-- WHY THIS MATTERS. lib/auth/vendor-admin-access.ts falls back to 'Vendor Admin' while this
+-- function, list_vendor_users() and get_vendor_user_detail() fall back to 'Member'. That
+-- divergence is only OBSERVABLE if a profile can hold two blank name parts. The constraint proofs
+-- below are the evidence that it cannot, so the divergence is unreachable and the web is
+-- deliberately left alone.
+
+-- The expression itself, on every name shape. Evaluated directly rather than through the function,
+-- because the table cannot be made to hold most of these — which is precisely the point.
+select is(
+  (select coalesce(nullif(btrim(btrim(f) || ' ' || btrim(l)), ''), 'Member')
+     from (values ('Ada','Admin')) v(f,l)),
+  'Ada Admin',
+  'composition: both parts present -> "First Last"');
+
+select is(
+  (select coalesce(nullif(btrim(btrim(f) || ' ' || btrim(l)), ''), 'Member')
+     from (values ('  Pia  ','  Padded  ')) v(f,l)),
+  'Pia Padded',
+  'composition: padding is trimmed on BOTH parts and they are joined by exactly one space');
+
+select is(
+  (select coalesce(nullif(btrim(btrim(f) || ' ' || btrim(l)), ''), 'Member')
+     from (values ('Ada','')) v(f,l)),
+  'Ada',
+  'composition: first name only -> no trailing space (UNREACHABLE — see the CHECK proofs below)');
+
+select is(
+  (select coalesce(nullif(btrim(btrim(f) || ' ' || btrim(l)), ''), 'Member')
+     from (values ('','Admin')) v(f,l)),
+  'Admin',
+  'composition: last name only -> no leading space (UNREACHABLE)');
+
+select is(
+  (select coalesce(nullif(btrim(btrim(f) || ' ' || btrim(l)), ''), 'Member')
+     from (values ('   ','  ')) v(f,l)),
+  'Member',
+  'composition: both parts whitespace-only -> the fallback literal (UNREACHABLE)');
+
+select is(
+  (select coalesce(nullif(btrim(btrim(f) || ' ' || btrim(l)), ''), 'Member')
+     from (values ('','')) v(f,l)),
+  'Member',
+  'composition: both parts empty -> the fallback literal (UNREACHABLE)');
+
+-- NULL PROPAGATION. btrim(null) is null and `null || ' '` is null, so a null part collapses the
+-- whole expression to null and the coalesce catches it. Asserted for each null position, because a
+-- future rewrite using concat() instead of || would silently change this (concat treats null as '').
+select is(
+  (select coalesce(nullif(btrim(btrim(f) || ' ' || btrim(l)), ''), 'Member')
+     from (values (null::text,null::text)) v(f,l)),
+  'Member',
+  'composition: both parts NULL -> the fallback literal, never a bare null (UNREACHABLE)');
+
+select is(
+  (select coalesce(nullif(btrim(btrim(f) || ' ' || btrim(l)), ''), 'Member')
+     from (values (null::text,'Admin')) v(f,l)),
+  'Member',
+  'composition: a NULL first name collapses the whole value — || propagates null (UNREACHABLE)');
+
+select is(
+  (select coalesce(nullif(btrim(btrim(f) || ' ' || btrim(l)), ''), 'Member')
+     from (values ('Ada',null::text)) v(f,l)),
+  'Member',
+  'composition: a NULL last name collapses the whole value (UNREACHABLE)');
+
+-- NOW THE UNREACHABILITY PROOFS. public.profiles constrains BOTH name columns NOT NULL and
+-- `length(trim(...)) > 0` (20260716124419), so none of the shapes marked UNREACHABLE above can be
+-- stored — on INSERT or on UPDATE.
+select ok(
+  (select count(*) from pg_constraint
+    where conrelid = 'public.profiles'::regclass
+      and contype = 'c'
+      and conname in ('profiles_first_name_not_empty', 'profiles_last_name_not_empty')) = 2,
+  'both profiles name columns carry a non-empty-after-trim CHECK');
+
+select ok(
+  (select count(*) from pg_attribute
+    where attrelid = 'public.profiles'::regclass
+      and attname in ('first_name','last_name')
+      and attnotnull) = 2,
+  'both profiles name columns are NOT NULL');
+
+-- A person to attempt the impossible writes against. Created here, not in the fixture block, so
+-- the attempts sit beside the claim they support.
+insert into auth.users (id, email)
+values ('dddddddd-0000-0000-0000-00000000000d', 'floor@test.invalid');
+
+select throws_ok(
+  $$insert into public.profiles (id, first_name, last_name)
+    values ('dddddddd-0000-0000-0000-00000000000d', null, 'Surname')$$,
+  '23502',
+  null,
+  'a NULL first_name cannot be stored');
+
+select throws_ok(
+  $$insert into public.profiles (id, first_name, last_name)
+    values ('dddddddd-0000-0000-0000-00000000000d', 'Given', null)$$,
+  '23502',
+  null,
+  'a NULL last_name cannot be stored');
+
+select throws_ok(
+  $$insert into public.profiles (id, first_name, last_name)
+    values ('dddddddd-0000-0000-0000-00000000000d', '', 'Surname')$$,
+  '23514',
+  null,
+  'an EMPTY first_name cannot be stored');
+
+select throws_ok(
+  $$insert into public.profiles (id, first_name, last_name)
+    values ('dddddddd-0000-0000-0000-00000000000d', 'Given', '')$$,
+  '23514',
+  null,
+  'an EMPTY last_name cannot be stored');
+
+select throws_ok(
+  $$insert into public.profiles (id, first_name, last_name)
+    values ('dddddddd-0000-0000-0000-00000000000d', '   ', '  ')$$,
+  '23514',
+  null,
+  'WHITESPACE-ONLY name parts cannot be stored — so the fallback literal is unreachable');
+
+-- Padded but non-empty IS storable, which is why Section B's "Pia Padded" case is real.
+select lives_ok(
+  $$insert into public.profiles (id, first_name, last_name)
+    values ('dddddddd-0000-0000-0000-00000000000d', '  Given  ', '  Surname  ')$$,
+  'padded but non-empty name parts ARE storable — the trimming case is reachable');
+
+-- And the constraint holds on UPDATE too, so an existing profile cannot be emptied later.
+select throws_ok(
+  $$update public.profiles set first_name = '   '
+     where id = 'dddddddd-0000-0000-0000-00000000000d'$$,
+  '23514',
+  null,
+  'an existing profile cannot be UPDATED to a blank name either');
+
+-- THE FALLBACK LITERAL IS THE SAME ONE THE OTHER SQL READS USE. Asserted against the deployed
+-- function bodies, so a future edit that changed one and not the others fails here.
+select ok(
+  (select pg_get_functiondef(p.oid) like '%''Member''%'
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public' and p.proname = 'get_my_vendor_profile'),
+  'get_my_vendor_profile uses the ''Member'' floor');
+
+select ok(
+  (select bool_and(pg_get_functiondef(p.oid) like '%''Member''%')
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public'
+      and p.proname in ('list_vendor_users', 'get_vendor_user_detail')),
+  'and so do list_vendor_users() and get_vendor_user_detail() — one answer inside the database');
+
+-- Under the constraints above, the display name for ANY storable profile is exactly
+-- "trim(first) || ' ' || trim(last)". Asserted end to end against the function for the caller.
+select pg_temp.act_as(pg_temp.fx('ada'));
+select is(
+  pg_temp.my_name(),
+  (select btrim(p.first_name) || ' ' || btrim(p.last_name)
+     from public.profiles p where p.id = pg_temp.fx('ada')),
+  'for any STORABLE profile the returned name is exactly trim(first) || one space || trim(last)');
+
+
+-- ============================================================================
+-- SECTION J — an empty role array is UNREACHABLE, and duplicates cannot inflate
+-- ============================================================================
+-- Section B observes that the array is never empty for an authorized caller. That is an
+-- observation about a fixture. This proves it is a PROPERTY of the authorization chain: the only
+-- way to empty the array is to remove the very assignment that authorizes the caller, which
+-- produces a refusal instead.
+
+select pg_temp.act_as(pg_temp.fx('ivy'));
+select is(pg_temp.my_roles(), array['Vendor Super Admin'],
+  'Ivy holds exactly the one authorizing role');
+
+select lives_ok(
+  $$delete from public.member_roles
+     where organization_member_id = (select id from public.organization_members
+                                      where user_id = (select id from public.profiles
+                                                        where first_name = 'Ivy'))$$,
+  'Ivy''s only role assignment can be removed');
+
+select is(pg_temp.profile_error(), '42501',
+  'removing the authorizing role DENIES — an empty role array is unreachable, not merely unobserved');
+
+select pg_temp.add_role(pg_temp.fx('m_ivy'), 'VENDOR_SUPER_ADMIN');
+select is(pg_temp.my_roles(), array['Vendor Super Admin'],
+  'restoring it restores the row — the denial above was caused by the removal');
+
+-- DUPLICATE ROLE ASSIGNMENT IS FORBIDDEN BY THE SCHEMA, so a role name cannot appear twice.
+select pg_temp.act_as(pg_temp.fx('ada'));
+
+-- Addressed through the fixture helper, so the statement names exactly Ada's Vendor A membership
+-- and the role she already holds on it — no incidental predicate could make this throw for another
+-- reason. pg_temp.add_role() cannot be reused here: it carries `on conflict do nothing`, which
+-- would swallow the very violation being asserted.
+select throws_ok(
+  $$insert into public.member_roles (organization_member_id, role_id)
+    select pg_temp.fx('m_ada'), r.id
+    from public.roles r
+    where r.code = 'VENDOR_SUPER_ADMIN'$$,
+  '23505',
+  null,
+  'a DUPLICATE (membership, role) assignment violates member_roles_pkey — a role cannot be held twice');
+
+select is(pg_temp.my_roles(), array['Claim Reviewer', 'Vendor Super Admin'],
+  'and the array is unchanged after the failed duplicate — no name is repeated');
+
+-- Ada holds TWO memberships and TWO active roles; the outer row is still one, and the array still
+-- has two entries. A join instead of a correlated aggregate would have produced two rows.
+select is(pg_temp.row_count(), 1::bigint,
+  'two roles and two memberships still yield ONE row');
+
+select is(array_length(pg_temp.my_roles(), 1), 2,
+  'and exactly two array entries — the aggregate cannot duplicate or drop one');
+
+
+-- ============================================================================
+-- SECTION K — the function is STRICTLY NARROWER than RLS, never wider
+-- ============================================================================
+-- The migration claims that requiring the role AND RBAC_READ "can only refuse callers the policies
+-- would have admitted, never admit one they would refuse". That is a comparison against RLS, so it
+-- is asserted as one: the same caller is put through the ACTUAL policies as the `authenticated`
+-- role, with RBAC_READ withdrawn, and the two answers are compared.
+
+create function pg_temp.count_as_authenticated(p_sql text) returns bigint
+language plpgsql as $$
+declare v_count bigint;
+begin
+  set local role authenticated;
+  execute p_sql into v_count;
+  reset role;
+  return v_count;
+exception when others then
+  reset role;
+  raise;
+end;
+$$;
+
+select pg_temp.act_as(pg_temp.fx('ada'));
+
+-- WITH RBAC_READ WITHDRAWN the RLS policy still admits this caller to the role catalogue, because
+-- roles_select_rbac_authorized is an OR whose second branch is the VENDOR_SUPER_ADMIN ROLE.
+select pg_temp.unmap('RBAC_READ');
+
+select ok(
+  pg_temp.count_as_authenticated('select count(*) from public.roles') > 0,
+  'RLS STILL admits the caller to the roles catalogue without RBAC_READ — the policy is an OR on the role');
+
+select is(pg_temp.profile_error(), '42501',
+  'the function refuses that same caller anyway — it is STRICTLY NARROWER than the policies, never wider');
+
+select pg_temp.remap('RBAC_READ');
+
+-- AND SELF ROWS NEED NO PERMISSION AT ALL, which is why ORGANIZATION_MEMBERS_READ is not required.
+-- Every role→permission mapping is removed, so no permission-based policy branch can be true; the
+-- caller still reads their own profile, their own membership and their own role assignments.
+create table pg_temp.self_rls as select 0::bigint p, 0::bigint m, 0::bigint mr;
+delete from pg_temp.self_rls;
+
+select lives_ok($$delete from public.role_permissions$$,
+  'every role→permission mapping can be removed inside the test transaction');
+
+insert into pg_temp.self_rls
+select
+  pg_temp.count_as_authenticated(
+    'select count(*) from public.profiles where id = ' || quote_literal(pg_temp.fx('ada')) || '::uuid'),
+  pg_temp.count_as_authenticated(
+    'select count(*) from public.organization_members where user_id = ' || quote_literal(pg_temp.fx('ada')) || '::uuid'),
+  pg_temp.count_as_authenticated(
+    'select count(*) from public.member_roles where organization_member_id = ' || quote_literal(pg_temp.fx('m_ada')) || '::uuid');
+
+select is((select p from pg_temp.self_rls), 1::bigint,
+  'with NO permission mapped at all, the caller still reads their OWN profile row under RLS');
+
+select ok((select m from pg_temp.self_rls) >= 1,
+  'and their OWN membership rows — self access is gated by ownership, not by ORGANIZATION_MEMBERS_READ');
+
+select ok((select mr from pg_temp.self_rls) >= 1,
+  'and their OWN role assignments — which is why requiring the directory permission would be untrue');
+
+-- Restore, so nothing after this depends on the stripped catalogue.
+select pg_temp.remap('ORGANIZATION_MEMBERS_READ');
+select pg_temp.remap('RBAC_READ');
+select pg_temp.remap('AUDIT_LOGS_READ');
+
+select is(pg_temp.profile_error(), null,
+  'restoring the mappings restores access');
+
+
+-- ============================================================================
+-- SECTION L — a caller whose auth user is gone
+-- ============================================================================
+-- public.profiles.id references auth.users(id) ON DELETE CASCADE, and
+-- public.organization_members.user_id references public.profiles(id) ON DELETE CASCADE. Deleting
+-- the Auth account therefore removes the profile and the membership, and the caller resolves to no
+-- Vendor. The claim is that this DENIES rather than producing a row with a fallback name.
+
+select pg_temp.act_as(pg_temp.fx('zara'));
+select is(pg_temp.profile_error(), null, 'Zara is authorized while her auth user exists');
+
+select lives_ok(
+  $$delete from auth.users where id = (select id from public.profiles where first_name = 'Zara')$$,
+  'Zara''s auth user can be deleted');
+
+select is(
+  (select count(*) from public.profiles where first_name = 'Zara'),
+  0::bigint,
+  'her profile cascaded away with the auth user');
+
+select is(pg_temp.profile_error(), '42501',
+  'a caller whose auth user is ABSENT is denied — never a row carrying the fallback name');
+
+
 select finish();
 
 rollback;

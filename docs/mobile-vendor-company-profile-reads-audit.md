@@ -222,7 +222,7 @@ language plpgsql stable security definer set search_path = ''
 | Caller predicate | `organization_members.user_id = auth.uid()` |
 | Nullability | Never null. Both columns are `NOT NULL` with `length(trim(...)) > 0` CHECKs |
 | Status semantics | n/a |
-| Formatting responsibility | **The database.** Trim each part, drop empties, join with one space — byte-identical to `list_vendor_users()`, `get_vendor_user_detail()` and `lib/auth/vendor-admin-access.ts`. Floor `'Member'` (unreachable) |
+| Formatting responsibility | **The database.** `coalesce(nullif(btrim(btrim(first_name) \|\| ' ' \|\| btrim(last_name)), ''), 'Member')` — byte-identical to `list_vendor_users()`, `get_vendor_user_detail()` and, in behaviour, `lib/auth/vendor-admin-access.ts`. **For any storable profile the result is exactly `trim(first) + one space + trim(last)`**; see § 5.3 for the full shape matrix and the unreachability proof for every other branch |
 | Already in PortalContext? | **No** |
 | Why Flutter needs it | It is the primary line of the profile screen, and the only alternative is composing it in Dart |
 | Does the web display it? | **Yes** — the admin header, and the caller's own `/users` row |
@@ -266,6 +266,50 @@ Both resolve their Vendor through the same `get_vendor_super_admin_context()` wi
 always about the **same** organization. pgTAP asserts this for a caller who administers two
 Vendors.
 
+### 5.3 `administrator_display_name` — the full shape matrix, and why the fallback is unreachable
+
+The expression is
+`coalesce(nullif(btrim(btrim(first_name) || ' ' || btrim(last_name)), ''), 'Member')`. Every shape
+below was **evaluated against the deployed database**, and every one is pinned by pgTAP § I.
+
+| `first_name` | `last_name` | Result | Storable in `public.profiles`? |
+| --- | --- | --- | --- |
+| `'Ada'` | `'Admin'` | `Ada Admin` | **Yes** — the only ordinary case |
+| `'  Pia  '` | `'  Padded  '` | `Pia Padded` | **Yes** — the CHECK tests the *trimmed* length, so padding is legal and is trimmed away |
+| `'Ada'` | `''` | `Ada` | **No** — `23514`, `profiles_last_name_not_empty` |
+| `''` | `'Admin'` | `Admin` | **No** — `23514`, `profiles_first_name_not_empty` |
+| `'   '` | `'  '` | `Member` | **No** — `23514` |
+| `''` | `''` | `Member` | **No** — `23514` |
+| `null` | anything | `Member` | **No** — `23502`, NOT NULL |
+| anything | `null` | `Member` | **No** — `23502`, NOT NULL |
+
+**Verified rejections** (INSERT *and* UPDATE, both asserted): null first name `23502`, null last
+name `23502`, empty first name `23514`, empty last name `23514`, whitespace-only pair `23514`, and
+an UPDATE of an existing profile to a blank name `23514`.
+
+**Conclusion — audit outcome A: the divergence is provably unreachable.** For *any* profile that
+`public.profiles` will accept, `administrator_display_name` is exactly
+`trim(first_name) + one space + trim(last_name)`. The single-part outputs and the `'Member'` floor
+are therefore both unreachable, which means:
+
+| Source | Nameless floor | Reachable? |
+| --- | --- | --- |
+| `get_my_vendor_profile()` | `'Member'` | No |
+| `list_vendor_users()`, `get_vendor_user_detail()` | `'Member'` | No |
+| `lib/auth/vendor-admin-access.ts` (web header) | `"Vendor Admin"` | No |
+| Flutter / PortalContext | *no name at all* — PortalContext returns no caller name, so it has no floor to diverge from | n/a |
+
+The new RPC matches the **SQL** convention (`'Member'`) so the database has one answer; the web
+header literal is **deliberately not changed**, because that would be a visible web change this
+milestone forbids and the difference cannot be observed. Both literals *and* the four constraints
+that keep them unreachable are pinned by static test 33, so a future relaxation of the schema turns
+this from a documented non-issue into a test failure rather than a silent inconsistency.
+
+Non-ordinary caller states do **not** reach the fallback either — they are refused before any row
+is composed: a suspended profile, another Vendor's administrator (no selector exists), and a caller
+whose `auth.users` row has been deleted (the profile and membership cascade away, so the chain
+resolves to no Vendor) all receive `42501`. All three are asserted in pgTAP §§ C and L.
+
 ---
 
 ## 6. Authorization
@@ -291,11 +335,21 @@ returned facts need, and no more**. pgTAP asserts that a Super Admin *without*
 `ORGANIZATION_MEMBERS_READ` can still read their own profile, and that `AUDIT_LOGS_READ` is
 irrelevant.
 
-**Narrower than RLS, deliberately.** The `roles` policy is an `OR` (`RBAC_READ` **or** the
-`VENDOR_SUPER_ADMIN` role), so requiring both can only refuse callers the policies would have
-admitted — never admit one they would refuse. It also means this read can **never be more
-permissive than `list_vendor_users()`**, which requires `RBAC_READ` too. pgTAP asserts that when
-`RBAC_READ` is withdrawn, both refuse identically.
+**Narrower than RLS, deliberately — and now proven, not argued.** The `roles` policy is an `OR`
+(`RBAC_READ` **or** the `VENDOR_SUPER_ADMIN` role), so requiring both can only refuse callers the
+policies would have admitted, never admit one they would refuse. pgTAP § K asserts this as a direct
+comparison rather than a claim: with `RBAC_READ` withdrawn, the same caller is run **through the
+real policies as the `authenticated` role** and still reads the roles catalogue (via the role
+branch) — while the function refuses them. The function is therefore strictly inside RLS.
+
+The same section supplies the evidence for the `ORGANIZATION_MEMBERS_READ` decision: with **every**
+role→permission mapping deleted, the caller still reads their own `profiles` row, their own
+`organization_members` rows and their own `member_roles` rows under RLS. Self data is gated by
+ownership, so requiring the directory permission would refuse a caller data the policies grant
+them — and would state something untrue about what the field is.
+
+It also means this read can **never be more permissive than `list_vendor_users()`**, which requires
+`RBAC_READ` too. pgTAP asserts that when `RBAC_READ` is withdrawn, both refuse identically.
 
 ### 6.1 Behaviour per caller
 
@@ -364,10 +418,23 @@ SUSPENDED membership all receive no row.
 ## 8. Null behaviour, and fields deliberately withheld
 
 **Nothing is nullable.** Both output fields are `NOT NULL` in practice and in intent: the name is
-composed from two `NOT NULL` CHECK-constrained columns with an unreachable `'Member'` floor, and
-the array is coalesced to `'{}'` (itself unreachable for an authorized caller, whose authorizing
-role is always in it). There is therefore **no documented optional field**, and a client needs no
-null handling.
+composed from two `NOT NULL` CHECK-constrained columns with an unreachable `'Member'` floor (§ 5.3),
+and the array is coalesced to `'{}'`. There is therefore **no documented optional field**, and a
+client needs no null handling.
+
+**The empty role array is unreachable — proven, not assumed.** The array can only be empty if the
+caller's membership holds no ACTIVE role definition; but the role that authorizes them *is* an
+ACTIVE `VENDOR_SUPER_ADMIN` assignment on that same membership, so it is always in the array. pgTAP
+§ J proves the property rather than observing it: deleting the caller's only role assignment
+produces `42501`, **not** a row with `{}`. The `coalesce(…, '{}')` therefore remains as a defensive
+floor — it guarantees the column can never be SQL `NULL` even if the aggregate matched nothing —
+and Flutter's "No active role" branch is dead code kept only for symmetry with the web directory,
+where it *is* reachable for a non-caller member.
+
+**No optional source value can leak SQL `NULL` into a required output.** The two source columns are
+`NOT NULL`; `||` propagates null (verified for each position) and the `coalesce` catches it; and the
+aggregate's null is caught by its own `coalesce`. Both guards are asserted by the static test and
+exercised by pgTAP § I.
 
 ### 8.1 Withheld, with the reason
 
@@ -423,8 +490,11 @@ memberships and a Retailer membership still receives exactly one row.
    `list_vendor_users()` / `get_vendor_user_detail()`, exactly as the web `/users` page does.
    This milestone neither widens nor narrows that.
 3. **The nameless-profile floor differs between the web header (`"Vendor Admin"`) and the SQL
-   reads (`"Member"`).** Both branches are unreachable. The new function matches the SQL; the web
-   is deliberately unchanged.
+   reads (`"Member"`).** **Resolved as audit outcome A — proven unreachable**, not merely believed
+   to be: `public.profiles` rejects null, empty and whitespace-only name parts on both INSERT and
+   UPDATE, so no storable profile can reach either floor (§ 5.3, pgTAP § I, static test 33). The new
+   function matches the SQL convention; the web literal is deliberately unchanged because changing
+   it would be a visible web change and the difference cannot be observed.
 4. **No company field beyond the name exists to show.** A richer company screen needs schema
    work and a web surface first, in that order.
 5. **The web still assembles `/users` in TypeScript** (four reads). `list_vendor_users()` exists;
@@ -520,7 +590,7 @@ introduced for an image the product does not display**.
 | Company avatar | initials derived from that name | client-side | No image exists |
 | Administrator name | `administrator_display_name` | the new RPC | Already composed — do not re-join name parts in Dart |
 | Administrator avatar | initials derived from that name | client-side | |
-| Role | `administrator_role_names.join(", ")` | the new RPC | Empty array → "No active role", matching the web. In practice never empty for an authorized caller |
+| Role | `administrator_role_names.join(", ")` | the new RPC | **Preserve the array order as received** — it is fixed in SQL (`order by r.name, r.id`, i.e. role display name ascending under the database collation, membership-stable). Do not re-sort in Dart, or the mobile order will drift from the web's. Empty array → "No active role" as a defensive branch only: it is **unreachable** for an authorized caller (§ 8, pgTAP § J) |
 | Any status badge | — | — | **Do not render one.** A successful read already means "active administrator of an active Vendor"; there is no status field, and none should be inferred into three separate badges |
 
 **Error behaviour:**
@@ -553,8 +623,8 @@ tests pin all three.
 
 | Suite | File | Count | Result |
 | --- | --- | --- | --- |
-| pgTAP (behavioural) | `supabase/tests/database/vendor_company_profile_reads_test.sql` | **92 assertions** | PASS |
-| Static contract guards | `lib/portal/vendor-company-profile-reads-contract.test.ts` | **33 tests** | PASS |
+| pgTAP (behavioural) | `supabase/tests/database/vendor_company_profile_reads_test.sql` | **132 assertions** | PASS |
+| Static contract guards | `lib/portal/vendor-company-profile-reads-contract.test.ts` | **34 tests** | PASS |
 
 **pgTAP sections:** A — signature, zero arguments, exact output order and types,
 forbidden-field-name rules, `SECURITY DEFINER`, `STABLE`, empty `search_path`, grants
@@ -569,7 +639,18 @@ PortalContext's own choice. E — `RBAC_READ` required, `ORGANIZATION_MEMBERS_RE
 `AUDIT_LOGS_READ` deliberately not, refusal parity with `list_vendor_users()`, and byte-identical
 agreement with the caller's own directory row. F — the statuses really are conditions.
 G — PortalContext non-duplication in both directions. H — nothing was written, including no
-audit row.
+audit row. **I** — the full display-name shape matrix (nine cases, including null propagation
+through `||`) plus six proofs that every fallback-triggering shape is rejected by the schema on
+INSERT and UPDATE, and that all three SQL reads share the `'Member'` literal. **J** — an empty
+role array is unreachable (removing the authorizing assignment *denies* rather than emptying the
+array) and a duplicate `(membership, role)` assignment is refused by `member_roles_pkey` with the
+array unchanged. **K** — the function is **strictly narrower than RLS**: with `RBAC_READ`
+withdrawn, the `authenticated` role under the real policies still reads the roles catalogue (the
+policy's second branch is the `VENDOR_SUPER_ADMIN` *role*) while the function refuses; and with
+**every** role→permission mapping deleted, the caller still reads their own profile, membership and
+role-assignment rows — which is the evidence that requiring `ORGANIZATION_MEMBERS_READ` would be
+untrue. **L** — a caller whose `auth.users` row is deleted cascades to no profile and is denied,
+never handed a fallback name.
 
 ---
 
