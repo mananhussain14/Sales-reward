@@ -104,7 +104,7 @@ belongs on mobile at all.
 
 | Feature | Web status | Backend readiness | Flutter readiness | Shared RPC | Edge Function needed | Security concern | Phase |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Dashboard summary counts | Shipped | 🟡 Partial | 🟡 After backend work | **New:** `get_vendor_admin_dashboard_summary()` | No | Four round trips today. | **3** |
+| Dashboard summary counts | Shipped (four real counts — no mocked, static or placeholder card anywhere on the page) | 🟢 Ready | 🟢 Now | ✅ **shipped** `get_vendor_admin_dashboard_summary()` — migration `20260805090000` | No | Was **five** round trips (1 auth RPC + 4 parallel counts), each re-walking the authorization chain through its RLS policy; now **one**. Zero arguments; requires the Vendor Super Admin role **and** all three of `ORGANIZATION_MEMBERS_READ`, `RBAC_READ`, `AUDIT_LOGS_READ` — deliberately **non-partial**, so a caller missing one is denied the whole summary. Returns exactly one row of four **non-null** `bigint`s; zero rows is unreachable for an authorized caller, and a denial is `42501`, **never** a row of zeros. **Two of the four counts are GLOBAL catalogue figures, not Vendor metrics** — `roles` and `permissions` carry no `organization_id`, so every Vendor sees the same number; the fields are named `catalog_active_role_count` / `catalog_permission_count` for that reason and must **not** be labelled "your roles". `audit_event_count` is **all-time and unwindowed** — do not label it "recent". No Retailer, Product, shop, assignment or invitation count is returned, because no such card exists on the web. Full audit: `docs/mobile-vendor-dashboard-summary-audit.md`. | **3** |
 | Organization members directory | Shipped | 🟡 Partial | 🟡 After backend work | **New:** `list_vendor_organization_members()` | No | Four-query join currently done in TypeScript. | **3** |
 | Roles & permissions catalogue **+ role detail** | Shipped (list only — there is no web role-detail page, and no role write surface at all) | 🟢 Ready | 🟢 Now | ✅ **shipped** `list_vendor_roles()`, `get_vendor_role_detail(p_role_id)`, `list_vendor_role_permissions(p_role_id)` — migration `20260802090000` | No | Global catalogue gated on `RBAC_READ`; the two counting reads also require `ORGANIZATION_MEMBERS_READ`. The catalogue carries **no `organization_id`**, so every Vendor sees the same six roles (including the three Retailer roles) — the only tenant-scoped value is `assigned_member_count`. | **3** |
 | Audit log feed | Shipped (list only — **no detail view of any kind exists on the web**) | 🟢 Ready | 🟢 Now | ✅ **shipped** `list_vendor_audit_logs(p_limit, p_before_occurred_at, p_before_audit_log_id)` — migration `20260804090000` | No | Was fixed 100 rows with no pagination — record 101 was unreachable forever. Now keyset on `(created_at, id)`; both cursor parts required together; limit default 50, hard max 100. Actor resolves to `USER` / `SYSTEM` / `UNKNOWN`, scoped to the audit row's **own** Vendor membership so no foreign name can appear. **`SYSTEM` = “no actor identity remains”, not “a system process acted”** — render it as *“System or unavailable actor”*. Entity named from a **closed** metadata snapshot whitelist; raw `metadata`, `entity_id`, `ip_address`, `user_agent` and `actor_profile_id` are never returned. Action and entity codes are **raw** — no DB label map exists. Null-organization rows are still excluded, exactly as RLS intends. | **3** |
@@ -143,12 +143,12 @@ belongs on mobile at all.
 
 ### New Postgres RPCs — read-only, no secret
 
-**5 of 7 delivered**, plus four justified companion reads.
+**All 7 delivered**, plus four justified companion reads.
 
 | # | RPC | Unblocks | Priority |
 | --- | --- | --- | --- |
 | 1 | ~~`get_my_portal_context()`~~ ✅ **shipped** — migration `20260729090000` | Role-based mobile navigation | ~~High — phase 1~~ **done** |
-| 2 | `get_vendor_admin_dashboard_summary()` | V-01 | Low — phase 3 |
+| 2 | ~~`get_vendor_admin_dashboard_summary()`~~ ✅ **shipped** — migration `20260805090000` | V-01 | ~~Low — phase 3~~ **done** |
 | 3 | ~~`list_vendor_organization_members()`~~ → shipped as **`list_vendor_users()`** ✅ — migration `20260801090000` | V-02 | ~~Low — phase 3~~ **done** |
 | 3a | `get_vendor_user_detail(p_membership_id)` ✅ **shipped** — migration `20260801090000` | A Vendor user detail screen — a companion, because **no web detail route exists** | **done** |
 | 3b | ~~`list_vendor_rbac_catalog()`~~ → shipped as **`list_vendor_roles()`** ✅ — migration `20260802090000` | V-03 | ~~Optional, low~~ **done** |
@@ -162,8 +162,9 @@ belongs on mobile at all.
 Item 5/6 detail: `docs/mobile-vendor-retailer-reads-audit.md`. Item 3/3a detail:
 `docs/mobile-vendor-user-reads-audit.md`. Item 3b/3c/3d detail:
 `docs/mobile-vendor-role-reads-audit.md`. Item 4 detail:
-`docs/mobile-vendor-audit-log-reads-audit.md`. Item 2 remains untouched, and **dashboard
-metrics still have no mobile contract.** Vendor user *writes* —
+`docs/mobile-vendor-audit-log-reads-audit.md`. Item 2 detail:
+`docs/mobile-vendor-dashboard-summary-audit.md`. **All seven read RPCs are now delivered.**
+Vendor user *writes* —
 inviting, editing, activating, role assignment — are out of scope, and Vendor user
 invitations have no backend at all (both invitation tables are Retailer-scoped). Role
 *writes* — create, edit, delete, activate, duplicate, permission assignment, role assignment
@@ -201,4 +202,4 @@ mobile contract.
 | --- | --- | --- |
 | **1 — Sales Staff MVP** | Sign in, my shops, capture + submit receipt, my history, staff invitation acceptance & activation | ~~1 RPC (`get_my_portal_context`)~~ ✅ **done** + 3 Edge Functions (`submit-receipt`, `staff-invitation-context`, `activate-staff-account`) |
 | **2 — Retailer management** | Owner/Manager portal, staff roster, invitations, assigned products, receipt image viewing, owner-invitation acceptance | 2 Edge Functions (`send-staff-invitation`, `get-receipt-image-url`) + contract fixes 1–2 + answers to Q1–Q3 |
-| **3 — Vendor administration** *(optional)* | Users directory & detail, Roles catalogue & role detail, Retailer directory & detail, onboarding, shops, products, assignments, audit logs, owner invitations | ~~5 RPCs~~ **1 RPC remaining** (dashboard summary) — the Retailer directory and detail reads are ✅ **shipped** in `20260731090000`, the Users list and detail reads in `20260801090000`, the Roles list, role detail and role-permission reads in `20260802090000`, the Product detail and assigned-Retailers reads in `20260803090000`, and the paginated audit log read in `20260804090000` — + 2 Edge Functions + contract fixes 4–5 + answer to Q4 |
+| **3 — Vendor administration** *(optional)* | Dashboard summary, Users directory & detail, Roles catalogue & role detail, Retailer directory & detail, onboarding, shops, products, assignments, audit logs, owner invitations | ~~5 RPCs~~ **0 RPCs remaining** — the Retailer directory and detail reads are ✅ **shipped** in `20260731090000`, the Users list and detail reads in `20260801090000`, the Roles list, role detail and role-permission reads in `20260802090000`, the Product detail and assigned-Retailers reads in `20260803090000`, the paginated audit log read in `20260804090000`, and the dashboard summary in `20260805090000` — + 2 Edge Functions + contract fixes 4–5 + answer to Q4 |
