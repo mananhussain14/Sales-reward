@@ -3,7 +3,11 @@
 Companion to [`mobile-backend-contract.md`](./mobile-backend-contract.md), which holds the
 full per-operation detail. This is the at-a-glance planning view.
 
-**Status:** audit only. Nothing in the database or application was changed.
+**Status:** originally audit only. Since then, purely additive read RPCs have been shipped
+(migrations `20260729090000` … `20260806090000`). **No table, RLS policy, grant on a table,
+existing RPC, seed row or application file has been changed by any of them**, and no web page
+changed behaviour — every row below marked ✅ **shipped** refers to a new function and nothing
+else.
 
 ## Legend
 
@@ -122,6 +126,7 @@ belongs on mobile at all.
 | Activate / deactivate a product | Shipped | 🟢 Ready | 🟢 Now | `set_vendor_product_status()` | No | Returns `void`; silent no-op when unchanged. | **3** |
 | List a product's Retailer assignments (**editor** matrix) | Shipped | 🟢 Ready | 🟢 Now | `list_vendor_product_retailer_assignments()` | No | Returns `retailer_organization_id` and **every** managed Retailer, assigned or not, under `PRODUCT_RETAILER_ASSIGN`. Unchanged — the web assign/withdraw matrix depends on it. Use the read-only row above for a mobile read. | **3** |
 | Assign / withdraw a product | Shipped | 🟢 Ready | 🟢 Now | `assign_vendor_product_to_retailer()`, `unassign_…()` | No | `void` return hides "changed" vs "already so". | **3** |
+| Vendor company & signed-in administrator profile (read-only) | **Placeholder** — no `/settings`, `/company`, `/organization`, `/profile` or `/account` route exists; Settings is a `disabled: true` nav item. The only real surface is the admin **header** (organization name + caller name) | 🟢 Ready | 🟢 Now | `get_my_portal_context()` for the company name (**reused verbatim, nothing added**) + ✅ **shipped** `get_my_vendor_profile()` — migration `20260806090000` | No | **The company half needed no backend at all.** The entire Vendor company surface in the product is one field, `organizations.name`, which PortalContext already returns as `vendor.organization_name` — so the new RPC returns **no company field** and Flutter **must** read the name from PortalContext. `status`, `country_code`, `default_currency` and the timestamps are never shown for the caller's own Vendor, and **no legal-name, registration, tax, website, phone, address or logo column exists anywhere in the schema**. The real gap was **self-identification**: `list_vendor_users()` returns everyone's roles but marks no row as the caller, so "your role" meant downloading the directory and guessing by name. The new zero-argument read returns exactly `administrator_display_name` + `administrator_role_names text[]` (ACTIVE definitions only, same type/filter/order as the directory). **No status and no timestamp** — an authorized caller is ACTIVE in profile, membership and organization *by construction*, so such a field could only say `ACTIVE`; do not render three badges or one "Account status". Requires `RBAC_READ` and deliberately **not** `ORGANIZATION_MEMBERS_READ` (own rows are gated by ownership under RLS). Full audit: `docs/mobile-vendor-company-profile-reads-audit.md`. | **3** |
 
 ---
 
@@ -143,7 +148,7 @@ belongs on mobile at all.
 
 ### New Postgres RPCs — read-only, no secret
 
-**All 7 delivered**, plus four justified companion reads.
+**All 8 delivered**, plus four justified companion reads.
 
 | # | RPC | Unblocks | Priority |
 | --- | --- | --- | --- |
@@ -158,12 +163,16 @@ belongs on mobile at all.
 | 5 | ~~`list_vendor_retailers()`~~ ✅ **shipped** — migration `20260731090000` | V-05, cross-linking | ~~Low — phase 3~~ **done** |
 | 6 | ~~`get_vendor_retailer_detail(p_relationship_id)`~~ ✅ **shipped** — migration `20260731090000` | V-06 | ~~Low — phase 3~~ **done** |
 | 6a | `list_vendor_retailer_shops(p_relationship_id)` ✅ **shipped** — migration `20260731090000` | V-06's shop list — a companion rather than an unbounded nested payload | **done** |
+| 7 | `get_my_vendor_profile()` ✅ **shipped** — migration `20260806090000` | V-17 (Vendor company & administrator profile). **Only the personal half**: PortalContext already supplies the company name, so no company RPC was created and none was justified | **done** |
 
+Item 7 detail: `docs/mobile-vendor-company-profile-reads-audit.md` — note that its audit conclusion
+was **partly "no gap"**: the Vendor company name is served by item 1 (`get_my_portal_context()`)
+and no second source for it was created.
 Item 5/6 detail: `docs/mobile-vendor-retailer-reads-audit.md`. Item 3/3a detail:
 `docs/mobile-vendor-user-reads-audit.md`. Item 3b/3c/3d detail:
 `docs/mobile-vendor-role-reads-audit.md`. Item 4 detail:
 `docs/mobile-vendor-audit-log-reads-audit.md`. Item 2 detail:
-`docs/mobile-vendor-dashboard-summary-audit.md`. **All seven read RPCs are now delivered.**
+`docs/mobile-vendor-dashboard-summary-audit.md`. **All eight read RPCs are now delivered.**
 Vendor user *writes* —
 inviting, editing, activating, role assignment — are out of scope, and Vendor user
 invitations have no backend at all (both invitation tables are Retailer-scoped). Role
@@ -202,4 +211,4 @@ mobile contract.
 | --- | --- | --- |
 | **1 — Sales Staff MVP** | Sign in, my shops, capture + submit receipt, my history, staff invitation acceptance & activation | ~~1 RPC (`get_my_portal_context`)~~ ✅ **done** + 3 Edge Functions (`submit-receipt`, `staff-invitation-context`, `activate-staff-account`) |
 | **2 — Retailer management** | Owner/Manager portal, staff roster, invitations, assigned products, receipt image viewing, owner-invitation acceptance | 2 Edge Functions (`send-staff-invitation`, `get-receipt-image-url`) + contract fixes 1–2 + answers to Q1–Q3 |
-| **3 — Vendor administration** *(optional)* | Dashboard summary, Users directory & detail, Roles catalogue & role detail, Retailer directory & detail, onboarding, shops, products, assignments, audit logs, owner invitations | ~~5 RPCs~~ **0 RPCs remaining** — the Retailer directory and detail reads are ✅ **shipped** in `20260731090000`, the Users list and detail reads in `20260801090000`, the Roles list, role detail and role-permission reads in `20260802090000`, the Product detail and assigned-Retailers reads in `20260803090000`, the paginated audit log read in `20260804090000`, and the dashboard summary in `20260805090000` — + 2 Edge Functions + contract fixes 4–5 + answer to Q4 |
+| **3 — Vendor administration** *(optional)* | Dashboard summary, Users directory & detail, Roles catalogue & role detail, Retailer directory & detail, onboarding, shops, products, assignments, audit logs, owner invitations, company & administrator profile | ~~5 RPCs~~ **0 RPCs remaining** — the Retailer directory and detail reads are ✅ **shipped** in `20260731090000`, the Users list and detail reads in `20260801090000`, the Roles list, role detail and role-permission reads in `20260802090000`, the Product detail and assigned-Retailers reads in `20260803090000`, the paginated audit log read in `20260804090000`, the dashboard summary in `20260805090000`, and the company/administrator profile self-read in `20260806090000` — + 2 Edge Functions + contract fixes 4–5 + answer to Q4 |
