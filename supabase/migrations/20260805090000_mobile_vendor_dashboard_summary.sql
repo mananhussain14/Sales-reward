@@ -408,8 +408,10 @@ begin
   --   organization_members  organization_members_org_status_idx (organization_id, status) when
   --                         the organization predicate is SELECTIVE; a plain seq scan when the
   --                         Vendor owns most of the table, which is this product's actual shape.
-  --   roles                 seq scan of a catalogue of single-digit size. roles_status_idx
-  --                         exists but the planner rightly ignores it at this scale.
+  --   roles                 a catalogue of single-digit size. The plan VARIES between a seq
+  --                         scan and a bitmap index scan on roles_status_idx depending on
+  --                         table statistics; both were observed, and at this scale the
+  --                         difference is immaterial (< 0.2 ms either way).
   --   permissions           seq scan of a small catalogue. No index exists on a status column
   --                         because there IS no status column.
   --   audit_logs            audit_logs_org_created_idx (organization_id, created_at desc) when
@@ -466,7 +468,10 @@ grant  execute on function public.get_vendor_admin_dashboard_summary() to authen
 --                           63 buffers, 1.2 ms
 --     audit_logs            Finalize Aggregate -> Gather (2 workers) -> Parallel Seq Scan
 --                           3,847 buffers, 28.6 ms for 200,000 rows
---     roles                 Aggregate -> Seq Scan, 6 rows, 0.05 ms
+--     roles                 Aggregate -> Seq Scan  OR  Aggregate -> Bitmap Heap Scan
+--                             -> Bitmap Index Scan on roles_status_idx
+--                           BOTH plans were observed across runs, depending on whether the
+--                           catalogue had been ANALYZEd. 6 rows, 0.05–0.18 ms either way.
 --     permissions           Aggregate -> Seq Scan, 18 rows, 0.04 ms
 --
 --   SHAPE B — 40 VENDORS, THE TARGET HOLDING 1/40 OF THE ROWS. Now the predicate is selective

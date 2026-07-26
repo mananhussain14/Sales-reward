@@ -13,7 +13,7 @@
  * properties that a careless later edit could silently break.
  *
  * They do NOT execute the function. The BEHAVIOURAL suite is
- * supabase/tests/database/vendor_dashboard_summary_test.sql — pgTAP, 66 assertions, covering
+ * supabase/tests/database/vendor_dashboard_summary_test.sql — pgTAP, 80 assertions, covering
  * tenant isolation, the tenant-vs-catalogue distinction, every role and permission denial,
  * inactive callers, the empty Vendor, exact status semantics, and duplicate-free counting for
  * multi-role and multi-organization members. It requires Docker and is run with:

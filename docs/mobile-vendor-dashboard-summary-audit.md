@@ -446,7 +446,7 @@ indexes** — reading a whole table through an index is strictly worse than read
 | --- | --- | --- |
 | `organization_members` | `Aggregate → Seq Scan` (4,038 of 5,000 ACTIVE) | 63 buffers, **1.2 ms** |
 | `audit_logs` | `Finalize Aggregate → Gather (2 workers) → Parallel Seq Scan` | 3,847 buffers, **28.6 ms** |
-| `roles` | `Aggregate → Seq Scan`, 6 rows | **0.05 ms** |
+| `roles` | **Varies:** `Aggregate → Seq Scan` **or** `Aggregate → Bitmap Heap Scan → Bitmap Index Scan on roles_status_idx`. Both observed across runs, depending on whether the catalogue had been `ANALYZE`d. | **0.05–0.18 ms** |
 | `permissions` | `Aggregate → Seq Scan`, 18 rows | **0.04 ms** |
 
 **Shape B — 40 Vendors, the target holding 1/40 of the rows.** The predicate is now selective
@@ -514,6 +514,49 @@ sessions: it is authorization-scoped and derived from `auth.uid()`.
   catalogue" / "Permissions defined" is correct; "Your roles" is not.
 - `audit_event_count` is **all-time**. Do not label it "today", "this week" or "recent".
 
+### 9.1 The organization name is deliberately NOT returned
+
+The web dashboard header reads *"Managing **&lt;organization name&gt;**"*. This RPC returns
+**counts only** and does not include that name — intentionally, and not as an oversight.
+
+**Flutter already has it, from a trusted source.** `public.get_my_portal_context()` (migration
+`20260729090000`, zero arguments, `SECURITY DEFINER`) returns a `jsonb` document whose `vendor`
+object carries `organization_id` and `organization_name`, resolved server-side from
+`get_vendor_super_admin_context()` — the **same** resolver, applying the **same**
+lowest-organization-id rule this RPC applies. Returning the name again here would be a second
+copy of one fact, free to disagree with the first if the two resolvers ever diverged.
+
+**Required Flutter rules:**
+
+1. **Counts** come from `get_vendor_admin_dashboard_summary()`.
+2. **Organization name** comes from the existing trusted Session / PortalContext
+   (`get_my_portal_context()`), never from the summary.
+3. Flutter must **never send that organization id or name back** to the summary RPC. It cannot,
+   in fact — the function takes zero arguments — but the rule stands so no future parameter is
+   ever added to "make it explicit".
+4. Flutter must **not infer metric ownership from the displayed name.** The name is a label.
+   The tenant boundary is enforced inside the database from `auth.uid()`, and two of the four
+   figures are not tenant-scoped at all (§ 3.1), so "these counts belong to the organization
+   named above" is false for `catalog_active_role_count` and `catalog_permission_count`.
+
+Because both calls derive their organization from the same resolver with the same tie-break, a
+multi-Vendor caller sees a **consistent** pairing: the name shown and the counts shown describe
+the same organization.
+
+### 9.2 Result and error semantics, exactly
+
+| Situation | Flutter behaviour |
+| --- | --- |
+| **Authorized** | Exactly one row; four non-null counts. Render all four. |
+| **Denied** (`42501`) | Generic unavailable / access-denied state. **Do not populate any count card with zero.** Do not distinguish the cause — the backend deliberately does not. |
+| **Operational failure** (network, timeout, 5xx) | Retryable failure state. **Do not convert to zeros.** |
+| **Authorized, all-zero tenant state** | Show `0` for `active_member_count` and `audit_event_count`. The two `catalog_*` counts may legitimately remain non-zero — they are global. |
+
+**Refresh.** Call the same zero-argument RPC again and **replace the complete summary
+atomically** — never merge field-by-field, since the four counts are one consistent snapshot.
+On refresh failure, preserve the previous summary and surface the error separately, where that
+matches existing app conventions.
+
 ---
 
 ## 10. Web compatibility
@@ -547,7 +590,7 @@ is a separate change with its own review.
 
 | Suite | File | Assertions | Result |
 | --- | --- | --- | --- |
-| pgTAP behavioural | `supabase/tests/database/vendor_dashboard_summary_test.sql` | **66** | **PASS** |
+| pgTAP behavioural | `supabase/tests/database/vendor_dashboard_summary_test.sql` | **80** | **PASS** |
 | Static contract guards | `lib/dashboard/vendor-dashboard-summary-contract.test.ts` | **32** | **PASS** |
 
 pgTAP coverage: signature and zero-argument shape; exact output columns, order and `bigint`
@@ -560,6 +603,17 @@ Retailer and null-organization audit rows counted by neither Vendor; multi-role 
 multi-organization members counted once (with explicit anti-vacuity assertions); each of the
 three permissions individually required and restored; partial-permission callers denied
 entirely; the empty Vendor returning one row of zeros.
+
+**Invariance coverage (§ D2)** — what must *not* move a metric, asserted separately from what
+must: the catalogue count includes the three Retailer-oriented roles; adding an ACTIVE role
+definition raises it by exactly one and removing it restores it (the positive control that
+makes the INACTIVE assertion non-vacuous); assigning roles to a member changes neither the
+catalogue count nor the member count; adding a role→permission mapping does not change the
+permission count; the audit count includes every action and entity type; nine of ten Vendor A
+audit rows have a null actor and are counted; and **erasing an actor's auth user does not change
+`audit_event_count`**, while it does remove that person's membership from
+`active_member_count` — both asserted, so the FK cascade behaviour is documented rather than
+assumed.
 
 ---
 

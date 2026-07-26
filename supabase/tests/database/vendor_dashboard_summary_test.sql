@@ -685,6 +685,143 @@ select is(
 
 
 -- ============================================================================
+-- SECTION D2 — invariance: what must NOT move a metric
+-- ============================================================================
+-- Section D proves each metric reports the right number. This section proves each metric is
+-- INDEPENDENT of the things it must not depend on. Those are separate claims: a function that
+-- counted role ASSIGNMENTS instead of role DEFINITIONS would still produce a plausible number
+-- and would still be identical across two Vendors that happened to assign equally.
+--
+-- Every catalogue mutation below is REVERTED before the section ends, because Section F
+-- compares Vendor C's catalogue counts against the values Section D recorded in pg_temp.observed.
+
+select pg_temp.act_as(pg_temp.fx('ada'));
+
+-- ---------------------------------------------------------------------------
+-- The catalogue count includes RETAILER-oriented roles
+-- ---------------------------------------------------------------------------
+-- The catalogue is GLOBAL, so it is not a list of "this Vendor's roles" — it contains the
+-- Retailer roles too. A client that labelled this figure "your roles" would be wrong, and
+-- this is the assertion that makes that concrete rather than a comment.
+select is(
+  (select count(*) from public.roles
+    where status = 'ACTIVE'
+      and code in ('RETAILER_OWNER', 'RETAILER_MANAGER', 'SALES_STAFF')),
+  3::bigint,
+  'the ACTIVE catalogue really does contain the three Retailer-oriented roles');
+
+select ok(
+  pg_temp.roles_n() >= 3,
+  'catalog_active_role_count includes Retailer-oriented roles — it is NOT scoped to Vendor-usable roles');
+
+-- ---------------------------------------------------------------------------
+-- POSITIVE CONTROL for the ACTIVE predicate
+-- ---------------------------------------------------------------------------
+-- Section B asserts that an INACTIVE role definition does not raise the count. On its own that
+-- would also pass for a function that always returned a constant. This proves the count DOES
+-- move when an ACTIVE definition is added — so the status predicate is real in both directions.
+select lives_ok(
+  $$insert into public.roles (code, name, description, status)
+    values ('TMP_ACTIVE_DASHBOARD_ROLE', 'Temp Active', 'Positive control.', 'ACTIVE')$$,
+  'an ACTIVE role definition can be added');
+
+select is(
+  pg_temp.roles_n(),
+  (select r from pg_temp.observed where who = 'a') + 1,
+  'adding an ACTIVE role definition raises catalog_active_role_count by EXACTLY one');
+
+delete from public.roles where code = 'TMP_ACTIVE_DASHBOARD_ROLE';
+
+select is(
+  pg_temp.roles_n(),
+  (select r from pg_temp.observed where who = 'a'),
+  'removing it restores the count — the catalogue figure tracks definitions exactly');
+
+-- ---------------------------------------------------------------------------
+-- ROLE ASSIGNMENTS MOVE NOTHING
+-- ---------------------------------------------------------------------------
+-- Eve is an ACTIVE Vendor A member who holds no role. Giving her two changes neither the
+-- catalogue figure (which counts DEFINITIONS) nor the member figure (which counts MEMBERSHIPS).
+-- If either moved, the metric would be reading public.member_roles.
+select pg_temp.add_role(pg_temp.fx('m_eve'), 'CLAIM_REVIEWER');
+select pg_temp.add_role(pg_temp.fx('m_eve'), 'RETAILER_OWNER');
+
+select is(
+  pg_temp.roles_n(),
+  (select r from pg_temp.observed where who = 'a'),
+  'assigning roles to a member does NOT change catalog_active_role_count — it counts definitions, not assignments');
+
+select is(
+  pg_temp.members(), 4::bigint,
+  'assigning two more roles does NOT change active_member_count — a member is counted once regardless of role count');
+
+-- ---------------------------------------------------------------------------
+-- ROLE→PERMISSION MAPPINGS MOVE NOTHING
+-- ---------------------------------------------------------------------------
+-- Mapped to CLAIM_REVIEWER, whose mappings no caller's authorization depends on, so this
+-- isolates the permission COUNT from the permission GRANT graph. Section E covers the
+-- authorization effect of the VENDOR_SUPER_ADMIN mappings; this covers the count.
+select lives_ok(
+  $$insert into public.role_permissions (role_id, permission_id)
+    select r.id, p.id from public.roles r, public.permissions p
+    where r.code = 'CLAIM_REVIEWER' and p.code = 'RETAILERS_READ'
+    on conflict do nothing$$,
+  'a role→permission mapping can be added');
+
+select is(
+  pg_temp.perms_n(),
+  (select p from pg_temp.observed where who = 'a'),
+  'adding a role→permission mapping does NOT change catalog_permission_count — it counts permission definitions, not grants');
+
+delete from public.role_permissions rp
+using public.roles r, public.permissions p
+where rp.role_id = r.id and rp.permission_id = p.id
+  and r.code = 'CLAIM_REVIEWER' and p.code = 'RETAILERS_READ';
+
+-- ---------------------------------------------------------------------------
+-- THE AUDIT COUNT FILTERS NOTHING, AND SURVIVES ACTOR ERASURE
+-- ---------------------------------------------------------------------------
+-- The fixture's seven Vendor A rows are all PRODUCT_UPDATED / VENDOR_PRODUCT with a NULL
+-- actor. Adding rows with a DIFFERENT action and entity type proves there is no implicit
+-- action or entity filter, which the migration only argues structurally.
+insert into public.audit_logs (organization_id, action, entity_type, entity_id, metadata)
+select pg_temp.fx('vendor_a'), 'RETAILER_ONBOARDED', 'RETAILER_ORGANIZATION',
+       gen_random_uuid()::text, '{"retailer_name":"Fixture"}'::jsonb
+from generate_series(1, 2);
+
+select is(pg_temp.audits(), 9::bigint,
+  'audit_event_count includes EVERY action and entity type — there is no implicit filter');
+
+-- A row with a REAL actor, then that actor is erased. profiles.id cascades from auth.users and
+-- audit_logs.actor_profile_id is ON DELETE SET NULL, so the audit ROW survives with a null
+-- actor. The count must not move: an audit trail that shrank when a user was deleted would be
+-- worthless as evidence.
+insert into public.audit_logs (organization_id, actor_profile_id, action, entity_type, entity_id, metadata)
+values (pg_temp.fx('vendor_a'), pg_temp.fx('gwen'), 'PRODUCT_CREATED', 'VENDOR_PRODUCT',
+        gen_random_uuid()::text, '{"product_name":"Fixture"}'::jsonb);
+
+select is(pg_temp.audits(), 10::bigint,
+  'a row with a real actor is counted');
+
+select is(
+  (select count(*) from public.audit_logs
+    where organization_id = pg_temp.fx('vendor_a') and actor_profile_id is null),
+  9::bigint,
+  'nine of the ten Vendor A rows have a NULL actor — so null-actor rows are demonstrably counted');
+
+delete from auth.users where id = pg_temp.fx('gwen');
+
+select is(pg_temp.audits(), 10::bigint,
+  'ERASING THE ACTOR does not change audit_event_count — the row survives with a null actor');
+
+-- Gwen's memberships cascaded away with her profile, so Vendor A now has three ACTIVE members.
+-- Asserted rather than ignored: it confirms the member count tracks live membership rows, and
+-- it documents why the figure moved here and nowhere else.
+select is(pg_temp.members(), 3::bigint,
+  'deleting a person DOES remove their membership from active_member_count — the FK cascade is real');
+
+
+-- ============================================================================
 -- SECTION E — the exact permission requirements
 -- ============================================================================
 -- The function demands the VENDOR_SUPER_ADMIN role AND all three permissions. Each mapping is
