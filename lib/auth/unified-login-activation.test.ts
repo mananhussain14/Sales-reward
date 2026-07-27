@@ -192,17 +192,30 @@ describe("the invited email is server-only", () => {
     );
   });
 
-  test("14. both Auth calls use the CANONICAL invitation email, never form input", () => {
+  test("14. every Auth call uses the CANONICAL invitation email, never form input", () => {
+    // The address is no longer carried on the classification result: since migration
+    // 20260808090000 the context RPC returns only an account state, and the address comes
+    // from a separate service-role-only RPC into a local that is used and discarded. The
+    // property under test is unchanged — every Auth call is given a SERVER-DERIVED
+    // address — so only the binding's name moved.
     const registration = stripComments(read(REGISTRATION_MODULE));
     assert.ok(
-      /email:\s*context\.invitedEmail/.test(registration),
+      /const invitedEmail = await readRecipientEmail\(/.test(registration),
+      "the address must come from the server-side recipient RPC",
+    );
+    assert.ok(
+      /email:\s*invitedEmail/.test(registration),
       "createUser must use the server-derived canonical address",
     );
     assert.ok(
-      /signInWithPassword\(\{\s*email:\s*context\.invitedEmail/.test(registration),
+      /signInWithPassword\(\{\s*email:\s*invitedEmail/.test(registration),
       "sign-in must use the same server-derived address",
     );
-    assert.ok(!/formData/.test(registration), "the registration registration must never read form data");
+    assert.ok(
+      /resetPasswordForEmail\(invitedEmail/.test(registration),
+      "password recovery must use the same server-derived address",
+    );
+    assert.ok(!/formData/.test(registration), "the registration module must never read form data");
   });
 
   test("15. no Client Component imports the registration registration", () => {

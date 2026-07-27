@@ -89,6 +89,17 @@ export const PUBLIC_PATHS = new Set<string>([
   // who reaches either route learns and gains nothing.
   "/invitations/staff",
   "/invitations/staff/enter",
+  // The STAFF password-RECOVERY landing. An invited person whose Auth row exists but
+  // cannot be signed in to (unconfirmed, or password-less, or both) is sent a recovery
+  // email; they arrive here from that email carrying a one-time token hash and NO
+  // session, and establishing one is the entire purpose of the route. Bouncing them to
+  // /login would strand them exactly as the defect this route fixes did.
+  //
+  // It grants nothing. The route verifies the token with the Auth server
+  // (verifyOtp({type: "recovery"})) and redirects; every failure lands on the same
+  // generic error page. The page it redirects to, /invitations/staff/set-password, is
+  // deliberately NOT in this set — it requires the session this route establishes.
+  "/invitations/staff/recover",
 ]);
 
 /**

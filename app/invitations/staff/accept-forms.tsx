@@ -6,9 +6,14 @@ import {
   acceptStaffInvitationAction,
   activateStaffAccountAction,
   continueAsInvitedStaffAction,
+  requestStaffPasswordRecoveryAction,
   stayInvitedSignedInAction,
 } from "@/app/invitations/staff/actions";
-import { INITIAL_STAFF_ACCEPT_STATE } from "@/app/invitations/staff/accept-state";
+import {
+  INITIAL_STAFF_ACCEPT_STATE,
+  INITIAL_STAFF_RECOVERY_STATE,
+  STAFF_RECOVERY_SENT_MESSAGE,
+} from "@/app/invitations/staff/accept-state";
 import { MIN_PASSWORD_LENGTH, PASSWORD_HINT } from "@/lib/auth/password-policy";
 import { buttonClasses } from "@/components/ui/button";
 import { inputClasses as controlInputClasses, Label } from "@/components/ui/field";
@@ -284,5 +289,68 @@ export function StaffInvitationSignInPrompt() {
     >
       Sign in
     </Link>
+  );
+}
+
+/**
+ * The password-RECOVERY request, shown when the invited address has an account that
+ * cannot be signed in to but already carries a provisioned identity.
+ *
+ * THIS SCREEN HAS NO PASSWORD FIELD, and that is the security property it exists to
+ * express. Such an account may be somebody's half-built Retailer Owner identity —
+ * finalize_retailer_owner_invitation creates a profile, a membership and a role
+ * assignment before the person has ever confirmed or set a password — so letting a staff
+ * invitation token set its first password would convert that token from a discovery
+ * pointer into an account credential. An emailed reset link proves current control of
+ * the mailbox instead; the token alone proves nothing.
+ *
+ * It replaces the ordinary "Sign in" screen that used to be shown here, which was
+ * unusable: the account has no password to sign in with.
+ *
+ * The invited address is deliberately NOT displayed. The person who received the
+ * invitation knows which mailbox to check, and a stranger holding a forwarded link must
+ * not learn it. Nothing here carries a token, hash, email, id, or account state — the
+ * action reads the invitation hash from the HttpOnly cookie and resolves the rest
+ * server-side.
+ */
+export function StaffAccountRecoveryForm() {
+  const [state, formAction, pending] = useActionState(
+    requestStaffPasswordRecoveryAction,
+    INITIAL_STAFF_RECOVERY_STATE,
+  );
+
+  if (state.sent) {
+    return (
+      <div className="space-y-4">
+        <p
+          role="status"
+          className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700 ring-1 ring-emerald-100"
+        >
+          {STAFF_RECOVERY_SENT_MESSAGE}
+        </p>
+        {/*
+          Resending is offered, but the provider decides whether a new message is
+          actually sent — Supabase Auth throttles repeat recovery requests, and a refusal
+          surfaces as the same generic retryable error rather than as a claim about the
+          account.
+        */}
+        <form action={formAction}>
+          <button type="submit" disabled={pending} className={secondaryButton}>
+            {pending && <SpinnerIcon className="h-4 w-4 animate-spin" />}
+            {pending ? "Sending…" : "Send it again"}
+          </button>
+        </form>
+      </div>
+    );
+  }
+
+  return (
+    <form action={formAction} className="space-y-4">
+      <Alert error={state.error} />
+      <button type="submit" disabled={pending} className={primaryButton}>
+        {pending && <SpinnerIcon className="h-4 w-4 animate-spin" />}
+        {pending ? "Sending…" : "Send password reset email"}
+      </button>
+    </form>
   );
 }

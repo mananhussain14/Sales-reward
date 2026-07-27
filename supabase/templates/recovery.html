@@ -1,0 +1,107 @@
+<!--
+  Password recovery email.
+
+  WHY THIS TEMPLATE EXISTS RATHER THAN GOTRUE'S DEFAULT
+    The default recovery template emits {{ .ConfirmationURL }}, which carries the
+    token in a URL FRAGMENT (#access_token=...). A fragment is never sent to the
+    server, so the token can only be read by client-side JavaScript — meaning the
+    credential must be handled in the browser before it can be exchanged.
+
+    This template emits {{ .TokenHash }} as an ordinary query parameter instead.
+    The callback at /invitations/staff/recover reads it on the SERVER and exchanges
+    it via supabase.auth.verifyOtp({ type: 'recovery' }), so the raw credential
+    never enters client JavaScript, never reaches a client component, and never
+    appears in any browser-side state. This mirrors ./invite.html exactly.
+
+  WHY {{ .RedirectTo }} AND NOT {{ .SiteURL }}
+    ./invite.html can use {{ .SiteURL }} because its flow depends on no cookie.
+    THIS one does: the staff invitation hash lives in an HttpOnly cookie scoped to
+    /invitations/staff, and a cookie is bound to the HOST that set it. site_url and
+    APP_ORIGIN are not always the same spelling of the same machine — locally one is
+    127.0.0.1 and the other localhost — and landing on the wrong one would silently
+    arrive WITHOUT the invitation hash, stranding the person a second time. So the
+    link is built from the redirect the application requested, which is
+    ${APP_ORIGIN}/invitations/staff/recover: the same origin that set the cookie.
+
+    That value is not attacker-controlled. It is a fixed internal path combined with
+    server-side configuration in lib/staff/staff-registration.ts, and GoTrue
+    additionally checks it against the project's redirect allow-list before
+    substituting it here — so it can be neither a foreign origin nor an open
+    redirect.
+
+  WHAT IS DELIBERATELY ABSENT FROM THIS EMAIL
+    * No database identifier of any kind: no invitation id, organization id, profile
+      id, membership id, or Auth user id.
+    * No visible token. The token hash appears exactly once, inside the href, and is
+      never printed as readable text where it could be shoulder-surfed,
+      screenshotted, or pasted into a support ticket.
+    * No STAFF INVITATION token. The invitation's own raw token is not in this URL
+      and is not knowable from it — the two credentials stay separate, and this link
+      grants only a session, never an acceptance.
+    * No service-role key, no JWT, and no API key.
+    * No Retailer, Vendor, or role NAME, and no recipient name. A recovery email may
+      reach a mistyped address; it should say what to do and nothing about who is
+      involved.
+    * No JavaScript, remote images, tracking pixels, web fonts, or external
+      stylesheets. Every style below is inline.
+
+  SUPPORTED VARIABLES USED
+    {{ .RedirectTo }}  the redirect the application requested, already checked
+                       against the allow-list.
+    {{ .TokenHash }}   the single-use recovery token hash.
+-->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Reset your SalesReward password</title>
+  </head>
+  <body style="margin:0; padding:0; background-color:#f4f4f5; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; color:#18181b;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f4f4f5; padding:32px 16px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:520px; background-color:#ffffff; border-radius:12px; border:1px solid #e4e4e7;">
+            <tr>
+              <td style="padding:32px;">
+
+                <h1 style="margin:0 0 16px 0; font-size:20px; line-height:28px; font-weight:600; color:#18181b;">
+                  Set your SalesReward password
+                </h1>
+
+                <p style="margin:0 0 16px 0; font-size:15px; line-height:24px; color:#3f3f46;">
+                  Use the link below to choose a password for your SalesReward
+                  account. If you were finishing an invitation, you will be taken
+                  straight back to it afterwards.
+                </p>
+
+                <p style="margin:0 0 24px 0;">
+                  <a
+                    href="{{ .RedirectTo }}?token_hash={{ .TokenHash }}&type=recovery"
+                    style="display:inline-block; background-color:#4f46e5; color:#ffffff; font-size:15px; font-weight:600; line-height:20px; text-decoration:none; padding:12px 24px; border-radius:6px;"
+                  >
+                    Set my password
+                  </a>
+                </p>
+
+                <p style="margin:0 0 8px 0; font-size:13px; line-height:20px; color:#71717a;">
+                  This link expires and can be used once.
+                </p>
+
+                <p style="margin:0; font-size:13px; line-height:20px; color:#71717a;">
+                  If you did not ask for this, you can ignore this email. Your
+                  password will not change unless the link above is used.
+                </p>
+
+              </td>
+            </tr>
+          </table>
+
+          <p style="margin:24px 0 0 0; font-size:12px; line-height:18px; color:#a1a1aa;">
+            SalesReward
+          </p>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

@@ -9,10 +9,16 @@ import {
   readStaffInviteHash,
 } from "@/lib/staff/staff-invite-cookie";
 import { acceptStaffInvitation } from "@/lib/staff/staff-acceptance";
-import { activateInvitedStaffAccount } from "@/lib/staff/staff-registration";
+import {
+  activateInvitedStaffAccount,
+  requestInvitedStaffPasswordRecovery,
+} from "@/lib/staff/staff-registration";
 import { resolveAuthenticatedLanding } from "@/lib/auth/authenticated-landing";
 import { validatePassword } from "@/lib/auth/password-policy";
-import type { StaffAcceptState } from "@/app/invitations/staff/accept-state";
+import type {
+  StaffAcceptState,
+  StaffRecoveryState,
+} from "@/app/invitations/staff/accept-state";
 
 /**
  * Server Actions for the staff invitation flow.
@@ -281,6 +287,16 @@ const ACTIVATION_ERROR =
 const ALREADY_REGISTERED_MESSAGE =
   "You already have a SalesReward account. Sign in to continue.";
 
+/**
+ * Shown when activation is attempted for an account that must be recovered instead.
+ *
+ * It names no reason and offers no control — refreshing renders the recovery screen,
+ * which owns the only button that may request a reset email. Keeping that control in one
+ * place is what stops this action becoming a second, unguarded way to trigger it.
+ */
+const RECOVERY_NEEDED_MESSAGE =
+  "This account needs to be recovered before it can be used. Refresh this page to continue.";
+
 export async function activateStaffAccountAction(
   _prevState: StaffAcceptState,
   formData: FormData,
@@ -318,6 +334,19 @@ export async function activateStaffAccountAction(
     return { error: null, mode: "sign-in", message: ALREADY_REGISTERED_MESSAGE };
   }
 
+  if (result.status === "recovery-required") {
+    // The account exists, cannot sign in, and already carries a provisioned identity.
+    // First-password activation is REFUSED for it in lib/staff/staff-registration.ts —
+    // this branch exists because a Server Action is a public endpoint, so a hand-crafted
+    // POST (or a state that changed since the page rendered) reaches here regardless of
+    // which screen was displayed. NOTHING has been written.
+    //
+    // Reported as a plain reload prompt rather than as the recovery screen: this action
+    // must not become a second way to trigger recovery mail, and re-rendering the page
+    // shows the correct screen with its own control.
+    return { error: RECOVERY_NEEDED_MESSAGE, mode: null };
+  }
+
   if (result.status !== "activated") {
     return { error: ACTIVATION_ERROR, mode: null };
   }
@@ -330,4 +359,54 @@ export async function activateStaffAccountAction(
   //    every try/catch.
   revalidatePath("/", "layout");
   redirect(RETURN_PATH);
+}
+
+/* ---------------------------------------------------------------------------
+ * Password recovery request
+ * ------------------------------------------------------------------------- */
+
+/** The one message for every recovery refusal. Names no account and no reason. */
+const RECOVERY_ERROR =
+  "We couldn’t start the password reset. Please try again in a moment.";
+
+/**
+ * Requests a password-recovery email for an invited staff member whose account exists
+ * but cannot be signed in to.
+ *
+ * THE ONLY INPUT IS THE HttpOnly COOKIE. This action reads no form field at all — not an
+ * email, not a user id, not an invitation id, not an organization id — so a hand-crafted
+ * POST cannot redirect the reset to another address. The invitation hash comes from the
+ * scoped cookie and the address is resolved from it server-side, used, and discarded.
+ *
+ * IT NEVER SETS A PASSWORD. That is the entire point of this path existing separately
+ * from activation: the account may already carry a provisioned identity, and letting an
+ * invitation token set its first password would turn that token from a discovery pointer
+ * into an account credential. Recovery proves current control of the mailbox instead.
+ *
+ * IT REVEALS NOTHING NEW. The recovery path is offered only for the one account state
+ * that has already caused this screen to render, and every failure — a dead invitation,
+ * a state that does not permit recovery, a provider refusal, a transport error — is
+ * reported with the same message.
+ */
+export async function requestStaffPasswordRecoveryAction(
+  _prevState: StaffRecoveryState,
+  _formData: FormData,
+): Promise<StaffRecoveryState> {
+  const tokenHash = await readStaffInviteHash();
+
+  if (!tokenHash) {
+    return { error: RECOVERY_ERROR, sent: false };
+  }
+
+  const result = await requestInvitedStaffPasswordRecovery(tokenHash);
+
+  if (result.status !== "requested") {
+    // "refused" (the invitation or account state does not permit recovery) and
+    // "unavailable" (configuration, transport, or a provider refusal including its own
+    // rate limiting) are reported identically: distinguishing them would tell the holder
+    // of a token something about the account behind it.
+    return { error: RECOVERY_ERROR, sent: false };
+  }
+
+  return { error: null, sent: true };
 }

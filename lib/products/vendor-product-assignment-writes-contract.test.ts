@@ -58,8 +58,16 @@ const MIGRATIONS_DIR = join(ROOT, "supabase/migrations");
 const CATALOG_MIGRATION_NAME = "20260727210000_vendor_product_catalog_operations.sql";
 /** The migration that defines the two tables, their constraints, indexes and triggers. */
 const STORAGE_MIGRATION_NAME = "20260727090000_vendor_product_catalog_foundation.sql";
-/** The most recent applied migration at the time of this milestone. */
-const LATEST_APPLIED_MIGRATION = "20260807090000_repair_vendor_product_write_normalization.sql";
+/**
+ * The most recent migration this contract has been checked against.
+ *
+ * Bumped from 20260807090000 by the staff account-recovery milestone, which added
+ * 20260808090000_repair_retailer_staff_registration_context.sql. That migration repairs
+ * public.get_retailer_staff_registration_context and adds two staff-invitation helpers;
+ * it touches no product table and neither assignment function, which rule 1 below now
+ * asserts directly rather than inferring from "no migration exists at all".
+ */
+const LATEST_APPLIED_MIGRATION = "20260808090000_repair_retailer_staff_registration_context.sql";
 
 const CATALOG_SQL = readFileSync(join(MIGRATIONS_DIR, CATALOG_MIGRATION_NAME), "utf8");
 const STORAGE_SQL = readFileSync(join(MIGRATIONS_DIR, STORAGE_MIGRATION_NAME), "utf8");
@@ -189,17 +197,30 @@ describe("Vendor Product assignment writes — this milestone adds no migration"
     .filter((file) => file.endsWith(".sql"))
     .sort();
 
-  test("1. no migration was added after the last applied one", () => {
-    // The audit found the two assignment writes already correct, so there is nothing to
-    // migrate. If a later change genuinely needs one, this test is the deliberate stop: it
-    // fails, and whoever adds the migration updates LATEST_APPLIED_MIGRATION and says why in
-    // the audit document.
+  test("1. no migration after the checked one touches either assignment write", () => {
+    // The audit found the two assignment writes already correct, so that milestone added
+    // nothing to migrate. This remains the deliberate stop for anyone who changes them:
+    // a later migration is allowed to exist — the schema keeps moving for other reasons —
+    // but it must not redefine, drop, or re-grant either function without this contract
+    // being re-checked and LATEST_APPLIED_MIGRATION bumped with a stated reason.
     const newer = applied.filter((file) => file > LATEST_APPLIED_MIGRATION);
-    assert.deepEqual(
-      newer,
-      [],
-      "the assignment-writes milestone reuses the shipped RPCs unchanged and must add no migration",
-    );
+
+    for (const file of newer) {
+      const sql = readFileSync(join(MIGRATIONS_DIR, file), "utf8");
+      for (const fn of [
+        "assign_vendor_product_to_retailer",
+        "unassign_vendor_product_from_retailer",
+      ]) {
+        assert.ok(
+          !sql.includes(fn),
+          `${file} touches ${fn}; re-check this contract and bump LATEST_APPLIED_MIGRATION`,
+        );
+      }
+      assert.ok(
+        !/vendor_product_retailer_assignments/.test(sql),
+        `${file} touches the assignment table; re-check this contract`,
+      );
+    }
   });
 
   test("2. every migration this contract depends on is still present, in order", () => {

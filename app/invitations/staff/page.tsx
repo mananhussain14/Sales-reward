@@ -9,6 +9,7 @@ import { getStaffRegistrationView } from "@/lib/staff/staff-registration";
 import {
   AcceptInvitationTransition,
   ActivateStaffAccountForm,
+  StaffAccountRecoveryForm,
   StaffInvitationSignInPrompt,
   WrongAccountSwitch,
 } from "@/app/invitations/staff/accept-forms";
@@ -138,6 +139,40 @@ export default async function StaffInvitationPage() {
         >
           <StaffInvitationSignInPrompt />
         </InvitationShell>
+      );
+    }
+
+    // The invited address has an account that CANNOT be signed in to — unconfirmed, or
+    // carrying no password — and which already stands for a provisioned identity. This
+    // screen used to show the sign-in prompt above, which was unusable and had no way
+    // out. It offers an emailed reset link and, deliberately, no password field: setting
+    // a password directly from an invitation token would turn that token into an account
+    // credential. See lib/staff/staff-account-state.ts.
+    if (view === "recover") {
+      return (
+        <InvitationShell
+          icon={<KeyIcon className="h-6 w-6" />}
+          steps={["Invitation", "Set password", "Done"]}
+          activeStep={1}
+          title="Finish securing your existing account"
+          description="Your account was set up but never finished. We’ll email a password reset link to the address you were invited at — open it, choose a password, and you’ll come straight back here."
+        >
+          <StaffAccountRecoveryForm />
+        </InvitationShell>
+      );
+    }
+
+    // Banned, soft-deleted, or ambiguous. A neutral message with no technical detail:
+    // the person cannot fix any of those themselves, and naming the reason would tell
+    // whoever holds this link something about the account behind it.
+    if (view === "blocked") {
+      return (
+        <InvitationShell
+          icon={<UsersIcon className="h-6 w-6" />}
+          iconTone="amber"
+          title="We can’t continue with this invitation"
+          description="Please contact SalesReward support to finish setting up your account."
+        />
       );
     }
 
