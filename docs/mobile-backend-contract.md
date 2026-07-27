@@ -1112,9 +1112,21 @@ client-side. Flutter would produce worse errors without it.
 
 `resendStaffInvitationAction`. Reads the invitation list, finds the row, checks
 `canResendInvitation(state)` **in TypeScript**, then re-runs the same five-step flow with the
-**stored** email/name/role/shops — never the client's. **Classification: D.** The
-`canResendInvitation` predicate is a business rule that must move into the shared Edge
-Function or into SQL, otherwise Flutter will define "resendable" differently from web.
+**stored** email/name/role/shops — never the client's.
+
+**Update — shared delivery shipped.** The five-step flow now lives in the
+`send-retailer-staff-invitation` Edge Function, which both clients call, so web and Flutter
+execute one sequence and receive one vocabulary of outcomes. See
+`docs/retailer-staff-invitation-delivery-audit.md`.
+
+There is **no separate resend call**: re-submitting the same address, role and shops reuses
+the live invitation and the reply's `outcome` is `RESENT`. `canResendInvitation` is
+therefore no longer a gate on the shared path — it is a web-only *presentation* predicate
+deciding whether to show the resend button. The authoritative decision has always been
+`reserve_retailer_staff_invitation()`, which refuses a terminal invitation itself; a client
+that skips the predicate gets a correct refusal rather than a wrong send. **The residual
+divergence risk is cosmetic** (Flutter may offer a button that the database then refuses),
+not a correctness one.
 
 ---
 

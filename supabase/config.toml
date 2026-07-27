@@ -475,6 +475,25 @@ enabled = true
 verify_jwt = true
 entrypoint = "./functions/submit-receipt/index.ts"
 
+# The SHARED delivery entry point for Retailer staff invitations — the web portal and the
+# Flutter app both send through it, so "send a staff invitation" has one implementation.
+#
+# verify_jwt = true is load-bearing and must stay true: it makes the gateway reject an
+# unauthenticated request before the function runs. The function ALSO calls auth.getUser()
+# itself, which revalidates the token with the Auth server rather than trusting its claims
+# — two independent checks, because this function holds the service-role key AND the
+# Resend credential. It additionally enforces RETAILER_STAFF_INVITATIONS_ENABLED from its
+# own environment, so a hidden button in the web UI is never the security boundary.
+#
+# Its required secrets are set on the hosted project (never in this file, and never
+# printed): SUPABASE_URL and the publishable/anon key are injected by the platform;
+# SUPABASE_SERVICE_ROLE_KEY, RESEND_API_KEY, RESEND_FROM, APP_ORIGIN and
+# RETAILER_STAFF_INVITATIONS_ENABLED are set with `supabase secrets set`.
+[functions.send-retailer-staff-invitation]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/send-retailer-staff-invitation/index.ts"
+
 [analytics]
 enabled = true
 port = 54327

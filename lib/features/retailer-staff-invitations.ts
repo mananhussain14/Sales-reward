@@ -22,6 +22,22 @@
 //     strand a recipient mid-flow.
 // Only SENDING is gated.
 
+//
+// SINCE THE SHARED-DELIVERY MILESTONE, THIS IS NO LONGER THE ONLY GATE, AND IT IS NO
+// LONGER THE AUTHORITATIVE ONE. `send-retailer-staff-invitation` reads the same variable
+// from its OWN environment (`Deno.env`) and enforces it there, because a Flutter client
+// never executes a line of this file and a hand-crafted POST never renders a page. This
+// flag now does what a client-side gate should do: it keeps the portal from offering, or
+// attempting, something the deployment has switched off. Both readings compare against
+// the SAME literal, imported below, so the two runtimes cannot disagree about what
+// "enabled" means.
+//
+// The import is RELATIVE and carries an explicit `.ts` extension, following the same
+// constraint lib/staff/staff-invitation-email.ts documents: this module's unit test runs
+// under `node --experimental-strip-types`, which does not honour tsconfig path aliases,
+// so an "@/…" specifier here would make the test unable to load it.
+import { isStaffInvitationSendingEnabled } from "../staff/staff-invitation-delivery-contract.ts";
+
 if (typeof window !== "undefined") {
   throw new Error(
     "lib/features/retailer-staff-invitations.ts was imported into browser code. This module reads server-only configuration and must only ever run on the server.",
@@ -33,23 +49,22 @@ export const RETAILER_STAFF_INVITATIONS_FLAG_VAR =
   "RETAILER_STAFF_INVITATIONS_ENABLED";
 
 /**
- * The ONE value that enables the feature. Compared byte-for-byte against the raw
- * environment string: "1", "yes", "on", "TRUE", " true ", and "True" are all DISABLED.
- * A flag guarding a service-role code path fails closed, and accepting a family of
- * spellings is how a deployment typo silently arms a feature.
- */
-const ENABLED_VALUE = "true";
-
-/**
  * Whether Retailer staff invitations may be SENT (a fresh invite or a resend).
  *
- * THE ONLY place RETAILER_STAFF_INVITATIONS_ENABLED is read. Read at CALL time (not
- * captured at module scope) so a restarted process picks up a changed value without a
- * stale cached boolean. Referenced as a literal `process.env.FOO` expression because
- * Next.js only performs static replacement on literals.
+ * THE ONLY place the Next.js process reads RETAILER_STAFF_INVITATIONS_ENABLED. Read at
+ * CALL time (not captured at module scope) so a restarted process picks up a changed
+ * value without a stale cached boolean. Referenced as a literal `process.env.FOO`
+ * expression because Next.js only performs static replacement on literals.
+ *
+ * The comparison itself lives in the shared contract module: byte-for-byte against
+ * "true", so "1", "yes", "on", "TRUE", " true " and "True" are all DISABLED. A flag
+ * guarding an outbound email path fails closed, and accepting a family of spellings is
+ * how a deployment typo silently arms a feature.
  */
 export function isRetailerStaffInvitationsEnabled(): boolean {
-  return process.env.RETAILER_STAFF_INVITATIONS_ENABLED === ENABLED_VALUE;
+  return isStaffInvitationSendingEnabled(
+    process.env.RETAILER_STAFF_INVITATIONS_ENABLED,
+  );
 }
 
 /**
