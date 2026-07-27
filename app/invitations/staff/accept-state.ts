@@ -34,3 +34,42 @@ export const INITIAL_STAFF_ACCEPT_STATE: StaffAcceptState = {
   mode: null,
   message: null,
 };
+
+/**
+ * State for the password-RECOVERY request form.
+ *
+ * Shown when the invited address has an account that cannot be signed in to but already
+ * carries a provisioned identity — the case that used to dead-end on an unusable sign-in
+ * screen. The remedy is an emailed reset link, never a password field on this page.
+ *
+ * `sent` is deliberately NOT a claim that an email was delivered. Supabase Auth decides
+ * that, and its own throttling may mean no new message goes out for a request made
+ * moments after the last one. The copy says a link is on its way if one is needed, which
+ * is true either way and discloses nothing about the account beyond what this screen
+ * already implies.
+ *
+ * There is no token, hash, email, auth user id or account state here — the action reads
+ * the invitation hash from the HttpOnly cookie and resolves the address server-side.
+ */
+export type StaffRecoveryState = {
+  error: string | null;
+  sent: boolean;
+};
+
+export const INITIAL_STAFF_RECOVERY_STATE: StaffRecoveryState = {
+  error: null,
+  sent: false,
+};
+
+/**
+ * The confirmation shown once a recovery request has been accepted.
+ *
+ * It lives here, in a plain module both the Server Action layer and the Client Component
+ * can import, so the wording exists once. It deliberately does NOT claim an email was
+ * delivered — Supabase Auth throttles repeat requests, and a second press moments after
+ * the first may legitimately send nothing — and it does NOT name the address, because
+ * the invited person already knows which mailbox to check and a stranger holding a
+ * forwarded link must not learn it.
+ */
+export const STAFF_RECOVERY_SENT_MESSAGE =
+  "If your account needs it, a password reset link is on its way to the address you were invited at. Open it to finish setting up, then come back here.";

@@ -176,6 +176,16 @@ additional_redirect_urls = [
   "https://127.0.0.1:3000",
   "http://127.0.0.1:3000/invitations/accept",
   "http://localhost:3000/invitations/accept",
+  # The STAFF password-recovery landing. resetPasswordForEmail() asks for this exact
+  # redirect, and GoTrue refuses any `redirectTo` absent from this list — which is also
+  # what stops that parameter ever becoming an open redirect. Both loopback spellings are
+  # present for the same reason the invitation callback lists both.
+  #
+  # It MUST match APP_ORIGIN, not site_url: the staff invitation hash lives in an
+  # HttpOnly cookie scoped to /invitations/staff on the host that set it, and a recovery
+  # link landing on the other spelling would arrive without that cookie.
+  "http://127.0.0.1:3000/invitations/staff/recover",
+  "http://localhost:3000/invitations/staff/recover",
 ]
 # How long tokens are valid for, in seconds. Defaults to 3600 (1 hour), maximum 604,800 (1 week).
 jwt_expiry = 3600
@@ -293,6 +303,29 @@ otp_expiry = 86400
 [auth.email.template.invite]
 subject = "You have been invited to SalesReward"
 content_path = "./supabase/templates/invite.html"
+
+# Custom password-recovery template.
+#
+# ENABLED for the same SECURITY reason as the invite template above: GoTrue's default
+# recovery template emits {{ .ConfirmationURL }}, which delivers the token in a URL
+# FRAGMENT readable only by client-side JavaScript. This one emits {{ .TokenHash }} as an
+# ordinary query parameter, so /invitations/staff/recover verifies it SERVER-side with
+# verifyOtp() and the raw credential never enters client JavaScript.
+#
+# It links to {{ .RedirectTo }} rather than {{ .SiteURL }} — see the template's own header
+# for why that is load-bearing for the invitation cookie.
+#
+# THIS TEMPLATE IS PROJECT-WIDE. It is used for every password recovery, and today the
+# staff invitation flow is the only thing in this application that requests one. If a
+# general "forgot password" flow is added later, it must land on the same callback shape
+# (a route that reads token_hash + type=recovery) or this template must gain a branch.
+#
+# LOCAL ONLY. The hosted project needs the same template pasted into the Supabase
+# Dashboard under Authentication -> Emails -> Reset password, or hosted recovery emails
+# will keep using the default fragment-based link and the callback will reject them.
+[auth.email.template.recovery]
+subject = "Set your SalesReward password"
+content_path = "./supabase/templates/recovery.html"
 
 # Uncomment to customize notification email template
 # [auth.email.notification.password_changed]
