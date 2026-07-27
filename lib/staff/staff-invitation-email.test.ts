@@ -3,15 +3,17 @@
  *
  * Run with:  npm test
  *
- * RESEND IS MOCKED. `fetch` is injected, so no network call is made and NO LIVE EMAIL
- * IS EVER SENT by this suite. The real API key is never read into an assertion either —
- * the tests set placeholder environment variables for the duration of each case.
+ * RESEND IS MOCKED. `fetch` is injected, so no network call is made and NO LIVE EMAIL IS
+ * EVER SENT by this suite. No real key can be read into an assertion either: since the
+ * shared-delivery milestone this module reads NO environment at all — the configuration
+ * is passed in, and these tests pass a placeholder.
  *
- * These pin: the template's required content, the accept URL's shape, that the raw
- * token appears ONLY inside that URL, that the token hash never appears at all, and
- * that no provider status, body, or error escapes into the returned result.
+ * These pin: the template's required content, the accept URL's shape, that the raw token
+ * appears ONLY inside that URL, that the token hash never appears at all, that a bad
+ * configuration is refused BEFORE any request, and that no provider status, body, or
+ * error escapes into the returned result.
  */
-import { test, describe, beforeEach, afterEach } from "node:test";
+import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
   buildStaffAcceptUrl,
@@ -19,6 +21,8 @@ import {
   staffInvitationHtmlBody,
   staffInvitationTextBody,
   STAFF_INVITE_ENTER_PATH,
+  validateStaffInvitationEmailConfig,
+  type StaffInvitationEmailConfig,
   type StaffInvitationEmailInput,
 } from "./staff-invitation-email.ts";
 
@@ -30,6 +34,13 @@ const INPUT: StaffInvitationEmailInput = {
   retailerName: "Harbour Retail",
   roleDisplayName: "Sales Staff",
   rawToken: RAW_TOKEN,
+};
+
+/** A placeholder configuration. Not a secret, and not read from anywhere. */
+const CONFIG: StaffInvitationEmailConfig = {
+  apiKey: "test-key-not-a-real-secret",
+  from: "SalesReward <no-reply@example.test>",
+  appOrigin: "https://app.example.test",
 };
 
 /** Captures what would have been POSTed, and returns a chosen response. */
@@ -46,25 +57,6 @@ function fakeFetch(response: unknown) {
 function sentBody(calls: { init: RequestInit | undefined }[]): Record<string, string> {
   return JSON.parse(String(calls[0]?.init?.body ?? "{}"));
 }
-
-const ORIGINAL_ENV = {
-  RESEND_API_KEY: process.env.RESEND_API_KEY,
-  RESEND_FROM: process.env.RESEND_FROM,
-  APP_ORIGIN: process.env.APP_ORIGIN,
-};
-
-beforeEach(() => {
-  process.env.RESEND_API_KEY = "test-key-not-a-real-secret";
-  process.env.RESEND_FROM = "SalesReward <no-reply@example.test>";
-  process.env.APP_ORIGIN = "https://app.example.test";
-});
-
-afterEach(() => {
-  for (const [key, value] of Object.entries(ORIGINAL_ENV)) {
-    if (value === undefined) delete process.env[key];
-    else process.env[key] = value;
-  }
-});
 
 describe("buildStaffAcceptUrl", () => {
   test("1. points at the intake route and carries the raw token as a query value", () => {
@@ -87,12 +79,19 @@ describe("buildStaffAcceptUrl", () => {
       ),
     );
   });
+
+  test("4. the acceptance path is UNCHANGED by this milestone", () => {
+    // The intake route (app/invitations/staff/enter/route.ts) hashes the token
+    // server-side, stores the hash in an HttpOnly cookie and redirects to a clean URL.
+    // Changing this constant without changing that route silently breaks acceptance.
+    assert.equal(STAFF_INVITE_ENTER_PATH, "/invitations/staff/enter");
+  });
 });
 
 describe("the message body", () => {
   const acceptUrl = buildStaffAcceptUrl("https://app.example.test", RAW_TOKEN);
 
-  test("4. text body carries the required content", () => {
+  test("5. text body carries the required content", () => {
     const body = staffInvitationTextBody(INPUT, acceptUrl);
     assert.match(body, /Ada/);
     assert.match(body, /Harbour Retail/);
@@ -102,7 +101,7 @@ describe("the message body", () => {
     assert.match(body, /expires/i, "must mention expiry");
   });
 
-  test("5. html body carries branding, the button, and the sign-in guidance", () => {
+  test("6. html body carries branding, the button, and the sign-in guidance", () => {
     const body = staffInvitationHtmlBody(INPUT, acceptUrl);
     assert.match(body, /SalesReward/);
     assert.match(body, /Accept invitation/);
@@ -111,7 +110,7 @@ describe("the message body", () => {
     assert.match(body, /expires/i);
   });
 
-  test("6. html-escapes the dynamic display values", () => {
+  test("7. html-escapes the dynamic display values", () => {
     const body = staffInvitationHtmlBody(
       { ...INPUT, retailerName: `<script>alert("x")</script>` },
       acceptUrl,
@@ -120,7 +119,7 @@ describe("the message body", () => {
     assert.match(body, /&lt;script&gt;/);
   });
 
-  test("7. the RAW token appears ONLY inside the accept URL", () => {
+  test("8. the RAW token appears ONLY inside the accept URL", () => {
     for (const body of [
       staffInvitationTextBody(INPUT, acceptUrl),
       staffInvitationHtmlBody(INPUT, acceptUrl),
@@ -136,7 +135,7 @@ describe("the message body", () => {
     }
   });
 
-  test("8. no id, hash, or internal identifier appears anywhere in the message", () => {
+  test("9. no id, hash, or internal identifier appears anywhere in the message", () => {
     for (const body of [
       staffInvitationTextBody(INPUT, acceptUrl),
       staffInvitationHtmlBody(INPUT, acceptUrl),
@@ -152,10 +151,80 @@ describe("the message body", () => {
   });
 });
 
+describe("validateStaffInvitationEmailConfig", () => {
+  const VALID = {
+    apiKey: "k",
+    from: "SalesReward <no-reply@example.test>",
+    appOrigin: "https://app.example.test",
+  };
+
+  test("10. accepts a complete configuration and canonicalizes the origin", () => {
+    const result = validateStaffInvitationEmailConfig({
+      ...VALID,
+      appOrigin: "  https://app.example.test/some/path?x=1  ",
+    });
+    assert.ok(result.ok);
+    // Only the ORIGIN survives — a stray path in the variable cannot bend the accept
+    // URL into something else.
+    assert.equal(result.config.appOrigin, "https://app.example.test");
+  });
+
+  test("11. refuses each missing or blank value", () => {
+    for (const key of ["apiKey", "from", "appOrigin"] as const) {
+      assert.equal(
+        validateStaffInvitationEmailConfig({ ...VALID, [key]: undefined }).ok,
+        false,
+        `${key} absent`,
+      );
+      assert.equal(
+        validateStaffInvitationEmailConfig({ ...VALID, [key]: "   " }).ok,
+        false,
+        `${key} blank`,
+      );
+      assert.equal(
+        validateStaffInvitationEmailConfig({ ...VALID, [key]: 42 }).ok,
+        false,
+        `${key} not a string`,
+      );
+    }
+  });
+
+  test("12. refuses a non-https origin, excepting loopback development hosts", () => {
+    assert.equal(
+      validateStaffInvitationEmailConfig({
+        ...VALID,
+        appOrigin: "http://evil.example.test",
+      }).ok,
+      false,
+    );
+    assert.equal(
+      validateStaffInvitationEmailConfig({ ...VALID, appOrigin: "not a url" }).ok,
+      false,
+    );
+    for (const loopback of [
+      "http://localhost:3000",
+      "http://127.0.0.1:3000",
+      "https://app.example.test",
+    ]) {
+      assert.equal(
+        validateStaffInvitationEmailConfig({ ...VALID, appOrigin: loopback }).ok,
+        true,
+        loopback,
+      );
+    }
+  });
+
+  test("13. the failure result names nothing — not even which value was missing", () => {
+    // It crosses a runtime boundary and becomes a client-visible NOT_CONFIGURED.
+    const result = validateStaffInvitationEmailConfig({});
+    assert.deepEqual(result, { ok: false });
+  });
+});
+
 describe("sendStaffInvitationEmail — success", () => {
-  test("9. posts to Resend and reports sent", async () => {
+  test("14. posts to Resend and reports sent", async () => {
     const fake = fakeFetch({ ok: true });
-    const result = await sendStaffInvitationEmail(INPUT, fake.impl);
+    const result = await sendStaffInvitationEmail(INPUT, CONFIG, fake.impl);
 
     assert.deepEqual(result, { status: "sent" });
     assert.equal(fake.calls.length, 1);
@@ -163,95 +232,94 @@ describe("sendStaffInvitationEmail — success", () => {
     assert.equal(fake.calls[0].init?.method, "POST");
   });
 
-  test("10. the recipient is the canonical address it was given, in a to[] array", async () => {
+  test("15. the recipient is the canonical address it was given, in a to[] array", async () => {
     const fake = fakeFetch({ ok: true });
-    await sendStaffInvitationEmail(INPUT, fake.impl);
+    await sendStaffInvitationEmail(INPUT, CONFIG, fake.impl);
     const body = sentBody(fake.calls);
     assert.deepEqual(body.to, ["ada@example.com"]);
   });
 
-  test("11. the subject names the Retailer and the role, and no id", async () => {
+  test("16. the subject names the Retailer and the role, and no id", async () => {
     const fake = fakeFetch({ ok: true });
-    await sendStaffInvitationEmail(INPUT, fake.impl);
+    await sendStaffInvitationEmail(INPUT, CONFIG, fake.impl);
     const body = sentBody(fake.calls);
     assert.match(body.subject, /Harbour Retail/);
     assert.match(body.subject, /Sales Staff/);
     assert.ok(!/[0-9a-f]{64}/.test(body.subject));
   });
 
-  test("12. the token hash is nowhere in the outgoing request", async () => {
+  test("17. the token hash is nowhere in the outgoing request", async () => {
     const fake = fakeFetch({ ok: true });
-    await sendStaffInvitationEmail(INPUT, fake.impl);
+    await sendStaffInvitationEmail(INPUT, CONFIG, fake.impl);
     const serialized = String(fake.calls[0].init?.body ?? "");
     assert.ok(!/[0-9a-f]{64}/.test(serialized), "no SHA-256 digest may be sent");
+  });
+
+  test("18. exactly ONE request is made — the sender never retries", async () => {
+    for (const response of [{ ok: true }, { ok: false, status: 429 }]) {
+      const fake = fakeFetch(response);
+      await sendStaffInvitationEmail(INPUT, CONFIG, fake.impl);
+      assert.equal(fake.calls.length, 1, JSON.stringify(response));
+    }
   });
 });
 
 describe("sendStaffInvitationEmail — failures are sanitized", () => {
-  test("13. a non-2xx response yields 'failed' and nothing provider-specific", async () => {
+  test("19. a non-2xx response yields 'failed' and nothing provider-specific", async () => {
     const fake = fakeFetch({
       ok: false,
       status: 422,
       statusText: "Unprocessable",
       text: async () => "rate limited for ada@example.com",
     });
-    const result = await sendStaffInvitationEmail(INPUT, fake.impl);
+    const result = await sendStaffInvitationEmail(INPUT, CONFIG, fake.impl);
 
     assert.deepEqual(result, { status: "failed" });
     assert.deepEqual(Object.keys(result), ["status"]);
   });
 
-  test("14. a malformed provider response is treated as failed, never trusted", async () => {
+  test("20. a malformed provider response is treated as failed, never trusted", async () => {
     for (const response of [null, undefined, {}, { ok: "yes" }]) {
       const fake = fakeFetch(response);
-      const result = await sendStaffInvitationEmail(INPUT, fake.impl);
+      const result = await sendStaffInvitationEmail(INPUT, CONFIG, fake.impl);
       assert.deepEqual(result, { status: "failed" });
     }
   });
 
-  test("15. a transport throw yields 'failed' and never surfaces the thrown value", async () => {
+  test("21. a transport throw yields 'failed' and never surfaces the thrown value", async () => {
     const throwing = (async () => {
-      throw new Error(`connect ECONNREFUSED with Bearer ${process.env.RESEND_API_KEY}`);
+      // A real transport error can quote the request headers, which carry the key, and
+      // the body, which carries the accept URL and therefore the raw token.
+      throw new Error(
+        `connect ECONNREFUSED with Bearer ${CONFIG.apiKey} token=${RAW_TOKEN}`,
+      );
     }) as unknown as typeof fetch;
 
-    const result = await sendStaffInvitationEmail(INPUT, throwing);
+    const result = await sendStaffInvitationEmail(INPUT, CONFIG, throwing);
     assert.deepEqual(result, { status: "failed" });
-    assert.ok(!JSON.stringify(result).includes("Bearer"));
+    const serialized = JSON.stringify(result);
+    assert.ok(!serialized.includes("Bearer"));
+    assert.ok(!serialized.includes(CONFIG.apiKey));
+    assert.ok(!serialized.includes(RAW_TOKEN));
   });
 
-  test("16. missing configuration is reported distinctly and makes NO request", async () => {
-    for (const missing of ["RESEND_API_KEY", "RESEND_FROM", "APP_ORIGIN"]) {
-      const saved = process.env[missing];
-      delete process.env[missing];
-      const fake = fakeFetch({ ok: true });
-      const result = await sendStaffInvitationEmail(INPUT, fake.impl);
-      assert.deepEqual(result, { status: "misconfigured" }, `${missing} missing`);
-      assert.equal(fake.calls.length, 0, "no provider request may be made");
-      process.env[missing] = saved;
-    }
-  });
-
-  test("17. a non-https APP_ORIGIN is refused (loopback excepted)", async () => {
-    process.env.APP_ORIGIN = "http://evil.example.test";
-    const fake = fakeFetch({ ok: true });
-    assert.deepEqual(await sendStaffInvitationEmail(INPUT, fake.impl), {
-      status: "misconfigured",
-    });
-    assert.equal(fake.calls.length, 0);
-
-    process.env.APP_ORIGIN = "http://localhost:3000";
-    const loopback = fakeFetch({ ok: true });
-    assert.deepEqual(await sendStaffInvitationEmail(INPUT, loopback.impl), {
-      status: "sent",
-    });
-  });
-
-  test("18. every result carries a status and nothing else", async () => {
+  test("22. every result carries a status and nothing else", async () => {
     const cases: unknown[] = [{ ok: true }, { ok: false }, null];
     for (const response of cases) {
       const fake = fakeFetch(response);
-      const result = await sendStaffInvitationEmail(INPUT, fake.impl);
+      const result = await sendStaffInvitationEmail(INPUT, CONFIG, fake.impl);
       assert.deepEqual(Object.keys(result), ["status"]);
+    }
+  });
+
+  test("23. neither the key nor the raw token is ever returned", async () => {
+    for (const response of [{ ok: true }, { ok: false }, null]) {
+      const fake = fakeFetch(response);
+      const result = await sendStaffInvitationEmail(INPUT, CONFIG, fake.impl);
+      const serialized = JSON.stringify(result);
+      assert.ok(!serialized.includes(CONFIG.apiKey));
+      assert.ok(!serialized.includes(RAW_TOKEN));
+      assert.ok(!serialized.includes(CONFIG.appOrigin));
     }
   });
 });

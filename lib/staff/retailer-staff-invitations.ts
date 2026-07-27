@@ -1,257 +1,245 @@
 // SERVER-ONLY MODULE.
 //
-// Wires the REAL effects into the pure delivery sequence in
-// @/lib/staff/staff-invite-flow. It transitively imports the service-role admin client
-// and `next/headers`, so it can only ever run on the server, and it is never imported
-// by a Client Component.
+// The web portal's two staff-invitation effects. Since this milestone they do very
+// different amounts of work:
 //
-// WHICH CLIENT DOES WHAT, and why:
-//   reserve   — the CALLER'S OWN token (publishable key). This is the authorization
-//               step; it must run as the Retailer Owner so the RPC can resolve them
-//               from auth.uid() and refuse anyone without RETAILER_STAFF_MANAGE.
-//   revoke    — likewise the caller's own token, for the same reason.
-//   prepare / record sent / record failure — the SERVICE-ROLE client, because those
-//               three RPCs are granted to service_role ONLY (migration 20260724090000
-//               revokes them from anon and authenticated). They carry the entire
-//               decision themselves and are keyed by an invitation id the server just
-//               reserved plus the expected token hash.
+//   sendRetailerStaffInvitation  — a thin client of the SHARED Edge Function
+//                                  `send-retailer-staff-invitation`, called with the
+//                                  signed-in operator's own access token.
+//   revokeRetailerStaffInvitation — one RPC under the caller's own token, unchanged.
 //
-// THE RAW TOKEN. Generated here by @/lib/invitations/existing-user-token (Node crypto,
-// 32 random bytes, base64url) and handed to the email sender, which is the only thing
-// that ever sees it. It is never stored, never logged, never returned, and never
-// placed in a result. Only its SHA-256 hash reaches PostgreSQL, and the hash is absent
-// from every value this module returns — nothing here can reach a browser.
+// ============================================================================
+// WHY SENDING MOVED OUT OF THE WEB PROCESS
+// ============================================================================
+// The web and the Flutter app must send the same invitation, and "the same" has to mean
+// one implementation rather than two that agree today. Everything privileged now lives
+// behind one door: the service-role key, the Resend credential, APP_ORIGIN, the token
+// generation, and the reserve -> prepare -> send -> record order. This module supplies
+// none of them and can leak none of them.
+//
+// AFTER THE MIGRATION, THIS FILE NO LONGER:
+//   * constructs a service-role Supabase client (there is no `createAdminClient` here);
+//   * names prepare_retailer_staff_invitation, record_retailer_staff_invitation_sent, or
+//     record_retailer_staff_invitation_failure;
+//   * calls Resend, or reads RESEND_API_KEY / RESEND_FROM / APP_ORIGIN;
+//   * generates or hashes an invitation token;
+//   * knows the invitation id, the raw token, or the token hash — none of the three
+//     appears in anything the Edge Function returns.
+// lib/staff/staff-source-safety.test.ts asserts each of those as a rule, so a later edit
+// that reintroduces a second delivery path fails the build rather than shipping.
+//
+// ============================================================================
+// THE ACCESS TOKEN, AND WHY getSession() IS RIGHT HERE
+// ============================================================================
+// This module needs the caller's access token as a STRING to forward, not an
+// authorization decision — so `getSession()` is the correct call, and the usual rule
+// ("use getUser(), not getSession()") is not being bent. Nothing here trusts the token:
+// the Edge Function's gateway verifies the JWT (`verify_jwt = true`), the function
+// revalidates it with `auth.getUser()` against the Auth server, and
+// reserve_retailer_staff_invitation() then decides every question about identity,
+// Retailer, permission and shop ownership from `auth.uid()` in PostgreSQL. The Server
+// Action has ALSO already resolved portal access with getUser() before reaching here.
+// A forged or stale token forwarded from this line buys nothing: it fails at the
+// boundary that acts on it.
 import { createClient } from "@/lib/supabase/server";
+import { getSupabaseEnv } from "@/lib/env/supabase";
 import {
-  createAdminClient,
-  SupabaseAdminConfigurationError,
-} from "@/lib/supabase/admin";
-import { generateInvitationToken } from "@/lib/invitations/existing-user-token";
-import { sendStaffInvitationEmail } from "@/lib/staff/staff-invitation-email";
-import { retailerRoleDisplayName } from "@/lib/staff/staff-roles";
-import {
-  runStaffInviteFlow,
-  type StaffInviteFlowPorts,
-  type StaffInviteFlowResult,
-  type StaffInvitePrepareResult,
-  type StaffInviteReserveInput,
-  type StaffInviteReserveResult,
-} from "@/lib/staff/staff-invite-flow";
+  isStaffInvitationCode,
+  STAFF_INVITATION_CONTRACT_VERSION,
+  type StaffInvitationCode,
+} from "@/lib/staff/staff-invitation-delivery-contract";
 
-const RESERVE_RPC = "reserve_retailer_staff_invitation" as const;
-const PREPARE_RPC = "prepare_retailer_staff_invitation" as const;
-const RECORD_SENT_RPC = "record_retailer_staff_invitation_sent" as const;
-const RECORD_FAILURE_RPC = "record_retailer_staff_invitation_failure" as const;
+/**
+ * What the portal hands this module.
+ *
+ * `roleCode` is a plain string rather than the contract's narrowed union deliberately:
+ * the Server Action's validator has already restricted it to the two invitable codes,
+ * but a TYPE is not a check, and this module is not the place to pretend otherwise. The
+ * Edge Function re-validates the role against the same allow-set and the reservation RPC
+ * resolves it against the database's own catalogue. Anything unexpected is refused
+ * there, with a stable code, rather than being made unrepresentable here.
+ */
+export type SendStaffInvitationInput = {
+  firstName: string;
+  lastName: string;
+  email: string;
+  roleCode: string;
+  shopIds: string[];
+};
+
+/** The RPC this module still calls directly, under the caller's own token. */
 const REVOKE_RPC = "revoke_retailer_staff_invitation" as const;
+
+/** The shared Edge Function's name, and the path shape the gateway serves it on. */
+const SEND_FUNCTION = "send-retailer-staff-invitation" as const;
 
 /** SQLSTATEs the staff RPCs raise. Only the CODE is ever inspected, never a message. */
 const INSUFFICIENT_PRIVILEGE = "42501";
-
-/**
- * The one exception to "never read an error message" in this codebase, and a narrow
- * one.
- *
- * public.reserve_retailer_staff_invitation raises this EXACT literal — defined in
- * migration 20260723210000, in this repository — when a live PENDING invitation exists
- * for the address whose role or shop set differs from what was submitted. It is our
- * own string, not a provider's, it is compared rather than parsed, and it is never
- * forwarded to the browser: matching it only selects which of THIS codebase's messages
- * to render. If the migration's wording ever changes, the match fails and the outcome
- * degrades to the generic rejection — never to a wrong action.
- */
-const ROLE_OR_SHOP_CONFLICT_MESSAGE =
-  "Revoke and re-issue this invitation to change its role or shops";
 
 /** Sanitized operator logging. No ids, emails, tokens, hashes, or error objects. */
 function logStaffInviteFailure(category: string): void {
   console.error(`[retailer-staff-invite] ${category}`);
 }
 
-/** One row of reserve_retailer_staff_invitation(). */
-type ReservationRow = {
-  invitation_id?: unknown;
-  normalized_email?: unknown;
-  is_resend?: unknown;
-};
-
-/** One row of prepare_retailer_staff_invitation(). */
-type PreparationRow = {
-  normalized_email?: unknown;
-  first_name?: unknown;
-  retailer_name?: unknown;
-  role_code?: unknown;
-};
-
-function nonEmptyString(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
-}
+/**
+ * The outcomes the Retailer portal renders.
+ *
+ * A closed union of plain statuses, exactly as before: no invitation id, no email, no
+ * token, no hash, no provider code, no HTTP status, no backend text. The Server Action
+ * maps each to one of this codebase's own strings.
+ */
+export type StaffInviteSendResult =
+  /** Reserved, prepared, and accepted by the provider — a first send. */
+  | { status: "sent" }
+  /** The same, for an invitation that already existed. */
+  | { status: "resent" }
+  /**
+   * THE PARTIAL SUCCESS, new in this milestone. The provider accepted the message and
+   * the accept link is live, but the write that records `sent_at` could not be
+   * confirmed. Reported separately because the operator is about to re-read an
+   * invitation history that may not yet say "sent", and because the ONE thing the UI
+   * must not do is quietly resend — that would rotate the token and kill the link that
+   * has already been delivered.
+   */
+  | { status: "sent-unconfirmed" }
+  /** Prepared, but the provider did not accept it. The invitation stays live. */
+  | { status: "delivery-failed" }
+  /** The delivery service's own configuration is absent or invalid. */
+  | { status: "misconfigured" }
+  /** A live invitation exists with a different role or shop set. */
+  | { status: "conflict" }
+  /** Sending is switched off in the Edge Function's own environment. */
+  | { status: "paused" }
+  /** The database refused the reservation. Generic. */
+  | { status: "rejected" }
+  /** A transport, gateway, or unexpected failure at any step. */
+  | { status: "unavailable" };
 
 /**
- * Sends (or resends) a Retailer staff invitation.
+ * Every contract code the Edge Function can return, mapped to what the portal shows.
  *
- * Every value in `input` has already been canonicalized and validated by
+ * Written as an exhaustive record rather than a switch with a default so that adding a
+ * code to the contract is a TYPE ERROR here until this file decides what it means. A
+ * silently-defaulted new code is how a delivery outcome starts being rendered as a
+ * generic failure without anyone noticing.
+ */
+const RESULT_FOR_CODE: Record<StaffInvitationCode, StaffInviteSendResult> = {
+  SENT: { status: "sent" },
+  RESENT: { status: "resent" },
+  DELIVERY_ACCEPTED_STATUS_UNCONFIRMED: { status: "sent-unconfirmed" },
+  DELIVERY_FAILED: { status: "delivery-failed" },
+  INVITATION_CONFLICT: { status: "conflict" },
+  FEATURE_DISABLED: { status: "paused" },
+  NOT_CONFIGURED: { status: "misconfigured" },
+  // Every refusal the operator cannot act on specifically collapses to one generic
+  // outcome, exactly as before. The RPCs already refuse most of these with a single
+  // byte-identical exception so they cannot be used as an existence oracle, and
+  // distinguishing them in the UI would reintroduce that disclosure.
+  ACCESS_DENIED: { status: "rejected" },
+  RETAILER_INACTIVE: { status: "rejected" },
+  INVALID_REQUEST: { status: "rejected" },
+  INVALID_ROLE_SHOP_COMBINATION: { status: "rejected" },
+  AUTH_REQUIRED: { status: "rejected" },
+  // Neither should be reachable from this client: it always POSTs, and INTERNAL_ERROR
+  // is the function's own opaque failure. Both are infrastructure, not user error.
+  METHOD_NOT_ALLOWED: { status: "unavailable" },
+  INTERNAL_ERROR: { status: "unavailable" },
+};
+
+/**
+ * Sends (or resends) a Retailer staff invitation through the shared Edge Function.
+ *
+ * WHAT IS PUT ON THE WIRE, EXHAUSTIVELY: the five fields of `SendStaffInvitationInput`.
+ * The body is built field-by-field from that type rather than by spreading the caller's
+ * object, so a field added upstream cannot ride along unnoticed. There is no Retailer
+ * organization id, actor id, profile id, membership id, permission, invitation id,
+ * token, hash, audit field, invitation state, or expiry in it — and the Edge Function
+ * would reject an unknown key anyway.
+ *
+ * Every value has already been canonicalized and validated by
  * @/lib/staff/staff-invite-input, INCLUDING the rule that each shop id came from
- * public.list_retailer_staff_assignable_shops(). The reservation RPC re-applies every
- * one of those rules and is the final authority.
+ * public.list_retailer_staff_assignable_shops(). The Edge Function re-validates the
+ * whole request and the reservation RPC re-applies every rule again; both are ahead of
+ * this module in authority, and neither trusts it.
  */
 export async function sendRetailerStaffInvitation(
-  input: StaffInviteReserveInput,
-): Promise<StaffInviteFlowResult> {
-  // The service-role client is built FIRST so a missing key fails before anything is
-  // written. A configuration gap is reported as `misconfigured`, never as a throw.
-  let admin: ReturnType<typeof createAdminClient>;
+  input: SendStaffInvitationInput,
+): Promise<StaffInviteSendResult> {
+  let url: string;
+  let publishableKey: string;
   try {
-    admin = createAdminClient();
-  } catch (error) {
-    if (error instanceof SupabaseAdminConfigurationError) {
-      logStaffInviteFailure("configuration is incomplete");
-      return { status: "misconfigured" };
-    }
-    logStaffInviteFailure("setup failed");
-    return { status: "unavailable" };
+    ({ url, publishableKey } = getSupabaseEnv());
+  } catch {
+    // The thrown message names only the missing variable; it is not bound or forwarded.
+    logStaffInviteFailure("supabase configuration is incomplete");
+    return { status: "misconfigured" };
   }
 
   const supabase = await createClient();
 
-  const ports: StaffInviteFlowPorts = {
-    async reserve(reserveInput): Promise<StaffInviteReserveResult> {
-      const result = await Promise.resolve(
-        supabase.rpc(RESERVE_RPC, {
-          p_email: reserveInput.email,
-          p_first_name: reserveInput.firstName,
-          p_last_name: reserveInput.lastName,
-          p_role_code: reserveInput.roleCode,
-          // An empty array, never null: the RPC treats both as "no shops", and an
-          // explicit [] is what a Retailer Manager invitation must send.
-          p_shop_ids: reserveInput.shopIds,
-        }),
-      ).catch(() => null);
+  // See this module's header: the token is fetched to be FORWARDED, not believed.
+  const sessionResult = await Promise.resolve(supabase.auth.getSession()).catch(
+    () => null,
+  );
+  const accessToken = sessionResult?.data?.session?.access_token;
 
-      if (result === null) {
-        logStaffInviteFailure("reserve transport");
-        return { status: "unavailable" };
-      }
+  if (typeof accessToken !== "string" || accessToken.length === 0) {
+    // The session lapsed between the action's own getUser() check and this call.
+    logStaffInviteFailure("no access token for the caller");
+    return { status: "unavailable" };
+  }
 
-      if (result.error) {
-        const error = result.error as { code?: string; message?: string };
-        if (error.code === INSUFFICIENT_PRIVILEGE) {
-          return { status: "rejected" };
-        }
-        if (
-          typeof error.message === "string" &&
-          error.message.includes(ROLE_OR_SHOP_CONFLICT_MESSAGE)
-        ) {
-          return { status: "conflict" };
-        }
-        // Every other refusal — an inactive Retailer, a retired recipient profile, an
-        // address already a member, an invalid shop, a malformed input the database
-        // caught — collapses to one generic outcome. The message is not logged.
-        return { status: "rejected" };
-      }
+  let response: Response;
+  try {
+    response = await fetch(`${url}/functions/v1/${SEND_FUNCTION}`, {
+      method: "POST",
+      headers: {
+        // The caller's own token. This is what makes auth.uid() the real operator.
+        Authorization: `Bearer ${accessToken}`,
+        // The publishable key the gateway expects. A public value; never the
+        // service-role key, which this process does not read at all.
+        apikey: publishableKey,
+        "Content-Type": "application/json",
+      },
+      // No cookies: the send is a bearer-token request, deliberately.
+      credentials: "omit",
+      body: JSON.stringify({
+        firstName: input.firstName,
+        lastName: input.lastName,
+        email: input.email,
+        roleCode: input.roleCode,
+        shopIds: input.shopIds,
+      }),
+    });
+  } catch {
+    // A transport throw can carry the request headers, which include the access token.
+    // Nothing is bound, inspected, or logged.
+    logStaffInviteFailure("send transport");
+    return { status: "unavailable" };
+  }
 
-      const rows = result.data as unknown;
-      const row: ReservationRow | undefined = Array.isArray(rows) ? rows[0] : undefined;
-      const invitationId = nonEmptyString(row?.invitation_id);
-      const normalizedEmail = nonEmptyString(row?.normalized_email);
+  const body = await response.json().catch(() => null);
 
-      if (!row || invitationId === null || normalizedEmail === null) {
-        logStaffInviteFailure("reserve returned an unusable result");
-        return { status: "unavailable" };
-      }
+  if (
+    body === null ||
+    typeof body !== "object" ||
+    (body as { version?: unknown }).version !== STAFF_INVITATION_CONTRACT_VERSION
+  ) {
+    // A body this build does not understand — a gateway error page, or a future
+    // contract version. Treated as an outage rather than guessed at. Deliberately NOT
+    // logged with its content: a gateway error page can name the project.
+    logStaffInviteFailure("unrecognized delivery response");
+    return { status: "unavailable" };
+  }
 
-      return {
-        status: "ok",
-        invitationId,
-        normalizedEmail,
-        isResend: row.is_resend === true,
-      };
-    },
+  const code = (body as { code?: unknown }).code;
 
-    generateToken() {
-      // 32 cryptographically random bytes, base64url-encoded, plus its lowercase
-      // SHA-256 hex digest. A NEW pair on every call — which is what makes a resend
-      // and a post-failure retry rotate the token rather than replay a stale link.
-      return generateInvitationToken();
-    },
+  if (!isStaffInvitationCode(code)) {
+    logStaffInviteFailure("unrecognized delivery code");
+    return { status: "unavailable" };
+  }
 
-    async prepare({ invitationId, tokenHash }): Promise<StaffInvitePrepareResult> {
-      const result = await Promise.resolve(
-        admin.rpc(PREPARE_RPC, {
-          p_invitation_id: invitationId,
-          p_token_hash: tokenHash,
-        }),
-      ).catch(() => null);
-
-      if (result === null || result.error) {
-        logStaffInviteFailure("prepare failed");
-        return { status: "unavailable" };
-      }
-
-      const rows = result.data as unknown;
-      const row: PreparationRow | undefined = Array.isArray(rows) ? rows[0] : undefined;
-      const normalizedEmail = nonEmptyString(row?.normalized_email);
-      const firstName = nonEmptyString(row?.first_name);
-      const retailerName = nonEmptyString(row?.retailer_name);
-      const roleCode = nonEmptyString(row?.role_code);
-
-      if (
-        !row ||
-        normalizedEmail === null ||
-        firstName === null ||
-        retailerName === null ||
-        roleCode === null
-      ) {
-        logStaffInviteFailure("prepare returned an unusable result");
-        return { status: "unavailable" };
-      }
-
-      return { status: "ok", normalizedEmail, firstName, retailerName, roleCode };
-    },
-
-    async sendEmail(emailInput) {
-      // The sender owns APP_ORIGIN and builds the accept URL from the raw token
-      // itself. The raw token leaves this process only inside that emailed URL.
-      return sendStaffInvitationEmail({
-        toEmail: emailInput.toEmail,
-        firstName: emailInput.firstName,
-        retailerName: emailInput.retailerName,
-        roleDisplayName: emailInput.roleDisplayName,
-        rawToken: emailInput.rawToken,
-      });
-    },
-
-    async recordSent({ invitationId, tokenHash }) {
-      // Best-effort: a failure here never changes the user-facing outcome (see the
-      // sequence's own note). Nothing about the error is bound or logged.
-      const result = await Promise.resolve(
-        admin.rpc(RECORD_SENT_RPC, {
-          p_invitation_id: invitationId,
-          p_expected_token_hash: tokenHash,
-        }),
-      ).catch(() => null);
-      if (result === null || result.error) {
-        logStaffInviteFailure("could not record send success");
-      }
-    },
-
-    async recordFailure({ invitationId, tokenHash }) {
-      const result = await Promise.resolve(
-        admin.rpc(RECORD_FAILURE_RPC, {
-          p_invitation_id: invitationId,
-          p_expected_token_hash: tokenHash,
-        }),
-      ).catch(() => null);
-      if (result === null || result.error) {
-        logStaffInviteFailure("could not record delivery failure");
-      }
-    },
-
-    roleDisplayName(roleCode) {
-      return retailerRoleDisplayName(roleCode);
-    },
-  };
-
-  return runStaffInviteFlow(input, ports);
+  return RESULT_FOR_CODE[code];
 }
 
 export type RevokeStaffInvitationResult =
@@ -263,15 +251,20 @@ export type RevokeStaffInvitationResult =
 /**
  * Revokes one live PENDING staff invitation.
  *
+ * UNCHANGED BY THIS MILESTONE, and deliberately still a direct RPC: it needs no
+ * service-role key, no email, and no token, so there is nothing for an Edge Function to
+ * hold on its behalf. It runs under the caller's own token like every other authorized
+ * read and write in the portal.
+ *
  * ONE identifier is sent, and it is an ADDRESS rather than authorization. The RPC
  * derives the Retailer from auth.uid() and filters on
  * `id = $1 AND retailer_organization_id = <derived> AND status = 'PENDING'`, so an
  * invitation id belonging to another Retailer selects nothing and is refused with the
- * same generic exception as an unauthorized caller. No table is written here — there
- * is no `.from(` in this module at all.
+ * same generic exception as an unauthorized caller. No table is written here — there is
+ * no `.from(` in this module at all.
  *
- * NOT feature-flagged, deliberately: withdrawing an invitation is the safety valve,
- * and a kill switch that can itself be switched off is not one.
+ * NOT feature-flagged, deliberately: withdrawing an invitation is the safety valve, and
+ * a kill switch that can itself be switched off is not one.
  */
 export async function revokeRetailerStaffInvitation(
   invitationId: string,

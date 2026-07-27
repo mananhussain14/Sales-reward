@@ -30,8 +30,11 @@ import type { InvitationActionState } from "@/app/(retailer)/retailer/staff/invi
  * Server Actions for the Retailer staff-management page.
  *
  * NO TABLE IS WRITTEN HERE, AND NO SERVICE-ROLE CLIENT IS CONSTRUCTED HERE. Every
- * effect is delegated to @/lib/staff/retailer-staff-invitations, which runs the
- * reserve → prepare → send → record sequence. `.from(` appears nowhere in this module.
+ * effect is delegated to @/lib/staff/retailer-staff-invitations: revoke is one RPC under
+ * the caller's own token, and SENDING now goes to the shared
+ * `send-retailer-staff-invitation` Edge Function, which the Flutter app calls too, so
+ * the reserve → prepare → send → record sequence exists in exactly one place for both
+ * clients. `.from(` appears nowhere in this module.
  *
  * A SERVER ACTION IS A PUBLIC ENDPOINT. It is reachable by a hand-crafted POST from
  * any client, regardless of which page rendered the form or whether that page rendered
@@ -76,6 +79,19 @@ const GENERIC_INVITE_ERROR =
 /** Shown when delivery was attempted and the provider did not accept it. */
 const DELIVERY_FAILED_MESSAGE =
   "The invitation was created but the email could not be delivered. You can try sending it again.";
+
+/**
+ * Shown for the PARTIAL SUCCESS: the email provider accepted the message — so the
+ * accept link is live and may already be in the recipient's inbox — but the write that
+ * records the send could not be confirmed.
+ *
+ * It is a SUCCESS message, not an error, and the wording is chosen to stop exactly one
+ * reaction: sending again straight away. A resend rotates the token and would kill the
+ * link that was just delivered. So it says the invitation went out, and points at the
+ * list below rather than at the button above.
+ */
+const DELIVERY_UNCONFIRMED_MESSAGE =
+  "The invitation email was accepted for delivery, but we couldn't confirm the invitation's latest status. Check the invitation list below — there is no need to send it again unless it is missing.";
 
 /** Shown when the environment is missing its invitation configuration. */
 const CONFIGURATION_ERROR =
@@ -212,7 +228,12 @@ export async function inviteStaffAction(
 
   // The list and the roster both change on success and on a recorded delivery
   // failure, so the page is revalidated for every outcome that touched the database.
-  if (result.status !== "rejected" && result.status !== "unavailable") {
+  // `paused` joins the two that did not: the Edge Function refused before reserving.
+  if (
+    result.status !== "rejected" &&
+    result.status !== "unavailable" &&
+    result.status !== "paused"
+  ) {
     revalidatePath(STAFF_PATH);
   }
 
@@ -231,6 +252,23 @@ export async function inviteStaffAction(
         formError: null,
         successMessage: `Invitation re-sent to ${values.email}.`,
         values: EMPTY_INVITE_STAFF_VALUES,
+      };
+    case "sent-unconfirmed":
+      // Treated as a success — because it is one — and the form is cleared like any
+      // other send. Leaving the values in place would present a filled, ready-to-submit
+      // form next to a message about uncertainty, which is an invitation to resend.
+      return {
+        fieldErrors: {},
+        formError: null,
+        successMessage: DELIVERY_UNCONFIRMED_MESSAGE,
+        values: EMPTY_INVITE_STAFF_VALUES,
+      };
+    case "paused":
+      return {
+        fieldErrors: {},
+        formError: RETAILER_STAFF_INVITATIONS_PAUSED_MESSAGE,
+        successMessage: null,
+        values,
       };
     case "delivery-failed":
       return {
@@ -336,7 +374,11 @@ export async function resendStaffInvitationAction(
     shopIds: invitation.shopIds,
   });
 
-  if (result.status !== "rejected" && result.status !== "unavailable") {
+  if (
+    result.status !== "rejected" &&
+    result.status !== "unavailable" &&
+    result.status !== "paused"
+  ) {
     revalidatePath(STAFF_PATH);
   }
 
@@ -344,6 +386,10 @@ export async function resendStaffInvitationAction(
     case "sent":
     case "resent":
       return { error: null, success: `Invitation re-sent to ${invitation.email}.` };
+    case "sent-unconfirmed":
+      return { error: null, success: DELIVERY_UNCONFIRMED_MESSAGE };
+    case "paused":
+      return { error: RETAILER_STAFF_INVITATIONS_PAUSED_MESSAGE, success: null };
     case "delivery-failed":
       return { error: DELIVERY_FAILED_MESSAGE, success: null };
     case "misconfigured":

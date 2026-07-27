@@ -77,8 +77,8 @@ adopted for mobile without altering their contract.
 | Staff roster | Shipped | 🟢 Ready | 🟢 Now | `list_retailer_staff_members()` | No | Visibility difference between Owner and Manager is decided **in SQL**. Never re-implement it client-side. | **2** |
 | Staff invitations list | Shipped | 🟡 Partial | 🟢 Now | `list_retailer_staff_invitations()` | No | `derived_state` has no `ELSE` branch and can be `NULL`. Handle it. | **2** |
 | Assignable shops (for invites) | Shipped | 🟢 Ready | 🟢 Now | `list_retailer_staff_assignable_shops()` | No | None. | **2** |
-| Invite a staff member | Shipped | 🔴 Blocked | 🟡 After backend work | `reserve_retailer_staff_invitation()` (step 1) | **Yes — `send-staff-invitation`** | Token generation, Resend key, and 3 `service_role` RPCs. `prepare_*` returns the recipient's email — never expose it. Feature-flag gated. | **2** |
-| Re-send a staff invitation | Shipped | 🔴 Blocked | 🟡 After backend work | same | **Yes — same function** | `canResendInvitation` is a TypeScript-only predicate. Must move into the shared path or SQL. | **2** |
+| Invite a staff member | Shipped | 🟢 Ready | 🟢 Now | ✅ **shipped** `send-retailer-staff-invitation` (named for the RPC family it wraps, not the planned `send-staff-invitation`) | Uses it | Send `{firstName, lastName, email, roleCode, shopIds}` and **nothing else** — an unknown key is a 400. `shopIds` is required: `[]` for a Manager, ≥1 for Sales Staff. Token generation, the Resend key and the 3 `service_role` RPCs stay inside the function; none is ever returned. Enforces `RETAILER_STAFF_INVITATIONS_ENABLED` itself. Read `outcome` before `code`, and **never auto-retry a 2xx** — `DELIVERY_ACCEPTED_STATUS_UNCONFIRMED` (202) means re-read the invitation history, not resend. Full contract: `docs/retailer-staff-invitation-delivery-audit.md` § L. | **2** |
+| Re-send a staff invitation | Shipped | 🟢 Ready | 🟢 Now | same function | Uses it | There is no separate resend call: re-submitting the same address, role and shops reuses the live invitation and the reply's `outcome` is `RESENT`. The token is **rotated** on every send, so a resend invalidates the previous link. `canResendInvitation` remains a web-only presentation predicate and is not part of this contract. | **2** |
 | Revoke a staff invitation | Shipped | 🟢 Ready | 🟢 Now | `revoke_retailer_staff_invitation()` | No | Deliberately **not** flag-gated — a kill switch must not strand an owner. Preserve that. | **2** |
 | Accept an owner invitation (new account) | Shipped | 🟢 Ready | 🟡 After backend work | `accept_retailer_owner_invitation()` | No | Needs deep-link handling of the Supabase `verifyOtp` URL. **Q6.** | **2** |
 | Accept an owner invitation (existing account) | Shipped | 🟢 Ready | 🟡 After backend work | `get_pending_existing_user_retailer_invitation()`, `accept_existing_user_retailer_owner_invitation()` | No | Flutter must SHA-256 the deep-link token itself and store **only the hash**. Never persist the raw token. **Q6.** | **2** |
@@ -195,7 +195,7 @@ mobile contract.
 | 2 | `activate-staff-account` | Staff onboarding | **Critical — phase 1** |
 | 3 | `staff-invitation-context` | Staff onboarding | **Critical — phase 1** |
 | 4 | `get-receipt-image-url` | Receipt viewing (**pending Q1**) | High — phase 2 |
-| 5 | `send-staff-invitation` | Owner staff management | High — phase 2 |
+| 5 | ~~`send-staff-invitation`~~ ✅ **shipped as `send-retailer-staff-invitation`** | Owner staff management | ~~High — phase 2~~ done |
 | 6 | `invite-retailer-owner` | Vendor onboarding | Low — phase 3 |
 | 7 | `send-existing-user-owner-invitation` | Vendor onboarding | Low — phase 3 |
 
@@ -205,7 +205,7 @@ mobile contract.
 | --- | --- | --- |
 | 1 | Add `shop_id` to `list_retailer_owner_portal_shops()` | Mobile lists cannot navigate without it. *(The new `list_vendor_retailer_shops()` returns one; the Owner-portal function is unchanged.)* |
 | 2 | Add `ELSE` to `list_retailer_staff_invitations().derived_state` | Closes a `NULL` in a documented enum |
-| 3 | Replace message-substring error discrimination with distinct SQLSTATEs | Message text is not an API |
+| 3 | Replace message-substring error discrimination with distinct SQLSTATEs | Message text is not an API. **Still open, and now scoped to exactly one site**: `reserve_retailer_staff_invitation()` raises the role/shop conflict with `23514`, the same SQLSTATE as ordinary validation, so `send-retailer-staff-invitation` must compare one literal from migration `20260723210000` to tell `INVITATION_CONFLICT` from `INVALID_REQUEST`. It degrades safely to the generic code if the wording changes. Every other refusal is already separated by SQLSTATE (`42501`, `55000`, `23514`). |
 | 4 | Freeze / version `get_vendor_retailer_owner_status` | Three breaking recreations already. **Still open** — `20260731090000` deliberately did not touch it, so there is no fourth |
 | 5 | Return `boolean` instead of `void` from the four idempotent product writes | Clients cannot tell "changed" from "already so" |
 | 6 | ~~Have `list_vendor_retailers()` return both `relationship_id` and `retailer_organization_id`~~ ✅ **done** — migration `20260731090000` | Two address spaces today |
