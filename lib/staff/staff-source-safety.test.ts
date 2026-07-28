@@ -267,8 +267,18 @@ describe("client components stay client-safe", () => {
     //
     // An id from another tenant selects nothing in either case. What must stay excluded is
     // anything the server should DERIVE rather than accept: a Retailer or organization id,
-    // a role or permission code, an actor or profile id, a status, or a timestamp.
-    const ALLOWED_HIDDEN_FIELDS = ["invitationId", "membershipId"];
+    // a role or permission code, an actor or profile id, or a timestamp.
+    //
+    //   requestedStatus THE ONE EXCEPTION TO "NO STATUS", AND IT IS NOT THE DANGEROUS KIND.
+    //                   It is the state the operator is ASKING FOR — the verb of the
+    //                   operation — not a claim about what the row currently holds, which
+    //                   the server reads for itself under lock. It is validated against a
+    //                   closed two-word vocabulary before the RPC, and
+    //                   set_retailer_staff_membership_status re-validates it
+    //                   case-sensitively and raises 23514 for anything else. A tampered
+    //                   value can therefore only ask for ACTIVE or DEACTIVATED on a row the
+    //                   caller already manages. Added by the web staff lifecycle milestone.
+    const ALLOWED_HIDDEN_FIELDS = ["invitationId", "membershipId", "requestedStatus"];
 
     for (const file of CLIENT_FILES) {
       const hidden = file.source.match(/type="hidden"[\s\S]{0,120}?name="([a-zA-Z]+)"/g) ?? [];

@@ -74,7 +74,12 @@ const STATUS_MAP: Record<string, StatusMeta> = {
   SUBMITTED: { label: "Submitted", tone: "blue" },
   EXPIRED: { label: "Expired", tone: "slate" },
   REVOKED: { label: "Revoked", tone: "slate" },
-  DEACTIVATED: { label: "Deactivated", tone: "slate" },
+  // "Inactive", NOT "Deactivated". The stored value stays DEACTIVATED everywhere — in the
+  // column, in the RPC argument and in the audit trail — but "deactivated" reads as an
+  // event that was done TO someone, and a status pill states what something IS. The two
+  // keys deliberately render the same word: they are the same state to a reader, and only
+  // the schema distinguishes them.
+  DEACTIVATED: { label: "Inactive", tone: "slate" },
   INACTIVE: { label: "Inactive", tone: "slate" },
   FAILED: { label: "Failed", tone: "red" },
   REJECTED: { label: "Rejected", tone: "red" },
