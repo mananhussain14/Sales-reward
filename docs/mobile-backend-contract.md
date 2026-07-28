@@ -15,6 +15,7 @@ it was first written:
 | `20260805090000_mobile_vendor_dashboard_summary.sql` | `public.get_vendor_admin_dashboard_summary()` | **V-01**, and `docs/mobile-vendor-dashboard-summary-audit.md` |
 | `20260806090000_mobile_vendor_company_profile_reads.sql` | `public.get_my_vendor_profile()` | **V-19**, and `docs/mobile-vendor-company-profile-reads-audit.md` |
 | `20260809090000_retailer_staff_shop_assignment_management.sql` | `public.set_retailer_staff_shop_assignments(uuid, uuid[])` — the first **write** in this series | **RO-10**, and `docs/retailer-staff-shop-assignment-management-audit.md` |
+| `20260810090000_retailer_staff_membership_lifecycle.sql` | `public.set_retailer_staff_membership_status(uuid, text)` and `public.get_my_lifecycle_access_state()` | **RO-11**, **AUTH-06**, and `docs/retailer-staff-membership-lifecycle-audit.md` |
 
 **The Vendor Product-to-Retailer assignment-writes milestone added NO migration and NO RPC.**
 It audited `public.assign_vendor_product_to_retailer(uuid, uuid)` and
@@ -399,6 +400,73 @@ Retailer Manager's header would begin showing their Retailer name (it is `null` 
 because no installed RPC could supply it), and the `unavailable` signal would come from one
 call failing rather than from three probes failing independently. Both are improvements;
 neither is behaviour-preserving, so they belong in their own reviewable change.
+
+---
+
+#### AUTH-06 — Why is my access refused? (self-only lifecycle diagnostic)  *(new)*
+
+| Field | Value |
+| --- | --- |
+| Feature | Tell the **signed-in caller, and only them**, why their own access is currently refused |
+| Role | Any authenticated caller |
+| Permission | none — the subject is `auth.uid()` and the answer is about themselves |
+| Web route | **none yet — backend-only milestone** |
+| RPC | `public.get_my_lifecycle_access_state()` — `authenticated`, `SECURITY DEFINER`, **`STABLE`**, empty `search_path`, **zero arguments** |
+| Inputs | **none at all.** No tenant selector, no identifier, no filter. |
+| Backend-resolved | everything, from `auth.uid()` |
+| Returns | one row, one column: `(access_state text)` |
+| Errors | `42501` when unauthenticated. There is no other error path. |
+| RLS & authorization | reads only the caller's own `profiles` row and their own `organization_members` rows. Deliberately **does not** call the resolvers. |
+| Tables | `profiles`, `organization_members`, `organizations`, `member_roles`, `roles` — all read-only |
+| Idempotency | N/A — it writes nothing at all, not even an audit row |
+| Flutter direct? | **Yes** |
+| Classification | **A** |
+| Tests | `supabase/tests/database/retailer_staff_membership_lifecycle_test.sql` (252), `lib/staff/staff-membership-lifecycle-contract.test.ts` (65) |
+
+**Why it exists.** Every protected RPC refuses an inactive user with the same generic `42501`
+that a wrong-role caller gets. That uniformity is a security property and is **preserved** —
+it is what stops a caller probing the schema — but it leaves the application unable to write
+honest copy. "You do not have access to this page" is the wrong sentence for someone whose
+account was deactivated this morning. This RPC supplies the right one.
+
+**The vocabulary is closed. Treat an unrecognised value as "unknown" and fall back to the
+generic copy** — a future migration may add a word this build predates.
+
+| `access_state` | Meaning |
+| --- | --- |
+| `ACTIVE` | Exactly one supported Retailer context, everything about it ACTIVE. No lifecycle reason explains a refusal. |
+| `PROFILE_INACTIVE` | The caller's own profile is not ACTIVE — they are blocked everywhere. |
+| `MEMBERSHIP_INACTIVE` | Their one Retailer is ACTIVE, but their membership of it is not. **This is the state RO-11 creates.** |
+| `ORGANIZATION_INACTIVE` | Their one Retailer organization is not ACTIVE. |
+| `NO_SUPPORTED_ACCESS` | No supported Retailer membership context exists (a Vendor-only user, a role-less membership, or an Auth row never provisioned a profile). |
+| `AMBIGUOUS` | More than one qualifying Retailer context. No single story can be told, and none is invented. |
+
+Supported Retailer roles for interpretation are `RETAILER_OWNER`, `RETAILER_MANAGER` and
+`SALES_STAFF`. **Precedence: profile → organization → membership.** `ORGANIZATION_INACTIVE`
+wins when both the organization and the membership are non-ACTIVE, because the Retailer-wide
+block is the broader cause — telling a Sales Staff member "your membership was deactivated"
+when their whole Retailer is suspended would send them to an Owner who is themselves locked
+out.
+
+**⚠️ IT IS A DIAGNOSTIC, NEVER AN AUTHORIZATION GATE.** The resolvers remain the only things
+that decide whether an operation may proceed, and every protected RPC calls them for itself,
+server-side, on every request. `ACTIVE` here is **not** permission to do anything — it is a
+description of why the real gate said no, computed *after* the real gate said no. Call it on
+the **refusal path**, to choose a sentence. A client that branched on this value *instead of*
+calling the operation would be trusting a read to authorize a write. The pgTAP suite states
+this as a test: a Sales Staff member reads `ACTIVE` and is still refused the Owner's write.
+
+**It returns no identifier or personal information.** No profile id, membership id,
+organization id, organization name, email, role code, raw status, timestamp or database
+message — every return statement in the body is a bare vocabulary literal.
+
+**It is separate from AUTH-05 on purpose, and does not change it.** `get_my_portal_context()`
+decides **routing** and its contract is consumed by shipped clients; this explains **denial**.
+Merging them would have meant editing a live read contract to carry a field only the error path
+uses, and making every application boot pay for a computation only a refusal needs.
+`get_my_portal_context()` keeps its signature, its `jsonb` return, `context_version` 1 and its
+generic-denial behaviour, unchanged. The independence is the point: the portal reports `NONE`
+for both an inactive profile and a Vendor-only user, and only this RPC can tell them apart.
 
 ---
 
@@ -1211,6 +1279,81 @@ which filters on the caller's Vendor). Metadata carries exactly seven keys —
 `retailer_name`, `role_code`, `membership_status`, `shop_count_before`, `shop_count_after`,
 `shops_added`, `shops_removed` — with shop **names**, never ids. No uuid, email, token or
 hash appears anywhere in it.
+
+---
+
+#### RO-11 — Deactivate / reactivate an existing staff member  *(new)*
+
+| Field | Value |
+| --- | --- |
+| Feature | Stand an existing Retailer Manager or Sales Staff member down, and put them back |
+| Role | Retailer Owner only |
+| Permission | `RETAILER_STAFF_MANAGE` — the **existing** one. **No new staff permission was created.** |
+| Web route | **none yet — this is a backend-only milestone; no UI exists** |
+| Server Action | none yet |
+| RPC | `public.set_retailer_staff_membership_status(p_membership_id uuid, p_status text)` — `authenticated`, `SECURITY DEFINER`, `VOLATILE`, empty `search_path` |
+| Inputs | the canonical **membership id** (`organization_members.id`, exactly as `list_retailer_staff_members().membership_id` returns it) and the requested state, exactly `ACTIVE` or `DEACTIVATED` |
+| Backend-resolved | Retailer org id, acting profile, target role set, target's user id (for the self check), current membership status — **all** from `auth.uid()` and the tables. No organization id, actor id, profile id, Auth user id, role code, permission code, current status, audit action or timestamp is accepted. |
+| Returns | one row: `(membership_id uuid, membership_status text, role_code text, status_changed boolean)` |
+| Errors | `42501` (unauthenticated / wrong role / unresolved Retailer / null, unknown, foreign, **self**, **Owner**, multi-role, role-less, `INVITED` or `SUSPENDED` target — all **one** SQLSTATE **and one message**), `23514` (`p_status` not exactly `ACTIVE` or `DEACTIVATED`), `55000` (acting Retailer not ACTIVE at lock time — defence in depth, see below), `22P02` (malformed UUID, raised before the body runs) |
+| RLS & authorization | `resolve_retailer_member_organization('RETAILER_STAFF_MANAGE')`. `organization_members` keeps RLS on, its one **read** policy, and `SELECT`-only browser privilege — this RPC is the only way a browser session can change a membership status. |
+| Tables | `organization_members` (the only one written), `member_roles` (read), `roles` (read), `profiles` (read), `organizations` (read + `FOR SHARE`), `audit_logs` (appended) |
+| Idempotency | **Yes.** An identical requested status writes nothing — no row, no moved `deactivated_at`, **no audit row** — and returns `status_changed = false`. |
+| Flutter direct? | **Yes.** No text input, no secret, no service-role step, no recipient identity. |
+| Classification | **A** |
+| Tests | `supabase/tests/database/retailer_staff_membership_lifecycle_test.sql` (252), `lib/staff/staff-membership-lifecycle-contract.test.ts` (65) |
+
+**The status vocabulary is exactly two words.** `ACTIVE` and `DEACTIVATED`, compared exactly
+and case-sensitively — `active`, `' ACTIVE'`, `''` and `NULL` are all `23514`, never coerced.
+`INVITED` and `SUSPENDED` are column values but **not** this RPC's vocabulary, in either
+direction: a membership becomes `ACTIVE` by the recipient **accepting** their invitation (the
+only place consent is recorded and Shop rows are created), and `SUSPENDED` has no owner in this
+milestone. Permitted **current** states are likewise `ACTIVE` and `DEACTIVATED` only.
+
+**Eligible targets are exact role sets: `{RETAILER_MANAGER}` or `{SALES_STAFF}`.** The whole
+ACTIVE role set is compared, not tested for membership, which refuses **every**
+`RETAILER_OWNER` target, every multi-role target and every role-less target in one comparison.
+Owners are excluded because an Owner is the tenant's root of authority — deactivating one can
+strand a Retailer with nobody able to reactivate anybody. Owner lifecycle belongs to the
+Vendor-side milestone, whose actor sits outside the tenant.
+
+**The caller may not address their own membership.** A separate rule from the Owner rule,
+compared on user ids, so it still holds if `RETAILER_STAFF_MANAGE` is ever granted to
+`RETAILER_MANAGER`.
+
+**⚠️ WHAT A CLIENT MUST UNDERSTAND — `auth.users` IS NOT TOUCHED, SO A DEACTIVATED PERSON CAN
+STILL SIGN IN.** They are not banned, not deleted and not updated. What they lose is *context*:
+`get_my_portal_context()` reports `NONE` and every protected RPC refuses. This takes effect on
+an **already-issued session**, with no sign-out and no token revocation, because every
+protected RPC re-derives authorization from `auth.uid()` on each call — the session is not the
+authority, the membership row is. A client must therefore **not** assume a successful login
+implies access, and must handle a mid-session loss of context gracefully.
+
+**Nothing is destroyed, so reactivation restores everything automatically.** The whole change
+is `organization_members.status` plus `deactivated_at`, written in one statement so the pair
+can never disagree. `member_roles`, live **and** retired `retailer_shop_members`, `profiles`
+(including `profiles.status`), receipt history, invitation history and audit history all
+survive untouched. There is **no DELETE anywhere on this path**. Reactivation therefore needs
+no role or Shop assignment to be recreated — a property the pgTAP suite asserts directly.
+
+**Refusals are uniform.** All seven disclosure-sensitive target causes share one SQLSTATE
+**and one literal message**, so an unknown id is indistinguishable from another Retailer's
+Owner. The message carries no uuid, email, role code, status or organization name.
+Authorization is decided **before** input validation, so a stranger with a malformed status is
+refused as a stranger. **Rendered clients must never surface the raw SQLSTATE or the
+PostgreSQL message.**
+
+**`55000` is currently unreachable** — the resolver already requires an ACTIVE organization and
+sees the same snapshot, so the observable answer today is `42501`. The branch exists for the
+Vendor-side Retailer lifecycle write (a **later milestone**), which is what will make it
+reachable. Handle it now; expect `42501` in practice.
+
+**Audit.** One row per *changing* call: `action = 'STAFF_MEMBERSHIP_DEACTIVATED'` or
+`'STAFF_MEMBERSHIP_REACTIVATED'`, `entity_type = 'RETAILER_STAFF_MEMBER'`, `entity_id` = the
+membership id, `organization_id` = the **Retailer's** (so it is invisible to
+`list_vendor_audit_logs`). Metadata carries exactly three keys — `role_code`,
+`membership_status_before`, `membership_status_after` — all proved server-side. No uuid, email,
+token, hash, Shop, invitation or receipt reference appears anywhere in it.
 
 ---
 

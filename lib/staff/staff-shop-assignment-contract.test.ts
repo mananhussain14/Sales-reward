@@ -181,20 +181,26 @@ const STATEMENT = statementFrom(CODE, FN);
 // The signature
 // ============================================================================
 describe("staff shop assignment write — the signature", () => {
-  test("1. the migration exists, is forward-only, and is the newest one", () => {
+  test("1. the migration exists and is forward-only", () => {
     const migrations = readdirSync(MIGRATIONS_DIR)
       .filter((file) => file.endsWith(".sql"))
       .sort();
 
     assert.ok(migrations.includes(MIGRATION_NAME), `${MIGRATION_NAME} must exist`);
-    assert.equal(
-      migrations[migrations.length - 1],
-      MIGRATION_NAME,
-      "this milestone's migration must sort last — forward-only, after 20260808090000",
-    );
     assert.ok(
       MIGRATION_NAME > "20260808090000_repair_retailer_staff_registration_context.sql",
-      "the timestamp must be later than the previously newest migration",
+      "the timestamp must be later than the migration that preceded this milestone",
+    );
+    // This deliberately does NOT assert that this migration sorts LAST. It did when this
+    // milestone shipped, but "newest" is a property of the moment rather than of this
+    // contract — every subsequent milestone would have to edit this line, and a test that
+    // must be edited to stay true is a test nobody trusts. What matters, and what is
+    // asserted, is that this file was never renumbered backwards past its dependencies.
+    assert.ok(
+      MIGRATION_NAME > FOUNDATION_NAME &&
+        MIGRATION_NAME > ACCEPTANCE_NAME &&
+        MIGRATION_NAME > ASSIGNABLE_SHOPS_NAME,
+      "the migration must still sort after every migration it depends on",
     );
   });
 
