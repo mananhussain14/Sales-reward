@@ -15,16 +15,25 @@ import {
   revokeRetailerStaffInvitation,
   sendRetailerStaffInvitation,
 } from "@/lib/staff/retailer-staff-invitations";
+import { getRetailerStaffMembers } from "@/lib/staff/retailer-staff-data";
+import { setRetailerStaffShopAssignments } from "@/lib/staff/retailer-staff-shop-assignments";
 import {
   normalizeStaffInviteInput,
   validateStaffInviteInput,
 } from "@/lib/staff/staff-invite-input";
+import {
+  describeSaveOutcome,
+  normalizeMembershipId,
+  normalizeShopSelection,
+  validateShopAssignmentInput,
+} from "@/lib/staff/staff-shop-assignment-input";
 import { canResendInvitation } from "@/lib/staff/staff-normalization";
 import {
   EMPTY_INVITE_STAFF_VALUES,
   type InviteStaffState,
 } from "@/app/(retailer)/retailer/staff/invite-staff-state";
 import type { InvitationActionState } from "@/app/(retailer)/retailer/staff/invitation-action-state";
+import type { ManageShopsState } from "@/app/(retailer)/retailer/staff/manage-shops-state";
 
 /**
  * Server Actions for the Retailer staff-management page.
@@ -446,4 +455,297 @@ export async function revokeStaffInvitationAction(
   }
 
   return { error: GENERIC_REVOKE_ERROR, success: null };
+}
+
+/* ---------------------------------------------------------------------------
+ * Manage Shops — post-acceptance shop assignment for existing Sales Staff
+ * ------------------------------------------------------------------------- */
+
+/**
+ * The one message for every refusal that is about ACCESS or the TARGET.
+ *
+ * It covers a signed-out caller, a Manager, a Sales Staff member, an unknown membership
+ * id, another Retailer's staff member, a suspended or deactivated membership, and a
+ * target who is not Sales Staff. Collapsing them is deliberate and mirrors the database:
+ * set_retailer_staff_shop_assignments raises ONE byte-identical 42501 for all of them
+ * precisely so a caller cannot sweep membership ids to learn which exist somewhere else.
+ * Distinguishing them here would reintroduce exactly the disclosure SQL went out of its
+ * way to prevent.
+ */
+const SHOP_ASSIGNMENT_DENIED =
+  "You can't update this person's shops. Refresh the page and try again.";
+
+/** Shown when the selection itself is the problem — the operator can fix this one. */
+const SHOP_ASSIGNMENT_EMPTY =
+  "Select at least one shop. Sales Staff must be assigned to a shop.";
+
+/**
+ * Shown when a shop is no longer valid. Names no shop and no id: an unknown shop and
+ * another Retailer's shop are indistinguishable in SQL, and must stay so here.
+ */
+const SHOP_ASSIGNMENT_INVALID =
+  "Some of the selected shops are no longer available. Review the shops and try again.";
+
+/** 55000 — the Retailer stopped being active mid-operation. Distinct, and retryable. */
+const SHOP_ASSIGNMENT_RETAILER_UNAVAILABLE =
+  "Your Retailer is not available right now, so shops could not be updated. Try again in a moment.";
+
+/** The generic service failure. Deliberately NOT "check your connection". */
+const SHOP_ASSIGNMENT_UNAVAILABLE =
+  "We couldn't update those shop assignments. Please try again in a moment.";
+
+/**
+ * THE PARTIAL SUCCESS: the write committed, but the roster could not be re-read (or the
+ * response did not carry the counts).
+ *
+ * It is a SUCCESS message and the wording is chosen to stop exactly one reaction —
+ * saving again. Nothing is lost by not retrying: the change is committed, and the RPC is
+ * idempotent anyway, so a retry would be a no-op that writes no audit row. The editor
+ * disables Save on this outcome for the same reason.
+ */
+const SHOP_ASSIGNMENT_SAVED_UNCONFIRMED =
+  "Shop assignments were updated, but the latest staff details could not be refreshed. Refresh the page to see them.";
+
+/**
+ * Shown when a selected shop vanished from the assignable set between the page render
+ * and the submission. NOTHING was sent to the database on this path.
+ */
+const SHOP_ASSIGNMENT_STALE =
+  "Shop availability changed while you were editing. Review the shops below, then save.";
+
+/**
+ * Replaces an existing Sales Staff member's ACTIVE shop assignments.
+ *
+ * A SERVER ACTION IS A PUBLIC ENDPOINT — reachable by a hand-crafted POST from any
+ * client, regardless of which page rendered the control or whether that page rendered at
+ * all. So this re-establishes its own footing exactly as the invite and revoke actions
+ * do: portal access is re-resolved from the verified session, and the assignable shop set
+ * is re-read from the database for THIS caller before a single id is accepted.
+ *
+ * WHAT THE BROWSER MAY INFLUENCE, EXHAUSTIVELY: one membership id, and a set of shop ids
+ * that must each appear in the list list_retailer_staff_assignable_shops() just returned.
+ * Nothing else is read from the form — no Retailer organization id, caller id, actor
+ * profile id, role code, permission code, current-assignment list, audit actor, status or
+ * timestamp — and no such field would be honoured if one were posted, because none is
+ * read. The RPC accepts only two arguments in any case.
+ *
+ * THE MEMBERSHIP ID IS AN ADDRESS, NOT AUTHORIZATION. The RPC derives the Retailer from
+ * auth.uid() and matches the target on `id AND organization_id AND status = 'ACTIVE'`
+ * plus an exact SALES_STAFF role, so an id from another tenant selects nothing and is
+ * refused with the same generic exception as an unauthorized caller.
+ *
+ * ⚠️ THE REPLACEMENT IS SCOPED TO THE ACTIVE-SHOP PROJECTION. The submitted set is the
+ * complete desired set of the shops the operator can SEE. A live assignment to a
+ * suspended or deactivated shop is invisible in list_retailer_staff_members(), is
+ * PRESERVED by the RPC, and is in none of the returned counts. This action therefore
+ * never claims that the submitted set is the member's whole assignment set, and the
+ * canonical roster re-read below — not the submitted ids — is what the page displays.
+ */
+export async function updateStaffShopAssignmentsAction(
+  _prevState: ManageShopsState,
+  formData: FormData,
+): Promise<ManageShopsState> {
+  // 1. Read and canonicalize. ONLY these two fields are read; any other key a tampered
+  //    POST carried is never looked at, so it cannot influence anything.
+  //    `getAll` because the shop selection is a checkbox group.
+  const membershipId = normalizeMembershipId(formData.get("membershipId"));
+  const shopIds = normalizeShopSelection(formData.getAll("shopIds"));
+
+  // 2. Authorization, re-resolved from the verified session. Defence in depth: the RPC
+  //    evaluates the same chain again from auth.uid() and is what actually stops an
+  //    unauthorized or cross-tenant write.
+  //
+  //    Deliberately NOT feature-gated. RETAILER_STAFF_INVITATIONS_ENABLED gates
+  //    INVITATIONS — creating accounts and sending email. Correcting an existing
+  //    employee's shops is neither, and coupling it to the invitation kill switch would
+  //    strand an Owner who needs to move someone between shops while sending is paused.
+  const access = await getRetailerPortalAccess();
+
+  // redirect() signals by throwing NEXT_REDIRECT, so both calls sit outside any
+  // try/catch in this module.
+  if (access.status === "unauthenticated") {
+    redirect("/login");
+  }
+  if (access.status === "unauthorized") {
+    redirect("/retailer-access-denied");
+  }
+  if (access.status === "unavailable") {
+    return {
+      outcome: "error",
+      error: SHOP_ASSIGNMENT_UNAVAILABLE,
+      success: null,
+      refreshedShops: null,
+    };
+  }
+
+  // 3. The assignable shop set, re-read from the database for THIS caller.
+  //
+  //    Both the source of truth for validation and a second authorization gate:
+  //    list_retailer_staff_assignable_shops() is granted only to holders of
+  //    RETAILER_STAFF_SHOP_ASSIGN, so a Manager — or anyone else — lands on `denied` here
+  //    and can never get a shop id accepted. The browser never supplies this set.
+  const assignable = await getRetailerStaffAssignableShops();
+
+  if (assignable.status === "denied") {
+    return {
+      outcome: "error",
+      error: SHOP_ASSIGNMENT_DENIED,
+      success: null,
+      refreshedShops: null,
+    };
+  }
+  if (assignable.status === "unavailable") {
+    // A READ failure. Reported as a service problem rather than as a rejected write,
+    // because nothing about the submission was wrong and nothing was attempted.
+    return {
+      outcome: "error",
+      error: SHOP_ASSIGNMENT_UNAVAILABLE,
+      success: null,
+      refreshedShops: null,
+    };
+  }
+
+  const allowedShopIds = assignable.shops.map((shop) => shop.shopId);
+
+  // 4. Validate, including the subset check against the ids just read.
+  const validation = validateShopAssignmentInput(
+    membershipId,
+    shopIds,
+    allowedShopIds,
+  );
+
+  if (!validation.ok) {
+    switch (validation.reason) {
+      case "empty":
+        return {
+          outcome: "error",
+          error: SHOP_ASSIGNMENT_EMPTY,
+          success: null,
+          refreshedShops: null,
+        };
+      case "unavailable-shop":
+        // A selected shop is no longer assignable — most often because it was
+        // deactivated while the editor was open. NOTHING is submitted; the fresh options
+        // ride back so the operator can review, and the editor re-renders its picker
+        // from them rather than from the list it opened with.
+        return {
+          outcome: "stale-shops",
+          error: SHOP_ASSIGNMENT_STALE,
+          success: null,
+          refreshedShops: assignable.shops,
+        };
+      case "too-many":
+        return {
+          outcome: "error",
+          error: SHOP_ASSIGNMENT_INVALID,
+          success: null,
+          refreshedShops: null,
+        };
+      case "invalid-target":
+      default:
+        // Reachable only from a tampered submission: the control carries a membership id
+        // the page read from the roster. Reported exactly like an unauthorized or
+        // cross-tenant target, so the two cannot be told apart.
+        return {
+          outcome: "error",
+          error: SHOP_ASSIGNMENT_DENIED,
+          success: null,
+          refreshedShops: null,
+        };
+    }
+  }
+
+  // 5. The write. Exactly one RPC, exactly two arguments, under the caller's own token.
+  const result = await setRetailerStaffShopAssignments(
+    validation.membershipId,
+    validation.shopIds,
+  );
+
+  switch (result.status) {
+    case "denied":
+      return {
+        outcome: "error",
+        error: SHOP_ASSIGNMENT_DENIED,
+        success: null,
+        refreshedShops: null,
+      };
+    case "invalid":
+      return {
+        outcome: "error",
+        error: SHOP_ASSIGNMENT_INVALID,
+        success: null,
+        refreshedShops: null,
+      };
+    case "retailer-unavailable":
+      return {
+        outcome: "error",
+        error: SHOP_ASSIGNMENT_RETAILER_UNAVAILABLE,
+        success: null,
+        refreshedShops: null,
+      };
+    case "malformed":
+      // 22P02. Only a tampered submission reaches this, since step 4 already required
+      // canonical UUIDs; reported as a denial so it is indistinguishable from one.
+      return {
+        outcome: "error",
+        error: SHOP_ASSIGNMENT_DENIED,
+        success: null,
+        refreshedShops: null,
+      };
+    case "unavailable":
+      return {
+        outcome: "error",
+        error: SHOP_ASSIGNMENT_UNAVAILABLE,
+        success: null,
+        refreshedShops: null,
+      };
+    case "saved-unconfirmed":
+      // Committed, but undescribable. The page is still revalidated — the data DID
+      // change — and the operator is told plainly not to save again.
+      revalidatePath(STAFF_PATH);
+      return {
+        outcome: "saved-unconfirmed",
+        error: null,
+        success: SHOP_ASSIGNMENT_SAVED_UNCONFIRMED,
+        refreshedShops: null,
+      };
+    case "saved":
+    default:
+      break;
+  }
+
+  // 6. Committed. Revalidate, then RE-READ THE CANONICAL ROSTER.
+  //
+  //    The re-read is the display authority. The page must never be updated from the ids
+  //    that were just submitted: those describe the visible ACTIVE set only, and the
+  //    database — which alone can see the preserved non-ACTIVE assignments — is the only
+  //    honest source for what this member is now assigned to.
+  revalidatePath(STAFF_PATH);
+
+  const refreshed = await getRetailerStaffMembers();
+
+  if (refreshed.status !== "ok") {
+    // THE WRITE STILL SUCCEEDED. A failed re-read is never presented as a failed write,
+    // and never leaves Save enabled in a state where an ordinary retry would resubmit a
+    // change that is already committed.
+    return {
+      outcome: "saved-unconfirmed",
+      error: null,
+      success: SHOP_ASSIGNMENT_SAVED_UNCONFIRMED,
+      refreshedShops: null,
+    };
+  }
+
+  return {
+    outcome: "saved",
+    error: null,
+    // Describes the CHANGE only. describeSaveOutcome never emits a total, because the
+    // counts cannot see the preserved non-ACTIVE assignments.
+    success: describeSaveOutcome({
+      added: result.added,
+      removed: result.removed,
+      unchanged: result.unchanged,
+    }),
+    refreshedShops: null,
+  };
 }

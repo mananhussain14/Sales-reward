@@ -92,6 +92,18 @@ function stripComments(source: string): string {
     .join("\n");
 }
 
+/**
+ * The TypeScript equivalent, so prose describing a rule cannot trip the rule it describes.
+ *
+ * Load-bearing for the call-site rule below: the Server Action, the dialog and the
+ * presentation predicates all NAME the RPC in their headers — to explain what they
+ * delegate to and why — while only the wrapper actually calls it. Counting raw mentions
+ * would report four call sites where there is one.
+ */
+function stripTsComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+}
+
 const CODE = stripComments(MIGRATION_SQL);
 
 /**
@@ -620,28 +632,35 @@ describe("staff shop assignment write — the blast radius is one function", () 
     );
   });
 
-  test("31. this milestone ships NO UI and no client wrapper", () => {
-    // The deliberate stop for anyone who starts integrating before the UI milestone: the
-    // RPC name must not appear in application code yet.
+  test("31. the RPC has EXACTLY ONE call site in application code", () => {
+    // This rule replaces the backend milestone's "no UI exists yet" stop, which the web
+    // Manage Shops milestone deliberately reached (see
+    // docs/retailer-manage-staff-shops-web.md). What still matters — and matters more now
+    // that a caller exists — is that there is only ONE of them: a second call site would
+    // be a second place for the argument shape, the zero-shop rule and the
+    // active-projection rule to be stated, and only one of the two could stay right.
     const appDirs = ["app", "lib", "components"];
-    const offenders: string[] = [];
+    const callers: string[] = [];
 
     function walk(dir: string): void {
       for (const entry of readdirSync(join(ROOT, dir), { withFileTypes: true })) {
         const rel = join(dir, entry.name);
         if (entry.isDirectory()) {
           walk(rel);
-        } else if (/\.tsx?$/.test(entry.name) && rel !== join("lib/staff", "staff-shop-assignment-contract.test.ts")) {
-          if (readFileSync(join(ROOT, rel), "utf8").includes(FN)) offenders.push(rel);
+        } else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) {
+          // Executable code only. Several modules NAME the RPC in their headers to explain
+          // what they delegate to; only one of them calls it.
+          const code = stripTsComments(readFileSync(join(ROOT, rel), "utf8"));
+          if (code.includes(FN)) callers.push(rel);
         }
       }
     }
     for (const dir of appDirs) walk(dir);
 
     assert.deepEqual(
-      offenders,
-      [],
-      `${FN} must not be referenced in application code — this is a backend-only milestone`,
+      callers,
+      [join("lib/staff", "retailer-staff-shop-assignments.ts")],
+      `${FN} must be named by exactly one module — the server-only RPC wrapper`,
     );
   });
 });
@@ -688,16 +707,34 @@ describe("staff shop assignment write — documentation", () => {
     for (const marker of [FN, PERMISSION, "shops_added", AUDIT_ACTION, AUDIT_ENTITY]) {
       assert.ok(BACKEND_CONTRACT.includes(marker), `RO-10 must state ${marker}`);
     }
+    // RO-10 documents the DATABASE contract and is the shared reference for both clients,
+    // so what it must keep stating is the rule a client can get wrong — not which clients
+    // happen to exist. The web-client specifics live in
+    // docs/retailer-manage-staff-shops-web.md.
     assert.ok(
-      /backend-only milestone|backend only/i.test(BACKEND_CONTRACT),
-      "RO-10 must state that no UI exists",
+      /counts as "?the member'?s? shop count"?|not, and must never be presented as, the\s*\n?\s*member's shop count|never present them as the member's total shops/i.test(
+        BACKEND_CONTRACT,
+      ) || /must \*\*not\*\* present the three counts/i.test(BACKEND_CONTRACT),
+      "RO-10 must still warn that the counts are not a total",
     );
 
-    // The feature matrix row.
+    // The feature matrix row. Updated by the web milestone: the backend and the web are
+    // shipped; Flutter is not. What is asserted is that the row stays HONEST about each,
+    // rather than that any particular client is absent.
     assert.ok(FEATURE_MATRIX.includes(FN), "the feature matrix must name the RPC");
-    assert.ok(
-      /No UI exists on web or mobile/i.test(FEATURE_MATRIX),
-      "the feature matrix must state that no UI exists",
+    const matrixRow = FEATURE_MATRIX.split("\n").find(
+      (line) => line.startsWith("|") && line.includes(FN),
+    );
+    assert.ok(matrixRow, "the feature matrix must carry a Manage Shops row");
+    assert.match(
+      matrixRow!,
+      /Flutter not yet implemented|Not implemented for Manage Shops/i,
+      "the matrix row must state that Flutter is not yet implemented",
+    );
+    assert.match(
+      matrixRow!,
+      /preserved/i,
+      "and must still state that hidden non-ACTIVE assignments are preserved",
     );
   });
 });

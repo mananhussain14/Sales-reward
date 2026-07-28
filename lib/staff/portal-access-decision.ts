@@ -187,3 +187,40 @@ export function showsInviteSection(status: SectionReadStatus): boolean {
 export function showsInviteForm(status: SectionReadStatus): boolean {
   return status === "ok";
 }
+
+/**
+ * Whether the Manage Shops control is offered on the roster at all.
+ *
+ * Keyed on the SAME read as the invite section — list_retailer_staff_assignable_shops(),
+ * which is granted only to holders of RETAILER_STAFF_SHOP_ASSIGN. That is exactly the
+ * permission set_retailer_staff_shop_assignments() gates on, so the control appears if
+ * and only if the caller demonstrably holds the capability the write requires. A Retailer
+ * Manager holds RETAILER_STAFF_READ and RETAILER_SHOPS_READ but not SHOP_ASSIGN, so their
+ * read answers `denied` and no control is rendered — because the DATA was refused, not
+ * because a role string was compared. There is no role name in this file, and this
+ * function adds none.
+ *
+ * A DENIED read hides the control entirely; an UNAVAILABLE read still offers it, carrying
+ * a retry-safe, picker-specific message inside the editor. Same rule and same reasoning
+ * as showsInvitationSection / showsInviteSection: the caller WAS authorized (the read
+ * reached the database and was not refused), so hiding it would misreport a transient
+ * fault as a missing capability.
+ *
+ * THIS IS PRESENTATION ONLY. The Server Action re-resolves access and re-reads this same
+ * list before accepting an id, and the RPC re-derives everything from auth.uid().
+ */
+export function showsManageShops(status: SectionReadStatus): boolean {
+  return status !== "denied";
+}
+
+/**
+ * Whether the editor's shop PICKER may be rendered (as opposed to the control).
+ *
+ * Only when the assignable-shop read actually succeeded: the picker's options come
+ * exclusively from that result, and an editor with no options must show a read-specific
+ * failure with a retry rather than an empty list that could be saved. Mirrors
+ * showsInviteForm exactly.
+ */
+export function showsShopPicker(status: SectionReadStatus): boolean {
+  return status === "ok";
+}

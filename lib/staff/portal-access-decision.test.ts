@@ -23,6 +23,8 @@ import {
   showsInvitationSection,
   showsInviteForm,
   showsInviteSection,
+  showsManageShops,
+  showsShopPicker,
   shouldProbeSubmitter,
   type OwnerAccessStatus,
   type RosterReadStatus,
@@ -228,6 +230,63 @@ describe("selectPortalAccess — Sales Staff (receipt submitter)", () => {
           "submitter",
         );
       }
+    }
+  });
+
+  /* -------------------------------------------------------------------------
+   * Manage Shops
+   * ----------------------------------------------------------------------- */
+  // Keyed on the SAME read as the invite section — list_retailer_staff_assignable_shops(),
+  // granted only to holders of RETAILER_STAFF_SHOP_ASSIGN, which is exactly the permission
+  // set_retailer_staff_shop_assignments() gates on. So the control appears if and only if
+  // the caller demonstrably holds the capability the write requires.
+
+  test("24. an owner whose assignable-shop read succeeded gets the control and the picker", () => {
+    assert.equal(showsManageShops("ok"), true);
+    assert.equal(showsShopPicker("ok"), true);
+  });
+
+  test("25. a DENIED read hides Manage Shops entirely — this is the Manager case", () => {
+    // A Retailer Manager holds RETAILER_STAFF_READ but not SHOP_ASSIGN, so this read
+    // answers `denied` and no control is rendered — because the DATA was refused, not
+    // because a role string was compared.
+    assert.equal(showsManageShops("denied"), false);
+    assert.equal(showsShopPicker("denied"), false);
+  });
+
+  test("26. an UNAVAILABLE read still offers the control, but never the picker", () => {
+    // The caller WAS authorized — the read reached the database and was not refused — so
+    // hiding the control would misreport a transient fault as a missing capability. The
+    // editor instead shows a picker-specific failure with a read-only retry, and cannot
+    // submit. Identical reasoning to showsInviteSection / showsInviteForm.
+    assert.equal(showsManageShops("unavailable"), true);
+    assert.equal(showsShopPicker("unavailable"), false);
+  });
+
+  test("27. the picker is offered ONLY on a successful read, for every status", () => {
+    for (const status of ["ok", "denied", "unavailable"] as const) {
+      assert.equal(
+        showsShopPicker(status),
+        status === "ok",
+        `showsShopPicker(${status}) must be true only for ok`,
+      );
+    }
+  });
+
+  test("28. Manage Shops follows the invite section exactly — one rule, not two", () => {
+    // If these ever diverge, one of the two is wrong: both gate on the same read of the
+    // same RPC requiring the same permission.
+    for (const status of ["ok", "denied", "unavailable"] as const) {
+      assert.equal(
+        showsManageShops(status),
+        showsInviteSection(status),
+        `showsManageShops(${status}) must agree with showsInviteSection`,
+      );
+      assert.equal(
+        showsShopPicker(status),
+        showsInviteForm(status),
+        `showsShopPicker(${status}) must agree with showsInviteForm`,
+      );
     }
   });
 });

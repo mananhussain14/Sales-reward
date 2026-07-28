@@ -20,7 +20,10 @@ import {
   showsInvitationSection,
   showsInviteForm,
   showsInviteSection,
+  showsManageShops,
+  showsShopPicker,
 } from "@/lib/staff/portal-access-decision";
+import { canManageStaffShops } from "@/lib/staff/staff-shop-assignment-input";
 import { formatOwnerTimestamp } from "@/lib/retailers/owner-status-normalization";
 import { StatusBadge } from "@/components/admin/status-badge";
 import { InviteStaffForm } from "@/app/(retailer)/retailer/staff/invite-staff-form";
@@ -28,6 +31,7 @@ import {
   ResendInvitationForm,
   RevokeInvitationForm,
 } from "@/app/(retailer)/retailer/staff/invitation-controls";
+import { ManageShopsDialog } from "@/app/(retailer)/retailer/staff/manage-shops-dialog";
 import { PageHeader, SectionHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Alert } from "@/components/ui/alert";
@@ -190,6 +194,15 @@ export default async function RetailerStaffPage() {
   const assignableShops: AssignableShop[] =
     assignable.status === "ok" ? assignable.shops : [];
 
+  // Whether the roster offers Manage Shops at all, and whether its picker can be
+  // populated. Both are decided by the STATUS of the assignable-shop read — the same read
+  // that requires RETAILER_STAFF_SHOP_ASSIGN, which is exactly the permission the write
+  // RPC gates on. So the control appears if and only if the caller demonstrably holds the
+  // capability the write needs, and a Manager (whose read answers `denied`) sees nothing.
+  // There is no role name in this decision, here or in the predicates.
+  const canAssignShops = showsManageShops(assignable.status);
+  const shopPickerReady = showsShopPicker(assignable.status);
+
   return (
     <div className="mx-auto w-full max-w-6xl">
       <PageHeader
@@ -258,6 +271,11 @@ export default async function RetailerStaffPage() {
                       <th scope="col" className={thClasses}>
                         Joined
                       </th>
+                      {canAssignShops && (
+                        <th scope="col" className={thClasses}>
+                          <span className="sr-only">Actions</span>
+                        </th>
+                      )}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -288,6 +306,34 @@ export default async function RetailerStaffPage() {
                         <td className={`whitespace-nowrap ${tdClasses}`}>
                           {formatOwnerTimestamp(member.joinedAt ?? member.createdAt)}
                         </td>
+                        {canAssignShops && (
+                          <td className="whitespace-nowrap px-4 py-3">
+                            {/* Offered only for an ACTIVE membership holding the
+                                SALES_STAFF role. A Manager row, an Owner row, and any
+                                non-ACTIVE membership render nothing: the operation is
+                                undefined for them and the RPC refuses such a target with
+                                the same 42501 it gives an unauthorized caller.
+
+                                Keyed by membership id, which is unique per (organization,
+                                user) — so a different account or Retailer produces
+                                different keys and React discards every editor's state
+                                rather than carrying it into a new session. */}
+                            {canManageStaffShops(member) && (
+                              <ManageShopsDialog
+                                key={member.membershipId}
+                                membershipId={member.membershipId}
+                                memberName={memberName(member)}
+                                roleLabel={retailerRoleDisplayName(
+                                  member.roleCode,
+                                  member.roleName,
+                                )}
+                                currentShopIds={member.shopIds}
+                                shops={assignableShops}
+                                optionsReady={shopPickerReady}
+                              />
+                            )}
+                          </td>
+                        )}
                       </tr>
                     ))}
                   </tbody>
@@ -330,6 +376,22 @@ export default async function RetailerStaffPage() {
                       </dd>
                     </div>
                   </dl>
+                  {canAssignShops && canManageStaffShops(member) && (
+                    <div className="mt-3 border-t border-slate-100 pt-3">
+                      <ManageShopsDialog
+                        key={member.membershipId}
+                        membershipId={member.membershipId}
+                        memberName={memberName(member)}
+                        roleLabel={retailerRoleDisplayName(
+                          member.roleCode,
+                          member.roleName,
+                        )}
+                        currentShopIds={member.shopIds}
+                        shops={assignableShops}
+                        optionsReady={shopPickerReady}
+                      />
+                    </div>
+                  )}
                 </li>
               ))}
             </ul>
