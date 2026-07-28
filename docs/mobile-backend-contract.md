@@ -14,6 +14,7 @@ it was first written:
 | `20260804090000_mobile_vendor_audit_log_reads.sql` | `public.list_vendor_audit_logs(integer, timestamptz, uuid)` | **V-04**, and `docs/mobile-vendor-audit-log-reads-audit.md` |
 | `20260805090000_mobile_vendor_dashboard_summary.sql` | `public.get_vendor_admin_dashboard_summary()` | **V-01**, and `docs/mobile-vendor-dashboard-summary-audit.md` |
 | `20260806090000_mobile_vendor_company_profile_reads.sql` | `public.get_my_vendor_profile()` | **V-19**, and `docs/mobile-vendor-company-profile-reads-audit.md` |
+| `20260809090000_retailer_staff_shop_assignment_management.sql` | `public.set_retailer_staff_shop_assignments(uuid, uuid[])` — the first **write** in this series | **RO-10**, and `docs/retailer-staff-shop-assignment-management-audit.md` |
 
 **The Vendor Product-to-Retailer assignment-writes milestone added NO migration and NO RPC.**
 It audited `public.assign_vendor_product_to_retailer(uuid, uuid)` and
@@ -1137,6 +1138,79 @@ RPC `public.revoke_retailer_staff_invitation(uuid)`, `authenticated`, permission
 `(id, retailer_organization_id, status='PENDING')`. Clears `token_hash`. Audits
 `STAFF_INVITATION_REVOKED`. **Deliberately not gated by the feature flag** — a kill switch
 must never strand an owner mid-correction. **Classification: A.**
+
+---
+
+#### RO-10 — Change an existing Sales Staff member's shops  *(new)*
+
+| Field | Value |
+| --- | --- |
+| Feature | Replace the ACTIVE shop assignments of an already-accepted Sales Staff member |
+| Role | Retailer Owner only |
+| Permission | `RETAILER_STAFF_SHOP_ASSIGN` (mapped to `RETAILER_OWNER` alone) |
+| Web route | **none yet — this is a backend-only milestone; no UI exists** |
+| Server Action | none yet |
+| RPC | `public.set_retailer_staff_shop_assignments(p_membership_id uuid, p_shop_ids uuid[])` — `authenticated`, `SECURITY DEFINER`, `VOLATILE`, empty `search_path` |
+| Inputs | the canonical **membership id** (`organization_members.id`, exactly as `list_retailer_staff_members().membership_id` returns it) and the **complete** requested shop set |
+| Backend-resolved | Retailer org id, acting profile, target role, target membership status, current assignments — **all** from `auth.uid()` and the tables. No organization id, actor id, role code, permission code, status, timestamp, current-assignment list or add/remove pair is accepted. |
+| Returns | one row: `(shops_added integer, shops_removed integer, shops_unchanged integer)` — counts only, never an id, name, timestamp or hidden assignment |
+| Errors | `42501` (unauthenticated / wrong role / unknown, foreign, inactive or non-Sales-Staff target — all **one** message), `23514` (empty or null shop list, null element, unknown/inactive/foreign shop), `55000` (Retailer suspended between resolve and lock), `22P02` (malformed UUID, raised before the body runs) |
+| RLS & authorization | `resolve_retailer_member_organization('RETAILER_STAFF_SHOP_ASSIGN')`. `retailer_shop_members` keeps RLS on, **zero** policies and `REVOKE ALL` — this RPC is the only way in. |
+| Tables | `organization_members`, `member_roles`, `roles`, `profiles`, `organizations`, `retailer_shops`, `retailer_shop_members`, `audit_logs` |
+| Idempotency | **Yes.** An identical request writes nothing — no row, no `removed_at`, **no audit row** — and returns `(0, 0, n)`. |
+| Flutter direct? | **Yes.** No text input, no secret, no service-role step, no recipient identity — nothing an Edge Function would add. |
+| Classification | **A** |
+| Tests | `supabase/tests/database/retailer_staff_shop_assignment_writes_test.sql` (163), `lib/staff/staff-shop-assignment-contract.test.ts` (33) |
+
+**Complete replacement, not add/remove.** The caller asserts the whole desired set; the
+diff is computed server-side. `{A,B}` → `{B,C}` is one atomic call that retires A, keeps B
+and adds C. There is deliberately no second entry point: the zero-shop rule and the
+active-projection rule are properties of the *final set*, and a `remove_shop(x)` could only
+guess at them.
+
+**Duplicates are canonicalized, not rejected.** `[A, A, B]` means `[A, B]` — same as
+`reserve_retailer_staff_invitation`. A `NULL` *element* is still rejected (`23514`).
+
+**At least one shop, always.** An empty or null `p_shop_ids` is refused with `23514`. This
+milestone provides **no "stand this person down" operation**; staff activation/deactivation
+is a separate future milestone.
+
+**⚠️ THE ONE BEHAVIOUR A CLIENT MUST UNDERSTAND — replacement is scoped to shops that are
+currently `ACTIVE`.** `list_retailer_staff_members()` filters `shop_ids`/`shop_names` to
+`s.status = 'ACTIVE'`, so a live assignment to a SUSPENDED or DEACTIVATED shop is
+**invisible** to every client. Omitting it from a request therefore carries no intent, and
+the backend treats it accordingly:
+
+- a live assignment whose shop is **not** `ACTIVE` is **preserved untouched**, and is
+  counted in **none** of `shops_added` / `shops_removed` / `shops_unchanged`;
+- consequently `shops_unchanged + shops_added` is the size of the **visible** set after the
+  write, which may be **fewer** rows than the table actually holds for that member;
+- a client must **not** present the three counts as "this person's total shops", and must
+  re-read `list_retailer_staff_members()` for display.
+
+Without this scoping, a client faithfully round-tripping what it read would silently
+destroy assignments its user never saw — and `retailer_shop_members` has no restore.
+
+**Atomicity and concurrency.** One transaction. The target membership is locked
+`FOR UPDATE` — the serialization point, so two concurrent calls against the same member
+queue and the second diffs against the first's committed state. Requested shops are locked
+`FOR SHARE` in ascending UUID order (the `accept_retailer_staff_invitation` pattern), so
+overlapping requests cannot deadlock and a shop cannot be deactivated mid-write. One
+invalid shop refuses the **whole** request before anything is written. There are **no**
+client-supplied versions, ETags or timestamps: last write wins, which is the correct
+semantics for a set editor.
+
+**Retirement, never deletion.** A dropped assignment gets `removed_at = now()` and stays on
+record. Re-adding a previously removed shop **INSERTS A NEW ROW**; the retired one is never
+resurrected, so the fact that the person was off that shop survives.
+
+**Audit.** One row per *changing* call: `action = 'STAFF_SHOP_ASSIGNMENTS_UPDATED'`,
+`entity_type = 'RETAILER_STAFF_MEMBER'`, `entity_id` = the membership id,
+`organization_id` = the **Retailer's** (so it is invisible to `list_vendor_audit_logs`,
+which filters on the caller's Vendor). Metadata carries exactly seven keys —
+`retailer_name`, `role_code`, `membership_status`, `shop_count_before`, `shop_count_after`,
+`shops_added`, `shops_removed` — with shop **names**, never ids. No uuid, email, token or
+hash appears anywhere in it.
 
 ---
 
