@@ -22,8 +22,13 @@ import {
   showsInviteSection,
   showsManageShops,
   showsShopPicker,
+  showsStaffLifecycleControl,
 } from "@/lib/staff/portal-access-decision";
 import { canManageStaffShops } from "@/lib/staff/staff-shop-assignment-input";
+import {
+  buildLifecycleEligibleMemberships,
+  isLifecycleControlOffered,
+} from "@/lib/staff/staff-lifecycle-input";
 import { formatOwnerTimestamp } from "@/lib/retailers/owner-status-normalization";
 import { StatusBadge } from "@/components/admin/status-badge";
 import { InviteStaffForm } from "@/app/(retailer)/retailer/staff/invite-staff-form";
@@ -32,6 +37,7 @@ import {
   RevokeInvitationForm,
 } from "@/app/(retailer)/retailer/staff/invitation-controls";
 import { ManageShopsDialog } from "@/app/(retailer)/retailer/staff/manage-shops-dialog";
+import { StaffLifecycleDialog } from "@/app/(retailer)/retailer/staff/staff-lifecycle-dialog";
 import { PageHeader, SectionHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Alert } from "@/components/ui/alert";
@@ -203,6 +209,30 @@ export default async function RetailerStaffPage() {
   const canAssignShops = showsManageShops(assignable.status);
   const shopPickerReady = showsShopPicker(assignable.status);
 
+  // Whether the roster offers Deactivate / Reactivate at all. Keyed on the INVITATIONS
+  // read, which requires RETAILER_STAFF_MANAGE — exactly the permission
+  // set_retailer_staff_membership_status() gates on.
+  //
+  // IT FAILS CLOSED: only an explicit `ok` shows the control. A Retailer Manager's read
+  // answers `denied`; a transient failure answers `unavailable`; a malformed response is
+  // normalized to `unavailable` — and every one of those hides the control. A Manager must
+  // never see an offer to remove a colleague's access, and "never" cannot be qualified with
+  // "unless a read happened to fail at that moment". The Server Action re-proves the same
+  // capability before accepting anything.
+  const canManageLifecycle = showsStaffLifecycleControl(invitations.status);
+
+  // WHICH MEMBERSHIPS may be acted on, decided across the WHOLE roster rather than row by
+  // row. list_retailer_staff_members() emits one row per ACTIVE role, so a member holding
+  // two roles appears twice — and judging either row alone would offer the control for a
+  // target the RPC refuses outright. A membership is eligible only when it appears exactly
+  // once and that single row is itself eligible.
+  const lifecycleEligible = buildLifecycleEligibleMemberships(
+    members.status === "ok" ? members.members : [],
+  );
+
+  // Whether the actions column exists at all. Either control can put something in it.
+  const showsRowActions = canAssignShops || canManageLifecycle;
+
   return (
     <div className="mx-auto w-full max-w-6xl">
       <PageHeader
@@ -221,7 +251,13 @@ export default async function RetailerStaffPage() {
         <SectionHeader
           title={
             <span id="roster-heading" className="inline-flex items-center gap-2.5">
-              Active staff
+              {/* Not "Active staff". list_retailer_staff_members() already returns
+                  non-ACTIVE memberships to a RETAILER_STAFF_MANAGE holder, and this
+                  milestone makes deactivated people both visible and actionable here — so a
+                  heading that promises only active members would now be wrong for exactly
+                  the operator who can act on the difference. The per-row status badge is
+                  what states each member's state. */}
+              Staff members
               {members.status === "ok" && members.members.length > 0 && (
                 <Badge tone="slate">{members.members.length}</Badge>
               )}
@@ -271,7 +307,7 @@ export default async function RetailerStaffPage() {
                       <th scope="col" className={thClasses}>
                         Joined
                       </th>
-                      {canAssignShops && (
+                      {showsRowActions && (
                         <th scope="col" className={thClasses}>
                           <span className="sr-only">Actions</span>
                         </th>
@@ -282,8 +318,19 @@ export default async function RetailerStaffPage() {
                     {/* Rendered in the RPC's own order. Nothing is re-sorted here —
                         a second, locale-dependent ordering could disagree with the
                         database's. The membership id is the stable key. */}
-                    {members.members.map((member) => (
-                      <tr key={member.membershipId} className="transition-colors hover:bg-slate-50">
+                    {members.members.map((member, index) => (
+                      /* THE KEY COMBINES membership id, role code AND the row index.
+                         list_retailer_staff_members() emits one row per ACTIVE role, so a
+                         multi-role member yields two rows sharing a membership id — and a
+                         bare id would be a duplicate React key, which silently corrupts
+                         reconciliation. The index makes it unique even for genuinely
+                         identical rows from malformed or historical data. It is a
+                         reconciliation detail only: it is never rendered, never sent, and
+                         never shown to a user. */
+                      <tr
+                        key={`${member.membershipId}-${member.roleCode}-${index}`}
+                        className="transition-colors hover:bg-slate-50"
+                      >
                         <td className="whitespace-nowrap px-4 py-3">
                           <span className="flex items-center gap-3">
                             <InitialsAvatar name={memberName(member)} size="sm" />
@@ -306,32 +353,49 @@ export default async function RetailerStaffPage() {
                         <td className={`whitespace-nowrap ${tdClasses}`}>
                           {formatOwnerTimestamp(member.joinedAt ?? member.createdAt)}
                         </td>
-                        {canAssignShops && (
-                          <td className="whitespace-nowrap px-4 py-3">
-                            {/* Offered only for an ACTIVE membership holding the
-                                SALES_STAFF role. A Manager row, an Owner row, and any
-                                non-ACTIVE membership render nothing: the operation is
-                                undefined for them and the RPC refuses such a target with
-                                the same 42501 it gives an unauthorized caller.
+                        {showsRowActions && (
+                          <td className="px-4 py-3 align-top">
+                            {/* Each control decides for itself. Manage Shops is offered
+                                only for an ACTIVE SALES_STAFF row; Deactivate/Reactivate
+                                only for an ACTIVE or DEACTIVATED RETAILER_MANAGER or
+                                SALES_STAFF row. An Owner row — including the signed-in
+                                Owner's own — renders neither: the operations are undefined
+                                for them and the RPCs refuse such a target with the same
+                                42501 they give an unauthorized caller.
 
                                 Keyed by membership id, which is unique per (organization,
                                 user) — so a different account or Retailer produces
-                                different keys and React discards every editor's state
+                                different keys and React discards every control's state
                                 rather than carrying it into a new session. */}
-                            {canManageStaffShops(member) && (
-                              <ManageShopsDialog
-                                key={member.membershipId}
-                                membershipId={member.membershipId}
-                                memberName={memberName(member)}
-                                roleLabel={retailerRoleDisplayName(
-                                  member.roleCode,
-                                  member.roleName,
-                                )}
-                                currentShopIds={member.shopIds}
-                                shops={assignableShops}
-                                optionsReady={shopPickerReady}
-                              />
-                            )}
+                            <div className="flex flex-wrap items-start gap-2">
+                              {canAssignShops && canManageStaffShops(member) && (
+                                <ManageShopsDialog
+                                  key={`shops-${member.membershipId}`}
+                                  membershipId={member.membershipId}
+                                  memberName={memberName(member)}
+                                  roleLabel={retailerRoleDisplayName(
+                                    member.roleCode,
+                                    member.roleName,
+                                  )}
+                                  currentShopIds={member.shopIds}
+                                  shops={assignableShops}
+                                  optionsReady={shopPickerReady}
+                                />
+                              )}
+                              {canManageLifecycle &&
+                    isLifecycleControlOffered(member.membershipId, lifecycleEligible) && (
+                                <StaffLifecycleDialog
+                                  key={`lifecycle-${member.membershipId}`}
+                                  membershipId={member.membershipId}
+                                  memberName={memberName(member)}
+                                  roleLabel={retailerRoleDisplayName(
+                                    member.roleCode,
+                                    member.roleName,
+                                  )}
+                                  membershipStatus={member.membershipStatus}
+                                />
+                              )}
+                            </div>
                           </td>
                         )}
                       </tr>
@@ -343,8 +407,12 @@ export default async function RetailerStaffPage() {
 
             {/* Mobile: stacked cards. A five-column table is unreadable below `sm`. */}
             <ul className="mt-3 flex flex-col gap-3 sm:hidden">
-              {members.members.map((member) => (
-                <li key={member.membershipId} className={cardClasses("standard", "p-4")}>
+              {members.members.map((member, index) => (
+                /* Same composite key, same reason — see the table above. */
+                <li
+                  key={`${member.membershipId}-${member.roleCode}-${index}`}
+                  className={cardClasses("standard", "p-4")}
+                >
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex min-w-0 items-center gap-3">
                       <InitialsAvatar name={memberName(member)} size="md" />
@@ -376,20 +444,37 @@ export default async function RetailerStaffPage() {
                       </dd>
                     </div>
                   </dl>
-                  {canAssignShops && canManageStaffShops(member) && (
-                    <div className="mt-3 border-t border-slate-100 pt-3">
-                      <ManageShopsDialog
-                        key={member.membershipId}
-                        membershipId={member.membershipId}
-                        memberName={memberName(member)}
-                        roleLabel={retailerRoleDisplayName(
-                          member.roleCode,
-                          member.roleName,
-                        )}
-                        currentShopIds={member.shopIds}
-                        shops={assignableShops}
-                        optionsReady={shopPickerReady}
-                      />
+                  {((canAssignShops && canManageStaffShops(member)) ||
+                    (canManageLifecycle &&
+                    isLifecycleControlOffered(member.membershipId, lifecycleEligible))) && (
+                    <div className="mt-3 flex flex-wrap items-start gap-2 border-t border-slate-100 pt-3">
+                      {canAssignShops && canManageStaffShops(member) && (
+                        <ManageShopsDialog
+                          key={`shops-${member.membershipId}`}
+                          membershipId={member.membershipId}
+                          memberName={memberName(member)}
+                          roleLabel={retailerRoleDisplayName(
+                            member.roleCode,
+                            member.roleName,
+                          )}
+                          currentShopIds={member.shopIds}
+                          shops={assignableShops}
+                          optionsReady={shopPickerReady}
+                        />
+                      )}
+                      {canManageLifecycle &&
+                    isLifecycleControlOffered(member.membershipId, lifecycleEligible) && (
+                        <StaffLifecycleDialog
+                          key={`lifecycle-${member.membershipId}`}
+                          membershipId={member.membershipId}
+                          memberName={memberName(member)}
+                          roleLabel={retailerRoleDisplayName(
+                            member.roleCode,
+                            member.roleName,
+                          )}
+                          membershipStatus={member.membershipStatus}
+                        />
+                      )}
                     </div>
                   )}
                 </li>

@@ -17,6 +17,15 @@ import {
 } from "@/lib/staff/retailer-staff-invitations";
 import { getRetailerStaffMembers } from "@/lib/staff/retailer-staff-data";
 import { setRetailerStaffShopAssignments } from "@/lib/staff/retailer-staff-shop-assignments";
+import { setRetailerStaffMembershipStatus } from "@/lib/staff/retailer-staff-membership-status";
+import {
+  describeLifecycleNoChange,
+  describeLifecycleOutcome,
+  normalizeLifecycleMembershipId,
+  normalizeRequestedStatus,
+  validateStaffLifecycleInput,
+  type StaffLifecycleRosterEntry,
+} from "@/lib/staff/staff-lifecycle-input";
 import {
   normalizeStaffInviteInput,
   validateStaffInviteInput,
@@ -34,6 +43,7 @@ import {
 } from "@/app/(retailer)/retailer/staff/invite-staff-state";
 import type { InvitationActionState } from "@/app/(retailer)/retailer/staff/invitation-action-state";
 import type { ManageShopsState } from "@/app/(retailer)/retailer/staff/manage-shops-state";
+import type { StaffLifecycleState } from "@/app/(retailer)/retailer/staff/staff-lifecycle-state";
 
 /**
  * Server Actions for the Retailer staff-management page.
@@ -747,5 +757,262 @@ export async function updateStaffShopAssignmentsAction(
       unchanged: result.unchanged,
     }),
     refreshedShops: null,
+  };
+}
+
+/* ---------------------------------------------------------------------------
+ * Staff activation / deactivation
+ * ------------------------------------------------------------------------- */
+
+/**
+ * The one message every disclosure-sensitive refusal shares.
+ *
+ * An unknown membership, another Retailer's membership, a RETAILER_OWNER target, the
+ * caller's own membership, a multi-role or role-less target, and an INVITED or SUSPENDED
+ * membership are ALL reported with this single string.
+ * set_retailer_staff_membership_status raises ONE byte-identical 42501 for all of them
+ * precisely so a caller cannot sweep membership ids to learn which exist somewhere else.
+ * Distinguishing them here would reintroduce exactly the disclosure SQL went out of its way
+ * to prevent.
+ */
+const LIFECYCLE_DENIED =
+  "You can't change this person's status. Refresh the page and try again.";
+
+/**
+ * 23514 — the requested status was not one this operation accepts. Reachable only from a
+ * tampered submission, since the control posts a value this application produced.
+ */
+const LIFECYCLE_INVALID =
+  "That status change isn't valid. Refresh the page and try again.";
+
+/** 55000 — the Retailer stopped being active mid-operation. Distinct, and retryable. */
+const LIFECYCLE_RETAILER_UNAVAILABLE =
+  "Your Retailer is not available right now, so the status could not be changed. Try again in a moment.";
+
+/**
+ * The generic service failure. Deliberately NOT "check your connection", and deliberately
+ * explicit that nothing was changed — an operator who does not know whether a write landed
+ * will click again, which is exactly what this wording prevents.
+ */
+const LIFECYCLE_UNAVAILABLE =
+  "We couldn't change that status, and nothing was changed. Please try again in a moment.";
+
+/**
+ * THE PARTIAL SUCCESS: the write committed, but the response could not be described or the
+ * roster could not be re-read.
+ *
+ * It is a SUCCESS message and the wording is chosen to stop exactly one reaction —
+ * submitting again. Nothing is lost by not retrying: the change is committed, and the RPC
+ * is idempotent anyway, so a repeat would be a no-op that writes no audit row. The dialog
+ * hides its confirm button on this outcome for the same reason.
+ */
+const LIFECYCLE_SAVED_UNCONFIRMED =
+  "The status change may have been saved, but the staff list could not be refreshed. Refresh the page to see the current status.";
+
+/**
+ * Deactivates or reactivates one Retailer staff membership.
+ *
+ * A SERVER ACTION IS A PUBLIC ENDPOINT — reachable by a hand-crafted POST from any client,
+ * regardless of which page rendered the control or whether that page rendered at all. So
+ * this re-establishes its own footing exactly as the invite, revoke and shop-assignment
+ * actions do: portal access is re-resolved from the verified session, the caller's
+ * MANAGEMENT capability is re-proved against the database, and the canonical roster is
+ * re-read for THIS caller before a single id is accepted.
+ *
+ * WHAT THE BROWSER MAY INFLUENCE, EXHAUSTIVELY: one membership id that must appear in the
+ * roster public.list_retailer_staff_members() just returned, and one requested status that
+ * must be exactly ACTIVE or DEACTIVATED. Nothing else is read from the form — no Retailer
+ * organization id, caller id, actor profile id, role code, permission code, current status,
+ * audit actor or timestamp — and no such field would be honoured if one were posted,
+ * because none is read. The RPC accepts only two arguments in any case.
+ *
+ * THE MEMBERSHIP ID IS AN ADDRESS, NOT AUTHORIZATION. The RPC derives the Retailer from
+ * auth.uid() and matches the target on `id AND organization_id`, then re-reads its complete
+ * ACTIVE role set and its current status, so an id from another tenant selects nothing and
+ * is refused with the same generic exception as an unauthorized caller.
+ *
+ * NOTHING IS DESTROYED. The RPC changes organization_members.status and deactivated_at and
+ * nothing else — roles, live and retired shop assignments, receipts, invitations and audit
+ * history are all preserved, which is why the copy promises exactly that and why
+ * reactivation needs no rebuild.
+ */
+export async function setStaffMembershipStatusAction(
+  _prevState: StaffLifecycleState,
+  formData: FormData,
+): Promise<StaffLifecycleState> {
+  // 1. Read and canonicalize. ONLY these two fields are read; any other key a tampered POST
+  //    carried is never looked at, so it cannot influence anything.
+  const membershipId = normalizeLifecycleMembershipId(formData.get("membershipId"));
+  const requestedStatus = normalizeRequestedStatus(formData.get("requestedStatus"));
+
+  // 2. Authorization, re-resolved from the verified session. Defence in depth: the RPC
+  //    evaluates the same chain again from auth.uid() and is what actually stops an
+  //    unauthorized or cross-tenant write.
+  //
+  //    Deliberately NOT feature-gated. RETAILER_STAFF_INVITATIONS_ENABLED gates INVITATIONS
+  //    — creating accounts and sending email. Standing an existing employee down is
+  //    neither, and coupling it to the invitation kill switch would strand an Owner who
+  //    needs to revoke someone's access while sending is paused. That is the one case where
+  //    speed matters most.
+  const access = await getRetailerPortalAccess();
+
+  // redirect() signals by throwing NEXT_REDIRECT, so both calls sit outside any try/catch.
+  if (access.status === "unauthenticated") {
+    redirect("/login");
+  }
+  if (access.status === "unauthorized") {
+    redirect("/retailer-access-denied");
+  }
+  if (access.status === "unavailable") {
+    return { outcome: "error", error: LIFECYCLE_UNAVAILABLE, success: null };
+  }
+
+  // 3. The canonical roster AND the management-capability probe, read together.
+  //
+  //    THE ROSTER IS NOT A CAPABILITY CHECK. list_retailer_staff_members() requires only
+  //    RETAILER_STAFF_READ, which a RETAILER_MANAGER holds — so a Manager would pass it.
+  //    list_retailer_staff_invitations() is gated on RETAILER_STAFF_MANAGE, the exact
+  //    permission this write RPC requires, so it is the probe that proves the caller may
+  //    manage staff at all. A Manager lands on `denied` here and can never get a membership
+  //    id accepted, which is the same shape the shop-assignment action uses with
+  //    list_retailer_staff_assignable_shops().
+  //
+  //    Issued in parallel because neither depends on the other.
+  const [roster, manageCapability] = await Promise.all([
+    getRetailerStaffMembers(),
+    getRetailerStaffInvitations(),
+  ]);
+
+  if (manageCapability.status === "denied") {
+    return { outcome: "error", error: LIFECYCLE_DENIED, success: null };
+  }
+  if (manageCapability.status === "unavailable") {
+    // A READ failure. Reported as a service problem rather than as a rejected write,
+    // because nothing about the submission was wrong and nothing was attempted.
+    return { outcome: "error", error: LIFECYCLE_UNAVAILABLE, success: null };
+  }
+
+  if (roster.status === "denied") {
+    return { outcome: "error", error: LIFECYCLE_DENIED, success: null };
+  }
+  if (roster.status !== "ok") {
+    return { outcome: "error", error: LIFECYCLE_UNAVAILABLE, success: null };
+  }
+
+  const rosterEntries: StaffLifecycleRosterEntry[] = roster.members.map(
+    (member) => ({
+      membershipId: member.membershipId,
+      roleCode: member.roleCode,
+      membershipStatus: member.membershipStatus,
+    }),
+  );
+
+  // 4. Validate: format first, then existence in the caller's OWN roster, then eligibility.
+  //
+  //    Every rejection below maps to the SAME message an unauthorized caller receives.
+  //    `invalid-status` is the one exception, because a malformed status is the caller's
+  //    own input rather than a fact about somebody else's row, and telling them apart
+  //    discloses nothing.
+  const validation = validateStaffLifecycleInput(
+    membershipId,
+    requestedStatus,
+    rosterEntries,
+  );
+
+  if (!validation.ok) {
+    return {
+      outcome: "error",
+      error:
+        validation.reason === "invalid-status"
+          ? LIFECYCLE_INVALID
+          : LIFECYCLE_DENIED,
+      success: null,
+    };
+  }
+
+  // The display name comes from the roster row the server just read — never from the
+  // browser — so the confirmation copy names the person the database actually addressed.
+  const targetMember = roster.members.find(
+    (member) => member.membershipId === validation.membershipId,
+  );
+  const memberName = targetMember
+    ? `${targetMember.firstName} ${targetMember.lastName}`.trim()
+    : "This staff member";
+
+  // 5. The write. EXACTLY ONE RPC call, exactly two arguments, under the caller's own
+  //    token. There is no retry loop anywhere below this line.
+  const result = await setRetailerStaffMembershipStatus(
+    validation.membershipId,
+    validation.requestedStatus,
+  );
+
+  switch (result.status) {
+    case "denied":
+      return { outcome: "error", error: LIFECYCLE_DENIED, success: null };
+    case "invalid":
+      return { outcome: "error", error: LIFECYCLE_INVALID, success: null };
+    case "retailer-unavailable":
+      return {
+        outcome: "error",
+        error: LIFECYCLE_RETAILER_UNAVAILABLE,
+        success: null,
+      };
+    case "malformed":
+      // 22P02. Only a tampered submission reaches this, since step 4 already required a
+      // canonical UUID; reported as a denial so it is indistinguishable from one.
+      return { outcome: "error", error: LIFECYCLE_DENIED, success: null };
+    case "unavailable":
+      return { outcome: "error", error: LIFECYCLE_UNAVAILABLE, success: null };
+    case "saved-unconfirmed":
+      // Committed, but undescribable. The page is still revalidated — the data MAY have
+      // changed — and the operator is told plainly to refresh rather than to try again.
+      revalidatePath(STAFF_PATH);
+      return {
+        outcome: "saved-unconfirmed",
+        error: null,
+        success: LIFECYCLE_SAVED_UNCONFIRMED,
+      };
+    case "changed":
+    case "unchanged":
+    default:
+      break;
+  }
+
+  // 6. Committed. Revalidate, then RE-READ THE CANONICAL ROSTER.
+  //
+  //    revalidatePath alone is what refreshes the rendered page; the re-read below is a
+  //    CONFIRMATION that the canonical source now answers, so a roster that has become
+  //    unreadable is reported as "refresh to see the current status" rather than as a
+  //    confident success the page cannot actually show.
+  revalidatePath(STAFF_PATH);
+
+  const refreshed = await getRetailerStaffMembers();
+
+  if (refreshed.status !== "ok") {
+    // THE WRITE STILL SUCCEEDED. A failed re-read is never presented as a failed write, and
+    // never leaves the control in a state where an ordinary retry would resubmit a change
+    // that is already committed.
+    return {
+      outcome: "saved-unconfirmed",
+      error: null,
+      success: LIFECYCLE_SAVED_UNCONFIRMED,
+    };
+  }
+
+  // The CONFIRMED status is the one the database reported, never the one that was
+  // requested. They agree in practice; using the database's answer means the sentence
+  // describes what is true rather than what was asked for.
+  if (result.status === "unchanged") {
+    return {
+      outcome: "unchanged",
+      error: null,
+      success: describeLifecycleNoChange(memberName, result.membershipStatus),
+    };
+  }
+
+  return {
+    outcome: "changed",
+    error: null,
+    success: describeLifecycleOutcome(memberName, result.membershipStatus),
   };
 }

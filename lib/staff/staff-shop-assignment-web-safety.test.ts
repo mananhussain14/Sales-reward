@@ -741,9 +741,15 @@ describe("Manage Shops — who sees the control", () => {
       "the page must gate each row on the eligibility predicate",
     );
     // Both layouts — the table and the mobile cards — must gate identically.
+    //
+    // THREE references, not two, since the staff lifecycle milestone: the mobile card list
+    // now shares its actions footer with the Deactivate/Reactivate control, so the same
+    // predicate appears once in that footer's existence condition and once around the
+    // editor itself. Without the first, an ineligible row would render an empty bordered
+    // strip. The desktop table contributes the third.
     assert.equal(
       (PAGE_CODE.match(/canManageStaffShops\(member\)/g) ?? []).length,
-      2,
+      3,
       "the desktop table and the mobile card list must both gate the control",
     );
   });
@@ -765,8 +771,18 @@ describe("Manage Shops — who sees the control", () => {
   });
 
   test("42. each editor instance is keyed by membership, isolating session and target", () => {
+    // The key is NAMESPACED since the staff lifecycle milestone — `shops-<membershipId>`
+    // rather than the bare id — because a row now renders two sibling dialogs and two
+    // siblings sharing one key is a React reconciliation hazard. The isolation guarantee is
+    // unchanged and is what this asserts: the membership id is still what makes the key
+    // unique, so a different account or Retailer produces different keys and React discards
+    // every editor's state rather than carrying it into a new session.
     assert.equal(
-      (PAGE_CODE.match(/key=\{member\.membershipId\}\s*\n\s*membershipId=/g) ?? []).length,
+      (
+        PAGE_CODE.match(
+          /key=\{`shops-\$\{member\.membershipId\}`\}\s*\n\s*membershipId=/g,
+        ) ?? []
+      ).length,
       2,
       "both layouts must key the editor by membership id so state cannot outlive a context change",
     );

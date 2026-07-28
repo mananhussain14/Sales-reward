@@ -1122,9 +1122,21 @@ describe("staff membership lifecycle — the blast radius", () => {
     );
   });
 
-  test("60. neither RPC has an application call site yet — this milestone is backend-only", () => {
+  test("60. each RPC is reached through exactly ONE server-only wrapper", () => {
+    // WHEN THIS MILESTONE SHIPPED this assertion read "neither RPC has an application call
+    // site yet", which was true of a backend-only change and false the moment a client
+    // consumed it. The web staff-lifecycle milestone added those consumers deliberately, so
+    // the rule is now the durable one: each RPC name may appear in exactly ONE module, and
+    // that module must be the server-only wrapper. A second call site would be a second
+    // place for the SQLSTATE mapping and the response parsing to live, and only one of the
+    // two could stay right.
+    const WRAPPERS: Record<string, string> = {
+      [WRITE_FN]: "lib/staff/retailer-staff-membership-status.ts",
+      [READ_FN]: "lib/staff/my-lifecycle-access-state.ts",
+    };
+
     const roots = ["app", "lib", "components"];
-    const hits: string[] = [];
+    const hits: Record<string, string[]> = { [WRITE_FN]: [], [READ_FN]: [] };
 
     const walk = (dir: string): void => {
       if (!existsSync(join(ROOT, dir))) return;
@@ -1135,19 +1147,23 @@ describe("staff membership lifecycle — the blast radius", () => {
           continue;
         }
         if (!/\.tsx?$/.test(entry.name)) continue;
-        // This suite names both functions in order to test them.
-        if (rel.endsWith("staff-membership-lifecycle-contract.test.ts")) continue;
+        // Test suites name the functions in order to test them, and are not call sites.
+        if (/\.test\.tsx?$/.test(entry.name)) continue;
         const code = stripTsComments(readFileSync(join(ROOT, rel), "utf8"));
-        if (code.includes(WRITE_FN) || code.includes(READ_FN)) hits.push(rel);
+        for (const fn of [WRITE_FN, READ_FN]) {
+          if (code.includes(fn)) hits[fn].push(rel);
+        }
       }
     };
     for (const root of roots) walk(root);
 
-    assert.deepEqual(
-      hits,
-      [],
-      `no Web UI, Server Action or component may call these RPCs yet; found: ${hits.join(", ")}`,
-    );
+    for (const fn of [WRITE_FN, READ_FN]) {
+      assert.deepEqual(
+        hits[fn],
+        [WRAPPERS[fn]],
+        `${fn} must be named in exactly its own wrapper; found: ${hits[fn].join(", ")}`,
+      );
+    }
   });
 
   test("61. no service-role client is introduced anywhere by this milestone", () => {

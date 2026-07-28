@@ -224,3 +224,53 @@ export function showsManageShops(status: SectionReadStatus): boolean {
 export function showsShopPicker(status: SectionReadStatus): boolean {
   return status === "ok";
 }
+
+/**
+ * Whether the staff ACTIVATION / DEACTIVATION control is offered on the roster at all.
+ *
+ * Keyed on the INVITATIONS read — list_retailer_staff_invitations(), which is granted only
+ * to holders of RETAILER_STAFF_MANAGE. That is exactly the permission
+ * set_retailer_staff_membership_status() gates on, so the control appears if and only if
+ * the caller demonstrably holds the capability the write requires.
+ *
+ * WHY NOT THE ROSTER READ. list_retailer_staff_members() requires only
+ * RETAILER_STAFF_READ, which a RETAILER_MANAGER holds — keying on it would show a Manager
+ * a control every one of their clicks would be refused. The invitations read is the only
+ * shipped read whose permission matches this write's, which is why it is the probe here and
+ * in the Server Action. There is no role name in this decision, so a future mapping change
+ * moves the capability without this file being edited.
+ *
+ * ============================================================================
+ * THIS ONE FAILS CLOSED, AND DELIBERATELY DIFFERS FROM showsManageShops
+ * ============================================================================
+ * ONLY an explicit `ok` shows the control. A `denied` read hides it, an `unavailable` read
+ * hides it, and any value that is not exactly `ok` — a malformed response normalized to
+ * `unavailable`, or a state this build does not recognize — hides it too, because the test
+ * is positive rather than a list of things to exclude.
+ *
+ * That is STRICTER than showsManageShops, which treats `unavailable` as "still offer it,
+ * and report the transient fault if it is used". The asymmetry is intentional:
+ *
+ *   * The consequence of guessing wrong is different. Offering Manage Shops to someone who
+ *     turns out not to hold the permission wastes a click. Offering DEACTIVATE is offering
+ *     to remove a colleague's access — a Retailer Manager must never see that control, and
+ *     "never" cannot be qualified with "unless a read happened to fail at that moment".
+ *   * `unavailable` genuinely does not distinguish "authorized, backend flaky" from
+ *     "we could not tell". Treating an unknown answer as authorization is exactly the
+ *     inversion this schema avoids everywhere else.
+ *
+ * The cost is a transient false negative: an Owner may briefly not see the control while
+ * the backend is unwell. That is the right way round — the operation is still reachable a
+ * moment later, and nothing about a staff member's access changes in the meantime.
+ *
+ * THIS IS PRESENTATION ONLY, AND IT IS ONLY HALF THE DECISION. The MEMBERSHIP must ALSO be
+ * eligible — see buildLifecycleEligibleMemberships in ./staff-lifecycle-input.ts, which
+ * works at the membership level (not the row level) so a member represented by more than
+ * one role row is excluded, along with every RETAILER_OWNER, INVITED and SUSPENDED
+ * membership. The Server Action re-resolves access, re-proves this capability and re-checks
+ * the same rules against a fresh roster before accepting an id, and the RPC re-derives
+ * everything from auth.uid().
+ */
+export function showsStaffLifecycleControl(status: SectionReadStatus): boolean {
+  return status === "ok";
+}

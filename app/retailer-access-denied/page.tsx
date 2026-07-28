@@ -1,7 +1,10 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { getRetailerOwnerPortalAccess } from "@/lib/retailer-portal/retailer-owner-portal";
+import { getMyLifecycleAccessState } from "@/lib/staff/my-lifecycle-access-state";
+import { resolveLifecycleNotice } from "@/lib/staff/lifecycle-access-state";
 import { AccessDeniedCard } from "@/components/ui/access-denied-card";
+import { LifecycleNoticeCard } from "@/components/ui/lifecycle-notice-card";
 
 export const metadata: Metadata = {
   title: "Access denied · SalesReward",
@@ -59,6 +62,51 @@ export default async function RetailerAccessDeniedPage() {
   // than the denial does — inventing a distinct "try again" state here would
   // reveal that the check reached the database and failed, rather than that it
   // denied.
+
+  // ------------------------------------------------------------------------
+  // The self-only lifecycle diagnostic — read AFTER the refusal, never before.
+  // ------------------------------------------------------------------------
+  // ⚠️ THIS IS NOT AN AUTHORIZATION GATE, AND IT DOES NOT GRANT ANYTHING. Access
+  // was already decided above, and by the layout, and by every protected RPC —
+  // each from auth.uid(), independently. This call happens only once that
+  // decision is a refusal, and its single-word answer chooses a SENTENCE. No
+  // branch below admits a request; `ACTIVE` renders the ordinary denial exactly
+  // like every other unexplained case.
+  //
+  // WHY IT IS SAFE TO ASK. The RPC takes ZERO arguments and derives its subject
+  // solely from auth.uid(), so this page cannot ask about anybody else and a
+  // visitor cannot make it. It returns one word from a closed vocabulary and no
+  // id, name, email, role, organization, raw status, timestamp or database
+  // message — nothing that is not already the caller's own knowledge about
+  // their own account.
+  //
+  // WHY NOT A QUERY STRING. A `?reason=` parameter would be attacker-controlled
+  // text deciding what a page says about an account, which is a disclosure
+  // primitive and a phishing surface. Nothing about this page's state is read
+  // from the URL — the state comes from the signed-in session, or it does not
+  // come at all.
+  //
+  // NO REDIRECT LOOP IS POSSIBLE. This page sits outside the (retailer) route
+  // group, so the group layout's guard never runs for it, and nothing below
+  // redirects: every path from here renders a card with a sign-out control.
+  const lifecycle = await getMyLifecycleAccessState();
+
+  const notice = resolveLifecycleNotice(
+    lifecycle.status === "ok" ? lifecycle.accessState : null,
+  );
+
+  // A lifecycle cause that has something specific and safe to say: the caller's
+  // membership, their Retailer, or their profile is inactive, or their account
+  // resolves ambiguously. Everything else — including ACTIVE (some other
+  // condition refused them), NO_SUPPORTED_ACCESS (the ordinary "not for you"
+  // case, whose distinct copy would disclose that they hold no Retailer
+  // membership at all), and an unreadable or unrecognized diagnostic — keeps the
+  // existing neutral card unchanged.
+  if (notice !== null) {
+    return (
+      <LifecycleNoticeCard title={notice.title} message={notice.message} />
+    );
+  }
 
   return <AccessDeniedCard />;
 }
