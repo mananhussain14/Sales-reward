@@ -255,14 +255,27 @@ describe("client components stay client-safe", () => {
   });
 
   test("13. no hidden form field names a Retailer, organization, or role id", () => {
-    // The only hidden field this milestone uses is `invitationId`, which is an address
-    // the database re-checks against the Retailer it derives for itself.
+    // A CLOSED ALLOWLIST of two, and both are ADDRESSES the database re-checks against the
+    // Retailer it derives for itself from auth.uid() — never capabilities:
+    //
+    //   invitationId    revoke_retailer_staff_invitation matches on
+    //                   (id, retailer_organization_id, status='PENDING').
+    //   membershipId    set_retailer_staff_shop_assignments matches on
+    //                   (id, organization_id, status='ACTIVE') plus an exact SALES_STAFF
+    //                   role. Added by the web Manage Shops milestone; see
+    //                   docs/retailer-manage-staff-shops-web.md § 4.
+    //
+    // An id from another tenant selects nothing in either case. What must stay excluded is
+    // anything the server should DERIVE rather than accept: a Retailer or organization id,
+    // a role or permission code, an actor or profile id, a status, or a timestamp.
+    const ALLOWED_HIDDEN_FIELDS = ["invitationId", "membershipId"];
+
     for (const file of CLIENT_FILES) {
       const hidden = file.source.match(/type="hidden"[\s\S]{0,120}?name="([a-zA-Z]+)"/g) ?? [];
       for (const match of hidden) {
         const name = /name="([a-zA-Z]+)"/.exec(match)?.[1] ?? "";
         assert.ok(
-          ["invitationId"].includes(name),
+          ALLOWED_HIDDEN_FIELDS.includes(name),
           `${file.path} has an unexpected hidden field: ${name}`,
         );
       }

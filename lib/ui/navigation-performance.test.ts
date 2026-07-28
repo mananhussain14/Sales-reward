@@ -90,12 +90,42 @@ describe("navigation uses client-side Next.js Link, never a full reload", () => 
     assert.ok(!src.includes("<a href"), "the retailers list uses a raw anchor");
   });
 
+  /**
+   * The ONE file permitted to call router.refresh(), and why.
+   *
+   * The Manage Shops editor's shop picker is populated by a read that can fail
+   * independently of the roster (list_retailer_staff_assignable_shops). When it does, the
+   * brief requires a READ-ONLY RETRY inside the dialog rather than a page error — and a
+   * retry of a Server Component read is exactly what router.refresh() is for.
+   *
+   * It is not navigation, it is not automatic, and it is not a write: it is a button the
+   * operator presses to re-attempt one failed read. Everything else this rule forbids —
+   * full reloads, location assignment, and refresh used as a navigation or
+   * post-mutation-sync mechanism — stays forbidden everywhere, including in that same
+   * file's success path, which uses revalidatePath from the Server Action instead.
+   *
+   * See docs/retailer-manage-staff-shops-web.md § 11.
+   */
+  const REFRESH_ALLOWED = "app/(retailer)/retailer/staff/manage-shops-dialog.tsx";
+
   test("4 & 5. no full-reload navigation or stray router.refresh anywhere", () => {
     const files = [...walk("app"), ...walk("components")];
     for (const file of files) {
       const src = read(file);
       assert.ok(!/window\.location/.test(src), `${file} uses window.location`);
       assert.ok(!/location\.(href|assign|replace)\s*=/.test(src), `${file} assigns location`);
+
+      if (file === REFRESH_ALLOWED) {
+        // Narrow the allowance to a single call, so the exception cannot quietly grow into
+        // a habit inside the one file that holds it.
+        assert.equal(
+          (src.match(/router\.refresh\(/g) ?? []).length,
+          1,
+          `${file} may call router.refresh() exactly once — the shop-picker retry`,
+        );
+        continue;
+      }
+
       assert.ok(!/router\.refresh\(/.test(src), `${file} calls router.refresh()`);
     }
   });
