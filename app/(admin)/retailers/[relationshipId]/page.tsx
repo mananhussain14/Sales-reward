@@ -40,6 +40,9 @@ import { StatusCard, WarningState } from "@/components/ui/status-card";
 import { ProfileSummaryCard } from "@/components/ui/profile-summary-card";
 import { LifecycleTimeline, type LifecycleStep } from "@/components/ui/lifecycle-timeline";
 import { InfoPanel } from "@/components/ui/form-section";
+import { getVendorRetailerManageCapability } from "@/lib/retailers/vendor-retailer-manage-capability";
+import { isVendorRetailerLifecycleControlOffered } from "@/lib/retailers/vendor-retailer-lifecycle-input";
+import { RetailerLifecycleDialog } from "@/app/(admin)/retailers/[relationshipId]/retailer-lifecycle-dialog";
 
 /**
  * Static, and deliberately generic. Naming the Retailer in the title would mean
@@ -90,7 +93,7 @@ function OptionalValue({ value }: { value: string | null }) {
  * separate fact with its own icon.
  *
  * The two statuses are separate facts and are shown as such — a Retailer company
- * can be Active while this Vendor has Suspended its relationship with it, and one
+ * can be Active while this Vendor's relationship with it is Inactive, and one
  * badge could not say that. Shop count and currency/country are read straight
  * from the loaded detail; nothing is fetched or invented for these cards.
  */
@@ -135,6 +138,87 @@ function RetailerSummary({ retailer }: { retailer: VendorRetailerDetail }) {
               <OptionalValue value={retailer.defaultCurrency} />
             </span>
           }
+        />
+      </div>
+    </section>
+  );
+}
+
+/**
+ * The Retailer lifecycle control — deactivate, or reactivate.
+ *
+ * ============================================================================
+ * RENDERED ONLY WHEN BOTH CONDITIONS ARE POSITIVELY TRUE
+ * ============================================================================
+ * The whole visibility rule lives in isVendorRetailerLifecycleControlOffered, which requires
+ * the RETAILERS_MANAGE capability to be CONFIRMED (positive equality — a denied, unavailable,
+ * missing or unrecognized capability all fail closed without that predicate being edited) AND
+ * the current pair to be exactly ACTIVE/ACTIVE or SUSPENDED/SUSPENDED.
+ *
+ * So NOTHING is rendered for: a mismatched pair, a DEACTIVATED row on either side, an
+ * unknown status, a denied capability, an unavailable capability probe, or a malformed
+ * capability value. Returning null is deliberate — an explanation of why the control is
+ * missing would tell a caller who may not use it something about the Retailer's state.
+ *
+ * THIS IS PRESENTATION ONLY. The Server Action re-resolves Vendor access, re-proves the
+ * capability, re-reads the canonical detail and re-checks the transition; the RPC re-derives
+ * every one of those facts from auth.uid(). Hiding this card removes the accident, not the
+ * capability.
+ *
+ * SEPARATE FROM ADD SHOP AND PRODUCT ACTIONS, on purpose. This acts on the Retailer's
+ * lifecycle as a whole and blocks an entire company's access; grouping it with the ordinary
+ * build-out actions would invite a mis-click.
+ */
+function RetailerLifecycleCard({
+  relationshipId,
+  retailer,
+  capability,
+}: {
+  relationshipId: string;
+  retailer: VendorRetailerDetail;
+  capability: string;
+}) {
+  const offered = isVendorRetailerLifecycleControlOffered({
+    capability,
+    pair: {
+      retailerStatus: retailer.retailerStatus,
+      relationshipStatus: retailer.relationshipStatus,
+    },
+  });
+
+  if (!offered) return null;
+
+  return (
+    <section
+      aria-labelledby="lifecycle-heading"
+      className={cardClasses("standard", "p-5")}
+    >
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <h3
+              id="lifecycle-heading"
+              className="text-base font-semibold tracking-tight text-slate-900"
+            >
+              Retailer access
+            </h3>
+            <StatusBadge status={retailer.retailerStatus} />
+          </div>
+          <p className="mt-1.5 max-w-xl text-sm text-slate-500">
+            Controls whether everyone at this Retailer can use the Retailer workspace.
+            Deactivating blocks access without deleting anything, and can be reversed.
+          </p>
+        </div>
+
+        {/* Keyed by the relationship id: navigating to a different Retailer unmounts this
+            instance and discards its action state, so a result belonging to one Retailer can
+            never appear on another's page. */}
+        <RetailerLifecycleDialog
+          key={relationshipId}
+          relationshipId={relationshipId}
+          retailerName={retailer.retailerName}
+          retailerStatus={retailer.retailerStatus}
+          relationshipStatus={retailer.relationshipStatus}
         />
       </div>
     </section>
@@ -673,8 +757,14 @@ export default async function RetailerDetailPage({
 }: PageProps) {
   const { relationshipId } = await params;
 
-  const [detail, resolvedSearchParams] = await Promise.all([
+  // The capability probe runs ALONGSIDE the detail read and is independent of it: the detail
+  // requires only RETAILERS_READ, which says nothing about whether this caller may CHANGE a
+  // Retailer's lifecycle. Both derive the Vendor from the caller's own verified token; neither
+  // trusts the other. A probe failure yields `unavailable`, which hides the control — the only
+  // safe response to not knowing.
+  const [detail, manageCapability, resolvedSearchParams] = await Promise.all([
     getVendorRetailerDetail(relationshipId),
+    getVendorRetailerManageCapability(),
     searchParams,
   ]);
 
@@ -798,6 +888,18 @@ export default async function RetailerDetailPage({
       </div>
 
       <RetailerSummary retailer={retailer} />
+
+      {/*
+        The lifecycle control sits directly under the status summary it acts on, and above
+        the owner and Shops sections — it governs whether any of them can be used at all.
+        It renders nothing unless RETAILERS_MANAGE is confirmed AND the two statuses form a
+        supported synchronized pair.
+      */}
+      <RetailerLifecycleCard
+        relationshipId={relationshipId}
+        retailer={retailer}
+        capability={manageCapability.status}
+      />
 
       {/*
         The owner-management card sits between the Retailer summary and the Shops
