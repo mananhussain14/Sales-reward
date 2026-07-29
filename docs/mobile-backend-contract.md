@@ -1050,6 +1050,42 @@ database; recorded in the audit § 9. No client idempotency key is needed or add
 
 ---
 
+#### V-20 — Deactivate / reactivate a Retailer  *(new)*
+
+| Field | Value |
+| --- | --- |
+| Feature | Stop a connected Retailer trading, and put it back |
+| Role | Vendor Super Admin |
+| Permission | `RETAILERS_MANAGE` — **new**, mapped to `VENDOR_SUPER_ADMIN` and to no other role |
+| Web route | **NONE YET.** The Retailers list and detail pages exist, but no lifecycle control has been built — that is a separate milestone |
+| Server Action | — (**none exists**; no Web call site may exist yet, and the static suite asserts it) |
+| Existing table op | None. There was no operation of any kind before this one |
+| Inputs | `p_relationship_id uuid`, `p_status text` (`'ACTIVE'` \| `'SUSPENDED'`, case-sensitive) |
+| Backend-resolved | The acting Vendor, from `get_vendor_super_admin_context()`; the Retailer organization, read out of the verified relationship row |
+| Returns | `(relationship_id uuid, retailer_status text, relationship_status text, status_changed boolean)` — exactly one row |
+| Errors | `42501` authorization / target (**one identical literal for all seven paths**); `23514` invalid requested status; `55000` lifecycle unavailable (**one identical literal for all four causes**); `22P02` malformed uuid |
+| RLS & authorization | `SECURITY DEFINER`, `VOLATILE`, empty `search_path`. `authenticated` only — never `anon`, `PUBLIC` or `service_role`. No direct table write is granted to any browser role and no write policy is added |
+| Tables | `vendor_retailers`, `organizations`, `audit_logs` — **and nothing else** |
+| Storage bucket | — |
+| Idempotency | **Yes.** Both rows already at the requested status → no `UPDATE`, no audit row, no `updated_at` movement, `status_changed = false` |
+| Flutter direct? | **Yes**, once a Vendor mobile surface exists at all (Phase 3) |
+| Classification | **Backend delivered; no client** |
+| Backend change | **DONE.** `public.set_vendor_retailer_status(p_relationship_id uuid, p_status text)` was added in migration `20260811090000_vendor_retailer_lifecycle.sql`, together with the `RETAILERS_MANAGE` permission and its single `VENDOR_SUPER_ADMIN` mapping.<br><br>**THE CENTRAL FINDING: TWO ROWS MUST MOVE, ATOMICALLY.** `vendor_retailers.status` alone blocks **nobody** — no Retailer-side path consults it. `resolve_retailer_owner_organization` and `resolve_retailer_member_organization`, which every Retailer Owner, Manager and Sales Staff request passes through, never touch `vendor_retailers`; neither does `accept_retailer_staff_invitation`, `retailer_staff_invitation_gate` or the receipt path. **`organizations.status` is the block**, because all of them already require `o.status = 'ACTIVE'`. The relationship row still has to move with it, or a Vendor could keep adding Shops, Owner invitations and product assignments to a Retailer it had just switched off. Both are therefore written in **one transaction**, each with a compare-and-set predicate against the value read under its own `FOR UPDATE` lock and each row count verified; any drift aborts everything, including the audit row.<br><br>**VOCABULARY: `ACTIVE` ↔ `SUSPENDED`, and nothing else.** `DEACTIVATED` exists in both columns' `CHECK` constraints and is deliberately **not requestable** (`23514`) and **never cleared** — a current row holding it is refused with `55000`. ⚠️ **The UI word is different from the stored word:** clients say **Deactivate / Inactive / Reactivate**; the stored value stays `SUSPENDED` because that is what both constraints, every status filter and every existing audit row already use, and because `DEACTIVATED` already means something stronger here. Sending the literal `'INACTIVE'` is rejected.<br><br>**NOTHING IS CASCADED AND NOTHING IS DELETED.** `organization_members` is not touched — that column is the *Retailer Owner's* instrument (V-R milestone `20260810090000`), and overwriting it would destroy the Owner's own decisions with no way to tell them apart on the way back up. `auth.users` is never banned, deleted or updated. Memberships, roles, Shops, live **and** retired Shop assignments, product assignments, receipts, both invitation tables, profiles and audit history all survive, which is why **reactivation is a one-word write, not a rebuild** — the pgTAP suite compares primary keys before, during and after.<br><br>**EXISTING SESSIONS ARE BLOCKED ON THEIR NEXT REQUEST.** Nobody is signed out and nothing expires; every RPC re-derives authorization from `auth.uid()`. **No diagnostic change was needed:** `get_my_lifecycle_access_state()` already returns `ORGANIZATION_INACTIVE` for exactly this state, and `get_my_portal_context()` already collapses to `portal_kind = 'NONE'`. Both are **unchanged** by this migration. **Pending invitations are left untouched** — unusable while suspended, usable again afterwards if still valid.<br><br>⚠️ **MULTI-VENDOR GUARD, AND IT IS A STOPGAP.** The lifecycle change is refused (`55000`) if any other non-`DEACTIVATED` `vendor_retailers` row exists for the same Retailer, in **both** directions, because `organizations.status` is a single shared column that cannot express "blocked by Vendor A but not by Vendor B". The refusal is an `EXISTS` test and is byte-identical to the inconsistent-pair refusal, so it discloses no other Vendor id, relationship id, count, status — or even that the cause is multi-Vendor. **Tenant blocking must be redesigned before this product supports more than one active Vendor relationship per Retailer**; extending this function is not sufficient. Full reasoning: `docs/vendor-retailer-lifecycle-audit.md` § 8.<br><br>Audit: exactly one row per real transition — `RETAILER_DEACTIVATED` / `RETAILER_REACTIVATED`, entity `RETAILER_ORGANIZATION`, `entity_id` = the Retailer organization id, `organization_id` = the acting Vendor (so it lands in the Vendor's feed and is invisible to the Retailer), actor from `auth.uid()`, and six metadata keys that are all values the function proved. No email, Auth id, profile id, other-Vendor id, count or client-supplied value. |
+| Tests | pgTAP `supabase/tests/database/vendor_retailer_lifecycle_test.sql` (292); static `lib/retailers/vendor-retailer-lifecycle-contract.test.ts` (65) |
+
+> **`unassign_vendor_product_from_retailer` deliberately still works while a Retailer is
+> suspended, and that is not an oversight.** Its own contract requires the relationship to
+> *exist* but explicitly not to be `ACTIVE`, because withdrawing something is a de-escalation.
+> This milestone did not change it, and the pgTAP suite asserts the behaviour so a future reader
+> does not "fix" it. Product **assignment** is blocked, as its own contract already required.
+
+> **Vendor reads are deliberately NOT narrowed.** `list_vendor_retailers`,
+> `get_vendor_retailer_detail` and `list_vendor_retailer_shops` do not filter on status, so a
+> suspended Retailer stays visible — and therefore reactivatable — from exactly the listing the
+> Vendor already has. A read that hid inactive Retailers would make the operation one-way.
+
+---
+
 ### 3.3 Retailer Owner
 
 ---
