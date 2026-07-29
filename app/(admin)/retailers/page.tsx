@@ -142,7 +142,7 @@ function RetailerTable({ retailers }: { retailers: VendorRetailer[] }) {
  *
  * The two badges sit side by side, so the card labels which is which — on the
  * desktop table the column headers carry that, but a card has no headers and
- * "Active / Suspended" alone would not say that the company is live while the
+ * "Active / Inactive" alone would not say that the company is live while the
  * relationship is paused.
  */
 function RetailerCards({ retailers }: { retailers: VendorRetailer[] }) {

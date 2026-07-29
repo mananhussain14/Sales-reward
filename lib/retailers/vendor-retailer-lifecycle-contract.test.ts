@@ -797,36 +797,108 @@ describe("Vendor Retailer lifecycle — the existing contracts are untouched", (
 });
 
 // ============================================================================
-// No client surface was started
+// The client surface is exactly the approved one
 // ============================================================================
-describe("Vendor Retailer lifecycle — backend only", () => {
+describe("Vendor Retailer lifecycle — the Web surface is bounded", () => {
   /**
    * Application sources only.
    *
-   * `*.test.ts` files are excluded deliberately: a guard that asserts this RPC has NOT been
+   * `*.test.ts` files are excluded deliberately: a guard that constrains where this RPC is
    * wired up has to name it in order to look for it, and counting that as a call site would
-   * mean the safest file in the repository failed the safety check.
+   * mean the safest files in the repository failed the safety check.
    */
   const APP_ONLY = APP_SOURCES.filter((file) => !file.endsWith(".test.ts"));
 
-  test("56. no Web call site exists yet", () => {
-    const callers = APP_ONLY.filter((file) => readFileSync(file, "utf8").includes(FN));
+  /**
+   * ============================================================================
+   * WHY THIS SECTION CHANGED, AND WHAT IT NOW GUARANTEES
+   * ============================================================================
+   * Until the Vendor Web milestone landed, tests 56 and 57 asserted that NO application file
+   * mentioned this RPC at all — the correct assertion while the backend shipped alone, and
+   * the reason they failed the moment the Web control was added. They were doing their job.
+   *
+   * "No call site" is no longer the property worth defending; "exactly ONE call site, in the
+   * approved place" is. So the absence assertions became inventory assertions over the same
+   * files. Every way the old tests could have caught an unapproved surface, these still do —
+   * a second wrapper, a call from the Retailer list page, a dashboard card, a navigation
+   * component or an Edge Function all fail here — and they additionally pin that the one
+   * permitted wrapper is where it is supposed to be, which the old tests could not express.
+   */
+
+  /** The single server-only module permitted to name the write RPC. */
+  const WRAPPER = "lib/retailers/vendor-retailer-lifecycle.ts";
+  /** The Server Action, and the one control that submits to it. */
+  const ACTION = "app/(admin)/retailers/[relationshipId]/actions.ts";
+  const CONTROL = "app/(admin)/retailers/[relationshipId]/retailer-lifecycle-dialog.tsx";
+  const DETAIL_PAGE = "app/(admin)/retailers/[relationshipId]/page.tsx";
+
+  function relative(file: string): string {
+    return file.replace(`${ROOT}/`, "");
+  }
+
+  /**
+   * TypeScript source with comments removed.
+   *
+   * Load-bearing here for the same reason it is in the migration guards above: the Web
+   * modules explain in their headers WHICH RPC they are a wrapper for and WHY nothing else
+   * may call it, so a raw substring search would flag the very files whose documentation
+   * states the guarantee — and would flag components/ui/badge.tsx for a comment about the
+   * only writer of SUSPENDED. The property being defended is that exactly one module ISSUES
+   * the call, which is a fact about executable code.
+   */
+  function stripTsComments(source: string): string {
+    return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+  }
+
+  test("56. exactly ONE application module ISSUES the RPC, and it is the server-only wrapper", () => {
+    // The quoted literal, in comment-stripped code: the only way to actually name the
+    // function to `supabase.rpc()`.
+    const callers = APP_ONLY.filter((file) =>
+      stripTsComments(readFileSync(file, "utf8")).includes(`"${FN}"`),
+    ).map(relative);
+
     assert.deepEqual(
       callers,
-      [],
-      "the Vendor Web milestone is separate — nothing may call this RPC yet",
+      [WRAPPER],
+      "the RPC surface must stay a single server-only wrapper",
     );
   });
 
-  test("57. no Server Action or component was added for it", () => {
+  test("57. the lifecycle UI exists only on the Retailer DETAIL route", () => {
+    const uiSurfaces = APP_ONLY.filter((file) =>
+      readFileSync(file, "utf8").includes("RetailerLifecycleDialog"),
+    ).map(relative);
+
+    assert.deepEqual(
+      uiSurfaces.sort(),
+      [CONTROL, DETAIL_PAGE].sort(),
+      "no list page, dashboard card or navigation surface may carry the control",
+    );
+
+    const actionCallers = APP_ONLY.filter((file) =>
+      readFileSync(file, "utf8").includes("setVendorRetailerStatusAction"),
+    ).map(relative);
+
+    assert.deepEqual(
+      actionCallers.sort(),
+      [ACTION, CONTROL].sort(),
+      "the Server Action is reachable from exactly one control",
+    );
+  });
+
+  test("57b. the Retailer LIST page still carries no lifecycle control", () => {
+    const listPage = readFileSync(join(ROOT, "app/(admin)/retailers/page.tsx"), "utf8");
     for (const needle of [
-      "deactivateRetailer",
-      "reactivateRetailer",
-      "setVendorRetailerStatus",
-      "RetailerLifecycle",
+      FN,
+      "RetailerLifecycleDialog",
+      "setVendorRetailerStatusAction",
+      "Deactivate Retailer",
+      "Reactivate Retailer",
     ]) {
-      const hits = APP_ONLY.filter((file) => readFileSync(file, "utf8").includes(needle));
-      assert.deepEqual(hits, [], `${needle} belongs to the Web milestone, not this one`);
+      assert.ok(
+        !listPage.includes(needle),
+        `the Retailer list page must not carry ${needle} — V1 is detail-page only`,
+      );
     }
   });
 

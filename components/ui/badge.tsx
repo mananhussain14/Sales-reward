@@ -68,7 +68,24 @@ const STATUS_MAP: Record<string, StatusMeta> = {
   INVITED: { label: "Invited", tone: "amber", withIcon: "clock" },
   PENDING: { label: "Pending", tone: "amber", withIcon: "clock" },
   AWAITING: { label: "Awaiting acceptance", tone: "amber", withIcon: "clock" },
-  SUSPENDED: { label: "Suspended", tone: "amber" },
+  // "Inactive", NOT "Suspended". The stored value stays SUSPENDED everywhere — in both
+  // status columns, in the RPC argument and in the audit trail — but "suspended" reads as an
+  // accusation to a Retailer that is simply paused between contracts, and the Vendor control
+  // that writes this value is labelled Deactivate / Reactivate. The word on screen has to
+  // match the verb that produced it.
+  //
+  // BLAST RADIUS: public.set_vendor_retailer_status is the ONLY writer of SUSPENDED anywhere
+  // in this product — no operation writes it to profiles, organization_members or
+  // retailer_shops, and every path that could is a refusal rather than a write. So the only
+  // rows that can ever carry this value are organizations and vendor_retailers, both of them
+  // Retailer lifecycle, where "Inactive" is the approved wording. Changing the shared map is
+  // therefore narrower in practice than a separate mapping would be, and keeps one status
+  // reading identically everywhere.
+  //
+  // The amber tone is retained deliberately: SUSPENDED is reversible and expected to resume,
+  // while DEACTIVATED below is terminal, and the tone is the only thing that still
+  // distinguishes them once both read "Inactive".
+  SUSPENDED: { label: "Inactive", tone: "amber" },
   PROCESSING: { label: "Processing", tone: "indigo" },
   UPLOADED: { label: "Uploaded", tone: "blue" },
   SUBMITTED: { label: "Submitted", tone: "blue" },
