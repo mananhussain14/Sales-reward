@@ -197,28 +197,52 @@ describe("Vendor Product assignment writes — this milestone adds no migration"
     .filter((file) => file.endsWith(".sql"))
     .sort();
 
-  test("1. no migration after the checked one touches either assignment write", () => {
+  test("1. no migration after the checked one redefines, drops or re-grants either assignment write", () => {
     // The audit found the two assignment writes already correct, so that milestone added
     // nothing to migrate. This remains the deliberate stop for anyone who changes them:
     // a later migration is allowed to exist — the schema keeps moving for other reasons —
     // but it must not redefine, drop, or re-grant either function without this contract
     // being re-checked and LATEST_APPLIED_MIGRATION bumped with a stated reason.
+    //
+    // ASSERTED AGAINST EXECUTABLE SQL, NOT AGAINST PROSE. This test used to reject any later
+    // migration whose text merely CONTAINED one of these names, which made it impossible for
+    // a neighbouring milestone to explain in a comment why it does NOT touch the assignment
+    // path — the more careful the documentation, the louder this failed. Comments are stripped
+    // first and the check is for the statements that could actually change the contract:
+    // CREATE / CREATE OR REPLACE / DROP / ALTER on either function, GRANT or REVOKE on either,
+    // and any DDL or write against the assignment table. Every real change is still caught;
+    // a sentence about them no longer is.
     const newer = applied.filter((file) => file > LATEST_APPLIED_MIGRATION);
+    const FUNCTIONS = [
+      "assign_vendor_product_to_retailer",
+      "unassign_vendor_product_from_retailer",
+    ];
 
     for (const file of newer) {
-      const sql = readFileSync(join(MIGRATIONS_DIR, file), "utf8");
-      for (const fn of [
-        "assign_vendor_product_to_retailer",
-        "unassign_vendor_product_from_retailer",
-      ]) {
+      const code = stripComments(readFileSync(join(MIGRATIONS_DIR, file), "utf8"));
+
+      for (const fn of FUNCTIONS) {
         assert.ok(
-          !sql.includes(fn),
-          `${file} touches ${fn}; re-check this contract and bump LATEST_APPLIED_MIGRATION`,
+          !new RegExp(
+            `\\b(create|drop|alter)\\b[^;]*\\bfunction\\b[^;]*\\b${fn}\\b`,
+            "i",
+          ).test(code),
+          `${file} redefines, drops or alters ${fn}; re-check this contract and bump LATEST_APPLIED_MIGRATION`,
+        );
+        assert.ok(
+          !new RegExp(`\\b(grant|revoke)\\b[^;]*\\b${fn}\\b`, "i").test(code),
+          `${file} re-grants or revokes ${fn}; re-check this contract and bump LATEST_APPLIED_MIGRATION`,
         );
       }
+
       assert.ok(
-        !/vendor_product_retailer_assignments/.test(sql),
-        `${file} touches the assignment table; re-check this contract`,
+        !/\b(create|drop|alter|truncate)\b[^;]*\bvendor_product_retailer_assignments\b/i.test(
+          code,
+        ) &&
+          !/\b(insert\s+into|update|delete\s+from)\b[^;]*\bvendor_product_retailer_assignments\b/i.test(
+            code,
+          ),
+        `${file} changes the assignment table or its rows; re-check this contract`,
       );
     }
   });
