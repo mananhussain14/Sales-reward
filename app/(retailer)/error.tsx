@@ -1,5 +1,6 @@
 "use client";
 
+import { usePathname } from "next/navigation";
 import { cardClasses } from "@/components/ui/card";
 import { buttonClasses } from "@/components/ui/button";
 import { AlertTriangleIcon } from "@/components/ui/icons";
@@ -26,8 +27,31 @@ import { AlertTriangleIcon } from "@/components/ui/icons";
  * This is NOT an authorization surface. A user who is not authorized never
  * reaches this boundary: they are redirected to /retailer-access-denied by the
  * server layout before any of this renders. Everything here assumes an
- * authorized owner whose read failed, which is why "try again" is offered at
- * all — retrying a denial would be pointless and misleading.
+ * AUTHORIZED portal member whose read failed, which is why "try again" is
+ * offered at all — retrying a denial would be pointless and misleading.
+ *
+ * =========================================================================
+ * WHY THE SECOND ESCAPE IS THE CURRENT PATH AND NOT /retailer
+ * =========================================================================
+ * This boundary covers the WHOLE portal, and the portal has three kinds of
+ * member. /retailer is the Owner overview: its page resolves owner access for
+ * itself and redirects anyone else to /retailer-access-denied. So a Sales Staff
+ * member or a Manager who hit a transient fault, saw "Something went wrong" and
+ * took the offered way out was sent to a page that told them their account does
+ * not have access — a false authorization message caused by a failed read.
+ *
+ * It is the exact dead end @/components/retailer-portal/retailer-nav-items
+ * already refuses to link for those members, and it is how an over-sized receipt
+ * upload ended up presenting itself as an access problem.
+ *
+ * The current path is the only destination that is correct for every kind of
+ * member, because it is a page they were already on. It stays a plain anchor
+ * rather than <Link> for the original reason: after a render failure the
+ * router's client state is the thing that just broke, so a full document load is
+ * the more reliable escape.
+ *
+ * usePathname() returns the in-app path only — never a host, a query string or
+ * anything a visitor supplied — so this cannot become an open redirect.
  */
 export default function RetailerPortalError({
   reset,
@@ -51,6 +75,8 @@ export default function RetailerPortalError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+  const pathname = usePathname();
+
   return (
     <div className="mx-auto w-full max-w-2xl py-8">
       <div className={cardClasses("standard", "p-6 text-center sm:p-8")}>
@@ -80,14 +106,12 @@ export default function RetailerPortalError({
             Try again
           </button>
 
-          {/* A plain anchor, not <Link>: after a render failure the router's
-              client state is the thing that just broke, so a full document load
-              is the more reliable escape. */}
+          {/* See the placement note above: the current path, never /retailer. */}
           <a
-            href="/retailer"
+            href={pathname}
             className={buttonClasses({ variant: "outline", fullWidth: true }, "sm:w-auto")}
           >
-            Back to overview
+            Reload this page
           </a>
         </div>
       </div>
