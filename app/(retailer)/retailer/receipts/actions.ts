@@ -5,12 +5,15 @@ import { redirect } from "next/navigation";
 import { getRetailerPortalAccess } from "@/lib/staff/retailer-staff-access";
 import { getMyAssignedReceiptShops } from "@/lib/receipts/receipt-data";
 import { submitReceipt } from "@/lib/receipts/receipt-submissions";
+import { validateReceiptFile } from "@/lib/receipts/receipt-file";
+import { MAX_RECEIPT_FILE_BYTES } from "@/lib/uploads/upload-policy";
 import {
-  MAX_RECEIPT_FILE_BYTES,
-  validateReceiptFile,
-  type ReceiptFileRejection,
-} from "@/lib/receipts/receipt-file";
-import type { SubmitReceiptState } from "@/app/(retailer)/retailer/receipts/submit-receipt-state";
+  RECEIPT_DUPLICATE_ERROR,
+  RECEIPT_FILE_MESSAGES,
+  RECEIPT_GENERIC_ERROR,
+  RECEIPT_UPLOAD_FAILED_ERROR,
+  type SubmitReceiptState,
+} from "@/app/(retailer)/retailer/receipts/submit-receipt-state";
 
 /**
  * Server Action for submitting one customer receipt.
@@ -41,42 +44,15 @@ import type { SubmitReceiptState } from "@/app/(retailer)/retailer/receipts/subm
 const RECEIPTS_PATH = "/retailer/receipts";
 
 /**
- * The one message for every failure that is not a field problem.
- *
- * It covers an unauthorized caller, an unassigned or inactive shop, another Retailer's
- * shop, a shop id that does not exist, and a database outage. Collapsing them is
- * deliberate: the reservation RPC already refuses all of the addressing cases with a
- * single byte-identical exception so it cannot be used to probe another Retailer's
- * estate, and distinguishing them here would reintroduce exactly that disclosure.
+ * The user-facing sentences all live in ./submit-receipt-state.ts, and the browser reads
+ * the SAME constants for the checks it performs before sending anything. A refusal
+ * therefore reads identically whether the file never left the device or was refused here
+ * from its own bytes.
  */
-const GENERIC_ERROR =
-  "We couldn't submit that receipt. Check the details and try again.";
-
-/**
- * Shown when the reservation succeeded but the file did not reach storage.
- *
- * Safe to be specific: nothing about the provider, the bucket, the key, or the error is
- * named, and telling the person it was the UPLOAD that failed is what tells them
- * retrying the same photo is the right next step.
- */
-const UPLOAD_FAILED_ERROR =
-  "Your receipt could not be uploaded. Please check your connection and try again.";
-
-/** Shown when this person already has a live submission of this exact file. */
-const DUPLICATE_ERROR =
-  "You've already submitted this receipt. Choose a different photo, or check your history below.";
-
-/** One message per distinct, user-actionable file problem. */
-const FILE_MESSAGES: Record<ReceiptFileRejection, string> = {
-  missing: "Choose a receipt photo to upload.",
-  empty: "That file is empty. Choose a different photo.",
-  "too-large": `That file is too large. Receipts must be ${Math.floor(
-    MAX_RECEIPT_FILE_BYTES / (1024 * 1024),
-  )} MB or smaller.`,
-  "unsupported-type": "Receipts must be a JPEG, PNG or WebP image.",
-  "invalid-name": "That file name could not be read. Rename the file and try again.",
-  "too-many-files": "Upload one receipt at a time.",
-};
+const GENERIC_ERROR = RECEIPT_GENERIC_ERROR;
+const UPLOAD_FAILED_ERROR = RECEIPT_UPLOAD_FAILED_ERROR;
+const DUPLICATE_ERROR = RECEIPT_DUPLICATE_ERROR;
+const FILE_MESSAGES = RECEIPT_FILE_MESSAGES;
 
 /** Canonical UUID form: 8-4-4-4-12 hexadecimal, matched case-insensitively. */
 const UUID_PATTERN =
