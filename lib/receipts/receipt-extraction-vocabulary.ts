@@ -282,6 +282,51 @@ export const CONFIRMATION_OUTCOMES = [
 export type ConfirmationOutcome = (typeof CONFIRMATION_OUTCOMES)[number];
 
 /* ---------------------------------------------------------------------------
+ * Currency minor unit — the scale contract
+ * ------------------------------------------------------------------------- */
+
+/**
+ * The four minor units public.iso_currency_codes admits, and therefore the only values
+ * `p_currency_minor_unit` may carry. ISO 4217 uses no others for a circulating currency.
+ *
+ * A CLIENT MUST NEVER ASSUME 2. EUR has two decimal places, JPY has none, KWD has three and
+ * CLF has four, and the printed digits on a receipt mean different integers under each. The
+ * authority is the database, reached through the lookup RPC below — this list exists to
+ * validate a value, never to derive one.
+ */
+export const CURRENCY_MINOR_UNITS = [0, 2, 3, 4] as const;
+export type CurrencyMinorUnit = (typeof CURRENCY_MINOR_UNITS)[number];
+
+/** The authenticated RPC that resolves one ISO 4217 code to its official minor unit. */
+export const CURRENCY_MINOR_UNIT_RPC = "get_receipt_currency_minor_unit" as const;
+
+/**
+ * The STABLE SQLSTATE `confirm_receipt_extraction` raises when the caller's stated
+ * `p_currency_minor_unit` is NULL or is not the minor unit the confirmed currency has.
+ *
+ * WHY A CODE AND NOT A MESSAGE. It is the one refusal a client must act on programmatically
+ * — re-resolve the scale and re-send — and it must be separable from every neighbouring
+ * refusal without parsing English. Within that function 22023 is raised by this rule and
+ * nothing else: an unsupported currency, an out-of-range amount, an out-of-range date and a
+ * missing required value are all 23514, an unauthorized caller is 42501, an unknown or
+ * foreign receipt is zero rows, and an in-flight attempt is an EXTRACTION_IN_PROGRESS row
+ * rather than an error at all. The pgTAP suite pins every one of those separations.
+ *
+ * PostgREST maps SQLSTATE class 22 to HTTP 400 and carries the code in the response body,
+ * so a client reads `error.code === "22023"`.
+ */
+export const CONFIRMATION_MINOR_UNIT_MISMATCH_SQLSTATE = "22023" as const;
+
+/** Whether a value is one of the four minor units this system supports. */
+export function isCurrencyMinorUnit(value: unknown): value is CurrencyMinorUnit {
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    (CURRENCY_MINOR_UNITS as readonly number[]).includes(value)
+  );
+}
+
+/* ---------------------------------------------------------------------------
  * Monetary bounds — mirrored by CHECK constraints
  * ------------------------------------------------------------------------- */
 
