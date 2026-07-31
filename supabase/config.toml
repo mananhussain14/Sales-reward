@@ -494,6 +494,52 @@ enabled = true
 verify_jwt = true
 entrypoint = "./functions/send-retailer-staff-invitation/index.ts"
 
+# ============================================================================
+# Receipt extraction and confirmation (Milestone A) — THREE FUNCTIONS
+# ============================================================================
+# verify_jwt = true is load-bearing on all three and must stay true: it makes the gateway
+# reject an unauthenticated request before the function runs. Each function ALSO calls
+# auth.getUser() itself, which revalidates the token with the Auth server rather than
+# trusting its claims — two independent checks, because all three hold the service-role key.
+#
+# THESE THREE ARE NOT DEPLOYED TO THE HOSTED PROJECT IN MILESTONE A. They are the only
+# component that can manufacture fixture values, so they are run locally and in CI only. The
+# database migrations ARE deployable, because public.receipt_extraction_runtime.mode ships
+# 'DISABLED' and no function at any privilege level can change it — the schema is inert on a
+# project where these functions are absent.
+#
+# NO AZURE CONFIGURATION EXISTS HERE OR ANYWHERE IN MILESTONE A. No endpoint, no credential,
+# no region, no service name.
+#
+# Local-only environment (see [edge_runtime.secrets] above, and the docs) is:
+#   RECEIPT_EXTRACTION_MODE=fake          the Edge gate. Absent or anything else = disabled.
+#   RECEIPT_EXTRACTION_FIXTURE=<KEY>      names one of the eight fixtures. Unknown = refuse.
+#   RECEIPT_EXTRACTION_FAKE_PENDING_MS    simulated provider latency; defaults to 1500.
+# None of the three is ever set in a hosted project.
+
+# Requests extraction of a receipt the caller submitted. Claims, downloads, submits to the
+# fake provider and registers its operation — and deliberately STOPS at PROCESSING. It never
+# records a success; completion belongs to get-receipt-extraction alone.
+[functions.request-receipt-extraction]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/request-receipt-extraction/index.ts"
+
+# Reads extraction state and, when an attempt is genuinely in flight and the gate is open,
+# polls the provider ONCE and completes it. A SUCCEEDED or FAILED result is returned
+# regardless of the gate: disabling execution must never hide stored evidence.
+[functions.get-receipt-extraction]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/get-receipt-extraction/index.ts"
+
+# Mints a 120-second private signed URL for the caller's OWN receipt image. No public URL, no
+# listing, no deletion, no storage policy, and no bucket or object path in the response.
+[functions.receipt-image-preview]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/receipt-image-preview/index.ts"
+
 [analytics]
 enabled = true
 port = 54327

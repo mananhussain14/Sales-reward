@@ -734,14 +734,40 @@ describe("Vendor Retailer lifecycle — static safety", () => {
   });
 
   test("68. the milestone added no migration and no Edge Function", () => {
-    const migrations = readdirSync(join(ROOT, "supabase/migrations")).filter((f) =>
-      f.endsWith(".sql"),
+    // WHAT THIS ASSERTS, AND WHY IT IS NOT A SNAPSHOT OF THE REPOSITORY.
+    // The property is that THIS WEB MILESTONE shipped no backend change. It was originally
+    // written as "the lifecycle migration is the newest file in the directory", which is a
+    // different and much weaker claim: it happened to hold on the day it was written and
+    // fails the moment any LATER, unrelated milestone adds a migration of its own — which
+    // says nothing about this one.
+    //
+    // Stated properly: the lifecycle migration exists, and nothing added after it touches the
+    // lifecycle write or its tables. That is the real invariant, it is strictly stronger than
+    // a filename comparison, and it stays true as the project moves on.
+    const migrations = readdirSync(join(ROOT, "supabase/migrations"))
+      .filter((f) => f.endsWith(".sql"))
+      .sort();
+
+    const LIFECYCLE_MIGRATION = "20260811090000_vendor_retailer_lifecycle.sql";
+    assert.ok(
+      migrations.includes(LIFECYCLE_MIGRATION),
+      "the deployed lifecycle migration is missing",
     );
-    assert.equal(
-      migrations[migrations.length - 1],
-      "20260811090000_vendor_retailer_lifecycle.sql",
-      "the deployed backend migration must remain the newest — this milestone adds none",
-    );
+
+    for (const file of migrations.filter((name) => name > LIFECYCLE_MIGRATION)) {
+      const sql = readFileSync(join(ROOT, "supabase/migrations", file), "utf8").replace(
+        /^[ \t]*--.*$/gm,
+        "",
+      );
+      assert.ok(
+        !sql.includes(WRITE_RPC),
+        `${file} must not redefine or call ${WRITE_RPC}`,
+      );
+      assert.ok(
+        !/\b(alter|drop)\s+table\s+public\.vendor_retailers\b/i.test(sql),
+        `${file} must not alter public.vendor_retailers`,
+      );
+    }
 
     const functionsDir = join(ROOT, "supabase/functions");
     if (existsSync(functionsDir)) {

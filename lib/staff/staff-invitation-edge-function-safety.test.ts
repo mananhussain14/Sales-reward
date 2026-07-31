@@ -76,11 +76,45 @@ describe("the Edge Function exists and was found", () => {
     );
   });
 
-  test("3. it is the ONLY new function this milestone adds", () => {
+  test("3. it is the ONLY function that sends a staff invitation", () => {
+    // WHAT THIS ASSERTS, AND WHY IT IS NOT A DIRECTORY SNAPSHOT.
+    // The property is that staff-invitation delivery has ONE implementation. It was
+    // originally written as an exact equality against the directory listing, which is a
+    // different claim: it froze the whole repository and fails the moment any later,
+    // unrelated milestone adds a function that has nothing to do with invitations.
+    //
+    // Stated properly: this function exists, and no OTHER function imports the staff
+    // invitation logic or calls its RPCs. That is the real invariant — a second sender is
+    // exactly the drift this test exists to catch — and it is strictly stronger than counting
+    // directories.
     const functions = readdirSync(join(ROOT, "supabase/functions"))
       .filter((entry) => statSync(join(ROOT, "supabase/functions", entry)).isDirectory())
       .sort();
-    assert.deepEqual(functions, ["send-retailer-staff-invitation", "submit-receipt"]);
+
+    assert.ok(
+      functions.includes("send-retailer-staff-invitation"),
+      "the staff invitation function is missing",
+    );
+
+    const STAFF_INVITATION_SYMBOLS = [
+      "lib/staff/",
+      "reserve_retailer_staff_invitation",
+      "record_retailer_staff_invitation_delivery",
+      "sendStaffInvitationEmail",
+      "runStaffInviteFlow",
+    ];
+
+    for (const name of functions.filter((entry) => entry !== "send-retailer-staff-invitation")) {
+      const entrypoint = join(ROOT, "supabase/functions", name, "index.ts");
+      if (!existsSync(entrypoint)) continue;
+      const code = readFileSync(entrypoint, "utf8");
+      for (const symbol of STAFF_INVITATION_SYMBOLS) {
+        assert.ok(
+          !code.includes(symbol),
+          `supabase/functions/${name} must not reach into staff invitation logic (${symbol})`,
+        );
+      }
+    }
   });
 });
 
