@@ -544,10 +544,26 @@ select is(
 
 select is(
   pg_temp.input_args('confirm_receipt_extraction'),
-  array['p_submission_id', 'p_transaction_date', 'p_currency_code', 'p_total_minor',
-        'p_merchant_name', 'p_document_number', 'p_transaction_time',
+  array['p_submission_id', 'p_transaction_date', 'p_currency_code', 'p_currency_minor_unit',
+        'p_total_minor', 'p_merchant_name', 'p_document_number', 'p_transaction_time',
         'p_subtotal_minor', 'p_tax_total_minor'],
-  'confirm accepts exactly nine parameters: no org, shop, profile, extraction, entry mode or changed fields'
+  'confirm accepts exactly ten parameters: no org, shop, profile, extraction, entry mode or changed fields'
+);
+
+-- The currency lookup is the seventh authenticated RPC, and it is exactly as narrow.
+select is(
+  pg_temp.input_args('get_receipt_currency_minor_unit'), array['p_currency_code'],
+  'the currency lookup takes one code and nothing else — no submission, tenant or list mode'
+);
+select ok(
+  has_function_privilege('authenticated',
+    'public.get_receipt_currency_minor_unit(text)', 'EXECUTE'),
+  'get_receipt_currency_minor_unit is executable by authenticated'
+);
+select ok(
+  not has_function_privilege('anon',
+    'public.get_receipt_currency_minor_unit(text)', 'EXECUTE'),
+  'get_receipt_currency_minor_unit is NOT executable by anon'
 );
 
 select is(

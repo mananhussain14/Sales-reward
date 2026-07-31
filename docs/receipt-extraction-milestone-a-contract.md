@@ -140,9 +140,9 @@ whole feature with no code change, and the pgTAP suite asserts it.
 
 ---
 
-## 6. Thirteen RPCs
+## 6. Fourteen RPCs
 
-**Authenticated (6)** — `authenticated` only; `anon` revoked; **not** granted to `service_role`.
+**Authenticated (7)** — `authenticated` only; `anon` revoked; **not** granted to `service_role`.
 
 | Function | Returns |
 |---|---|
@@ -150,7 +150,8 @@ whole feature with no code change, and the pgTAP suite asserts it.
 | `request_receipt_extraction(uuid)` | outcome + attempt counters |
 | `get_my_receipt_extraction(uuid)` | the safe client projection |
 | `list_my_receipt_extraction_line_items(uuid)` | informational line items |
-| `confirm_receipt_extraction(uuid, date, text, bigint, …)` | outcome + derived entry mode |
+| `get_receipt_currency_minor_unit(text)` | the normalized code + its minor unit |
+| `confirm_receipt_extraction(uuid, date, text, smallint, bigint, …)` | outcome + derived entry mode |
 | `get_my_receipt_confirmation(uuid)` | the confirmation |
 
 **Service-role (7)** — `service_role` only; `public`, `anon` *and* `authenticated` revoked.
@@ -160,7 +161,7 @@ whole feature with no code change, and the pgTAP suite asserts it.
 `expire_stale_receipt_extraction_claims` · `get_receipt_object_reference` ·
 `get_receipt_extraction_worker_state`
 
-All thirteen are `SECURITY DEFINER` with `set search_path = ''`, fully schema-qualified, no
+All fourteen are `SECURITY DEFINER` with `set search_path = ''`, fully schema-qualified, no
 dynamic SQL.
 
 ### One authorization predicate
@@ -311,13 +312,56 @@ source-safety test asserts no Edge Function passes `NULL`.
 
 ## 9. Confirmation
 
-**Required:** `transaction_date`, `currency_code`, `total_minor`.
+**Required:** `transaction_date`, `currency_code`, `currency_minor_unit`, `total_minor`.
 **Optional:** `merchant_name`, `document_number`, `transaction_time`, `subtotal_minor`,
 `tax_total_minor`.
 
-Nine parameters in total. There is **no** parameter for an organization id, shop id, profile id,
+Ten parameters in total. There is **no** parameter for an organization id, shop id, profile id,
 membership id, extraction id, entry mode, changed-fields list or duplicate signal — every one is
 derived.
+
+### The currency minor unit is resolved by the backend, never assumed by a client
+
+**A client must never assume two decimal places.** EUR has 2, **JPY has 0**, **KWD has 3** and
+**CLF has 4**, and all four are seeded and confirmable. `public.iso_currency_codes.minor_unit` is
+the only authority; `get_receipt_currency_minor_unit(text)` is how a client asks it.
+
+Ask it whenever the scale is not already known from the backend — the extraction carries no
+`currency_minor_unit`, staff change the currency on the review form, or staff start a manual
+confirmation. The RPC normalizes with trim + upper, returns the normalized code and its minor
+unit, and returns **zero rows** for an unsupported, blank or null code. It is `authenticated`
+only, gated by the same `RECEIPT_EXTRACTION_REVIEW` resolver as the rest, and reads nothing but
+the reference table — `iso_currency_codes` keeps RLS with zero policies and zero table grants.
+
+**Confirmation states the scale it used, and the backend verifies it.** `p_currency_minor_unit`
+is a `smallint`, **required** — no default. The currency is resolved against
+`iso_currency_codes` first; an unsupported code is refused as it always was. The stated minor
+unit must then **equal** the stored one, and `NULL` counts as a mismatch. The parameter is a
+declaration the backend checks and discards: nothing is stored from it and no amount is scaled
+anywhere in SQL.
+
+Without it the hole was silent. Given the integer `1000` and the code `JPY` there is no way,
+after the call, to tell ¥1000 from ¥10.00 scaled as though JPY had two decimals — both arrive
+as the same integer, into an **immutable** row with no correction path.
+
+| Condition | Result | Distinguishable by |
+|---|---|---|
+| unauthenticated / not Sales Staff / wrong receipt owner | `42501`, or zero rows for an unknown or foreign receipt | SQLSTATE / row count |
+| an attempt is `QUEUED` or `PROCESSING` | `EXTRACTION_IN_PROGRESS` row | outcome, not an error |
+| unsupported currency code | `23514` | SQLSTATE |
+| invalid amount, date or text length | `23514` | SQLSTATE |
+| **stated minor unit is NULL or wrong** | **`22023`** (`invalid_parameter_value`) | **SQLSTATE** |
+
+`22023` is raised by this rule and **nothing else** in the function, so a client maps it without
+reading a word of English (`lib/receipts/receipt-extraction-vocabulary.ts` exports it as
+`CONFIRMATION_MINOR_UNIT_MISMATCH_SQLSTATE`). PostgREST maps class `22` to HTTP 400 and carries
+the code in the body. The message names no table, column or expected value; a caller that wants
+the official number has an RPC for it.
+
+`changed_fields` is unaffected: the minor unit is a function of `currency_code`, so changing the
+currency reports `currency_code` **once**. Migration `20260814090000` **drops** the retired
+nine-argument signature rather than overloading it, so the old call path is not merely
+discouraged — it does not exist.
 
 **One rule blocks confirmation**, not five: an attempt that is `QUEUED` or `PROCESSING` yields
 `EXTRACTION_IN_PROGRESS`, because confirming mid-flight would race the success write. Everything
@@ -395,6 +439,10 @@ an endpoint every Sales Staff member can call.
 
 Integer minor units throughout, `bigint`, non-negative, ceiling 10¹². Zero is valid (a fully
 discounted receipt is real) and carries `ZERO_TOTAL`.
+
+**How many minor units make a major one is a property of the currency, and the backend owns it.**
+See §9 — `get_receipt_currency_minor_unit` resolves it, confirmation requires the client to state
+the value it used, and a mismatch is refused with `22023`. No client may assume two decimals.
 
 **No floating point anywhere.** The minor-unit integer is assembled by string concatenation, so
 `19.99` becomes the characters `"1999"` and then the integer `1999` — never the double `19.99`

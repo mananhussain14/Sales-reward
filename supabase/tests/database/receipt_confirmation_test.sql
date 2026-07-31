@@ -120,11 +120,18 @@ begin
 end;
 $$;
 
-/* Confirms with the canonical values, overriding exactly one of them. */
+/*
+ * Confirms with the canonical values, overriding exactly one of them.
+ *
+ * p_minor defaults to 2, the minor unit AED actually has, so every pre-existing scenario
+ * states the correct scale and exercises the same paths it always did. The minor-unit rule
+ * itself is driven explicitly in SECTION K.
+ */
 create function pg_temp.confirm(
   p_submission uuid,
   p_date date default date '2026-07-12',
   p_currency text default 'AED',
+  p_minor smallint default 2::smallint,
   p_total bigint default 123456,
   p_merchant text default 'Lulu Hypermarket',
   p_document text default 'INV-2026/004512',
@@ -135,15 +142,35 @@ create function pg_temp.confirm(
   select outcome || '|' || coalesce(entry_mode, '-') || '|'
          || coalesce(array_to_string(changed_fields, ','), '-')
   from public.confirm_receipt_extraction(
-    p_submission, p_date, p_currency, p_total, p_merchant, p_document, p_time,
+    p_submission, p_date, p_currency, p_minor, p_total, p_merchant, p_document, p_time,
     p_subtotal, p_tax);
 $$;
 
 create function pg_temp.confirm_sqlstate(
-  p_submission uuid, p_date date, p_currency text, p_total bigint
+  p_submission uuid, p_date date, p_currency text, p_total bigint,
+  p_minor smallint default 2::smallint
 ) returns text language plpgsql as $$
 begin
-  perform * from public.confirm_receipt_extraction(p_submission, p_date, p_currency, p_total);
+  perform * from public.confirm_receipt_extraction(
+    p_submission, p_date, p_currency, p_minor, p_total);
+  return null;
+exception when others then return sqlstate;
+end;
+$$;
+
+/* The minor unit an authorized caller is told to use, or '-' when no row comes back. */
+create function pg_temp.lookup_minor(p_code text) returns text
+language sql stable as $$
+  select coalesce(
+    (select currency_code || '|' || minor_unit
+     from public.get_receipt_currency_minor_unit(p_code)),
+    '-');
+$$;
+
+create function pg_temp.lookup_sqlstate(p_code text) returns text
+language plpgsql as $$
+begin
+  perform * from public.get_receipt_currency_minor_unit(p_code);
   return null;
 exception when others then return sqlstate;
 end;
@@ -189,7 +216,7 @@ begin
 
   insert into t_ids
   select 'sub' || g, pg_temp.new_submission(v_retailer, v_shop, v_sales)
-  from generate_series(1, 22) g;
+  from generate_series(1, 30) g;
 
   insert into t_ids values ('sub_other', pg_temp.new_submission(v_retailer, v_shop, v_other));
 end;
@@ -202,10 +229,10 @@ update public.receipt_extraction_runtime set mode = 'FAKE' where id;
 -- ============================================================================
 select is(
   pg_temp.input_args('confirm_receipt_extraction'),
-  array['p_submission_id', 'p_transaction_date', 'p_currency_code', 'p_total_minor',
-        'p_merchant_name', 'p_document_number', 'p_transaction_time',
+  array['p_submission_id', 'p_transaction_date', 'p_currency_code', 'p_currency_minor_unit',
+        'p_total_minor', 'p_merchant_name', 'p_document_number', 'p_transaction_time',
         'p_subtotal_minor', 'p_tax_total_minor'],
-  'exactly nine parameters — no org, shop, profile, membership, extraction, entry mode, changed fields or duplicate signal'
+  'exactly ten parameters — no org, shop, profile, membership, extraction, entry mode, changed fields or duplicate signal'
 );
 
 select ok(
@@ -214,6 +241,26 @@ select ok(
     'p_retailer_shop_id', 'p_profile_id', 'p_is_duplicate'
   ]),
   'and none of the forbidden ones exists'
+);
+
+-- The minor unit is REQUIRED. A default would let a caller omit the one value this whole
+-- change exists to obtain, which is the defect rather than a mitigation of it.
+select is(
+  (select p.pronargdefaults::int from pg_proc p
+   join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public' and p.proname = 'confirm_receipt_extraction'),
+  5,
+  'exactly five parameters carry defaults — p_currency_minor_unit is not one of them'
+);
+
+-- The smallest integer type the schema uses for a minor unit, matching
+-- public.iso_currency_codes.minor_unit and get_my_receipt_extraction.currency_minor_unit.
+select is(
+  (select pg_catalog.format_type(p.proargtypes[3], null) from pg_proc p
+   join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public' and p.proname = 'confirm_receipt_extraction'),
+  'smallint',
+  'p_currency_minor_unit is a smallint'
 );
 
 -- No duplicate-signal column was added to the table either.
@@ -573,13 +620,14 @@ select is(
 -- Access: someone else's receipt is invisible, not an error.
 select is(
   (select count(*)::int from public.confirm_receipt_extraction(
-     (select id from t_ids where label='sub_other'), date '2026-07-12', 'AED', 100)),
+     (select id from t_ids where label='sub_other'), date '2026-07-12', 'AED',
+     2::smallint, 100)),
   0,
   'confirming ANOTHER staff member''s receipt returns zero rows'
 );
 select is(
   (select count(*)::int from public.confirm_receipt_extraction(
-     gen_random_uuid(), date '2026-07-12', 'AED', 100)),
+     gen_random_uuid(), date '2026-07-12', 'AED', 2::smallint, 100)),
   0,
   'and an unknown id is byte-identical'
 );
@@ -657,6 +705,327 @@ select ok(
    from public.audit_logs where action = 'RECEIPT_CONFIRMED'),
   'the metadata records the derived mode and the changed FIELD NAMES'
 );
+
+-- ============================================================================
+-- SECTION K — the currency minor-unit contract
+-- ============================================================================
+-- Every monetary value here is an integer number of MINOR units, and how many minor units
+-- make a major one is a property of the CURRENCY: 2 for EUR, 0 for JPY, 3 for KWD, 4 for CLF.
+-- The shipped nine-parameter contract took the integer and the code and never asked which
+-- scale the client had used, so a client assuming two decimals stored a JPY total 100x too
+-- large into an immutable row. These tests pin the fix: the client must STATE the scale, and
+-- the backend refuses any statement that is not the official one.
+--
+-- The runtime gate is still DISABLED from SECTION I, which is deliberate — manual
+-- confirmation never consults it, and these confirmations prove that stays true.
+
+-- ---- The lookup RPC --------------------------------------------------------
+select pg_temp.sign_out();
+select is(pg_temp.lookup_sqlstate('EUR'), '42501',
+          'an UNAUTHENTICATED caller cannot resolve a minor unit');
+
+select pg_temp.act_as((select id from t_ids where label='sales'));
+
+select is(pg_temp.lookup_minor('EUR'), 'EUR|2', 'EUR resolves to 2');
+select is(pg_temp.lookup_minor('JPY'), 'JPY|0', 'JPY resolves to 0 — no minor unit at all');
+select is(pg_temp.lookup_minor('KWD'), 'KWD|3', 'KWD resolves to 3');
+select is(pg_temp.lookup_minor('CLF'), 'CLF|4', 'CLF resolves to 4');
+
+select is(pg_temp.lookup_minor('  jpy  '), 'JPY|0',
+          'the lookup normalises with trim + upper, exactly as confirmation does');
+
+select is(pg_temp.lookup_minor('ZZZ'), '-', 'an unsupported code yields NO ROW, not an error');
+select is(pg_temp.lookup_minor(''),    '-', 'a blank code is byte-identical');
+select is(pg_temp.lookup_minor('   '), '-', 'whitespace only, likewise');
+select is(pg_temp.lookup_minor(null),  '-', 'and NULL, likewise');
+
+select is(
+  pg_temp.input_args('get_receipt_currency_minor_unit'), array['p_currency_code'],
+  'the lookup takes one currency code and nothing else'
+);
+
+-- It is not a list endpoint: two columns out, and no way to ask for the whole table.
+select is(
+  (select array_agg(x.name order by x.ord)
+   from pg_proc p
+   join pg_namespace n on n.oid = p.pronamespace
+   cross join lateral unnest(p.proargnames, p.proargmodes) with ordinality as x(name, mode, ord)
+   where n.nspname = 'public' and p.proname = 'get_receipt_currency_minor_unit'
+     and x.mode = 't'),
+  array['currency_code', 'minor_unit'],
+  'and returns exactly the normalized code and its minor unit'
+);
+
+-- ---- Grants ----------------------------------------------------------------
+select ok(
+  has_function_privilege('authenticated',
+    'public.get_receipt_currency_minor_unit(text)', 'EXECUTE'),
+  'authenticated may call the lookup'
+);
+select ok(
+  not has_function_privilege('anon',
+    'public.get_receipt_currency_minor_unit(text)', 'EXECUTE'),
+  'anon may NOT call the lookup'
+);
+-- The lookup is a NARROW WINDOW, not a table grant. Both independent blocks on
+-- public.iso_currency_codes are still in place.
+select ok(
+  not has_table_privilege('authenticated', 'public.iso_currency_codes', 'SELECT'),
+  'authenticated STILL cannot read iso_currency_codes directly'
+);
+select ok(
+  not has_table_privilege('anon', 'public.iso_currency_codes', 'SELECT'),
+  'nor can anon'
+);
+select is(
+  (select count(*)::int from pg_policies
+   where schemaname = 'public' and tablename = 'iso_currency_codes'),
+  0,
+  'and no RLS policy was added to it'
+);
+
+-- ---- The old signature is gone, not overloaded ------------------------------
+-- An overload would have kept its grant to `authenticated` and left the insecure call path
+-- reachable by name forever. This is the assertion that it did not survive.
+select is(
+  to_regprocedure('public.confirm_receipt_extraction(uuid, date, text, bigint, text, text, time without time zone, bigint, bigint)')::text,
+  null,
+  'THE OLD NINE-ARGUMENT CONFIRMATION NO LONGER EXISTS'
+);
+select is(
+  (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public' and p.proname = 'confirm_receipt_extraction'),
+  1,
+  'exactly ONE confirmation function exists — no overload was left behind'
+);
+select ok(
+  has_function_privilege('authenticated',
+    'public.confirm_receipt_extraction(uuid, date, text, smallint, bigint, text, text, time without time zone, bigint, bigint)',
+    'EXECUTE'),
+  'the new signature is granted to authenticated'
+);
+select ok(
+  not has_function_privilege('anon',
+    'public.confirm_receipt_extraction(uuid, date, text, smallint, bigint, text, text, time without time zone, bigint, bigint)',
+    'EXECUTE'),
+  'and revoked from anon'
+);
+
+-- ---- The four scales confirm ------------------------------------------------
+select is(
+  pg_temp.confirm((select id from t_ids where label='sub23'),
+                  p_currency := 'EUR', p_minor := 2::smallint),
+  'CONFIRMED|MANUAL|',
+  'EUR with 2 confirms'
+);
+select is(
+  pg_temp.confirm((select id from t_ids where label='sub24'),
+                  p_currency := 'JPY', p_minor := 0::smallint),
+  'CONFIRMED|MANUAL|',
+  'JPY with 0 confirms — a currency with NO minor unit is not a special case'
+);
+select is(
+  pg_temp.confirm((select id from t_ids where label='sub25'),
+                  p_currency := 'KWD', p_minor := 3::smallint),
+  'CONFIRMED|MANUAL|',
+  'KWD with 3 confirms'
+);
+select is(
+  pg_temp.confirm((select id from t_ids where label='sub26'),
+                  p_currency := 'CLF', p_minor := 4::smallint),
+  'CONFIRMED|MANUAL|',
+  'CLF with 4 confirms'
+);
+
+-- The stored row reads back with the minor unit the backend resolved, not one the client sent.
+select is(
+  (select currency_code || '|' || currency_minor_unit || '|' || total_minor
+   from public.get_my_receipt_confirmation((select id from t_ids where label='sub24'))),
+  'JPY|0|123456',
+  'and the confirmation reads back as ¥123456, unscaled, with minor unit 0'
+);
+
+-- ---- A wrong scale is REFUSED, with its own stable SQLSTATE ------------------
+select is(
+  pg_temp.confirm_sqlstate((select id from t_ids where label='sub27'),
+                           date '2026-07-12', 'JPY', 123456, 2::smallint),
+  '22023',
+  'JPY with 2 IS REFUSED — the exact silent 100x error this migration exists to stop'
+);
+select is(
+  pg_temp.confirm_sqlstate((select id from t_ids where label='sub27'),
+                           date '2026-07-12', 'KWD', 123456, 2::smallint),
+  '22023',
+  'KWD with 2 is refused'
+);
+select is(
+  pg_temp.confirm_sqlstate((select id from t_ids where label='sub27'),
+                           date '2026-07-12', 'CLF', 123456, 2::smallint),
+  '22023',
+  'CLF with 2 is refused'
+);
+select is(
+  pg_temp.confirm_sqlstate((select id from t_ids where label='sub27'),
+                           date '2026-07-12', 'EUR', 123456, 0::smallint),
+  '22023',
+  'and EUR with 0 is refused just the same — the rule is symmetric, not a JPY special case'
+);
+select is(
+  pg_temp.confirm_sqlstate((select id from t_ids where label='sub27'),
+                           date '2026-07-12', 'AED', 123456, null::smallint),
+  '22023',
+  'a NULL minor unit is refused — stating nothing is the same defect as stating the wrong thing'
+);
+
+select is(
+  (select count(*)::int from public.receipt_confirmations
+   where receipt_submission_id = (select id from t_ids where label='sub27')),
+  0,
+  'and NOTHING was written by any of them'
+);
+
+-- ---- 22023 means ONE thing, so Flutter can map it without reading English -----
+select is(
+  pg_temp.confirm_sqlstate((select id from t_ids where label='sub27'),
+                           date '2026-07-12', 'ZZZ', 123456, 2::smallint),
+  '23514',
+  'an UNSUPPORTED currency is still 23514 — resolved before the scale is considered'
+);
+select is(
+  pg_temp.confirm_sqlstate((select id from t_ids where label='sub27'),
+                           date '2026-07-12', 'JPY', -1, 0::smallint),
+  '23514',
+  'an INVALID AMOUNT is still 23514'
+);
+select is(
+  pg_temp.confirm_sqlstate((select id from t_ids where label='sub27'),
+                           date '1999-12-31', 'JPY', 100, 0::smallint),
+  '23514',
+  'an out-of-range DATE is still 23514'
+);
+select is(
+  pg_temp.confirm_sqlstate((select id from t_ids where label='sub27'),
+                           null, 'JPY', 100, 0::smallint),
+  '23514',
+  'a MISSING required value is still 23514'
+);
+
+-- An unsupported code paired with a wrong scale reports the currency, not the scale: there is
+-- no official minor unit to have disagreed with.
+select is(
+  pg_temp.confirm_sqlstate((select id from t_ids where label='sub27'),
+                           date '2026-07-12', 'ZZZ', 100, 9::smallint),
+  '23514',
+  'an unsupported code with a nonsense scale is an unsupported CODE, unambiguously'
+);
+
+-- The other four refusal shapes, each distinguishable from 22023 without parsing text.
+select pg_temp.sign_out();
+select is(
+  pg_temp.confirm_sqlstate((select id from t_ids where label='sub27'),
+                           date '2026-07-12', 'JPY', 100, 2::smallint),
+  '42501',
+  'UNAUTHENTICATED is 42501, raised before the scale is ever examined'
+);
+select pg_temp.act_as((select id from t_ids where label='other'));
+select is(
+  (select count(*)::int from public.confirm_receipt_extraction(
+     (select id from t_ids where label='sub27'), date '2026-07-12', 'JPY',
+     2::smallint, 100)),
+  0,
+  'ANOTHER member''s receipt is ZERO ROWS, not 22023 — ownership still outranks validation'
+);
+
+-- EXTRACTION_IN_PROGRESS is an OUTCOME ROW, so it is not an error code at all.
+select pg_temp.sign_out();
+update public.receipt_extraction_runtime set mode = 'FAKE' where id;
+select pg_temp.act_as((select id from t_ids where label='sales'));
+select (select outcome from public.request_receipt_extraction(
+          (select id from t_ids where label='sub28'))) as queued_28;
+select is(
+  pg_temp.confirm((select id from t_ids where label='sub28'),
+                  p_currency := 'JPY', p_minor := 2::smallint),
+  'EXTRACTION_IN_PROGRESS|-|-',
+  'an in-flight attempt still blocks FIRST — a wrong scale is never reported mid-flight'
+);
+
+-- ---- The submitter-only and immutability guarantees are untouched -------------
+select is(
+  (select count(*)::int from public.get_my_receipt_confirmation(
+     (select id from t_ids where label='sub24'))),
+  1,
+  'the submitter reads their own JPY confirmation'
+);
+select pg_temp.act_as((select id from t_ids where label='other'));
+select is(
+  (select count(*)::int from public.get_my_receipt_confirmation(
+     (select id from t_ids where label='sub24'))),
+  0,
+  'and another Sales Staff member at the SAME Retailer cannot'
+);
+
+select pg_temp.act_as((select id from t_ids where label='sales'));
+select is(
+  pg_temp.confirm((select id from t_ids where label='sub24'),
+                  p_currency := 'JPY', p_minor := 0::smallint, p_total := 1),
+  'ALREADY_CONFIRMED|MANUAL|',
+  'a JPY confirmation is still immutable through the RPC'
+);
+select is(
+  (select total_minor from public.receipt_confirmations
+   where receipt_submission_id = (select id from t_ids where label='sub24')),
+  123456::bigint,
+  'and the stored total is untouched'
+);
+
+select pg_temp.sign_out();
+select throws_ok(
+  format($q$update public.receipt_confirmations set currency_code = 'EUR' where receipt_submission_id = %L$q$,
+         (select id from t_ids where label='sub24')),
+  '23514', null, 'nor can its currency be rewritten to one with a different scale');
+
+-- ---- entry_mode and changed_fields are derived exactly as before --------------
+-- The minor unit is a FUNCTION of currency_code, so changing the currency produces
+-- 'currency_code' and nothing more. A second entry would double-count one act.
+select pg_temp.extract_for((select id from t_ids where label='sales'),
+                           (select id from t_ids where label='sub29')) is not null as e29;
+select pg_temp.extract_for((select id from t_ids where label='sales'),
+                           (select id from t_ids where label='sub30')) is not null as e30;
+select pg_temp.act_as((select id from t_ids where label='sales'));
+
+select is(
+  pg_temp.confirm((select id from t_ids where label='sub29')),
+  'CONFIRMED|EXTRACTED|',
+  'an unchanged AED confirmation is still EXTRACTED with no changed fields'
+);
+select is(
+  pg_temp.confirm((select id from t_ids where label='sub30'),
+                  p_currency := 'JPY', p_minor := 0::smallint),
+  'CONFIRMED|MIXED|currency_code',
+  'switching an AED extraction to JPY reports currency_code ONCE — no currency_minor_unit entry'
+);
+select ok(
+  not exists (
+    select 1 from public.receipt_confirmations
+    where 'currency_minor_unit' = any(changed_fields)
+       or 'minor_unit' = any(changed_fields)),
+  'and no confirmation anywhere names a minor unit in changed_fields'
+);
+
+-- Nothing about the minor unit reaches the audit trail either.
+select pg_temp.sign_out();
+select is(
+  (select count(*)::int from public.audit_logs
+   where action = 'RECEIPT_CONFIRMED'
+     and (metadata ? 'currency_minor_unit' or metadata ? 'minor_unit'
+          or metadata::text like '%JPY%' or metadata::text like '%KWD%'
+          or metadata::text like '%CLF%')),
+  0,
+  'the audit event carries no minor unit and still no currency'
+);
+
+-- Leave the gate as SECTION I found it.
+update public.receipt_extraction_runtime set mode = 'DISABLED' where id;
 
 select * from finish();
 
