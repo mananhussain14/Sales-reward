@@ -463,20 +463,146 @@ describe("7. this is a forward migration, and the pgTAP suite follows the new co
     assert.ok(!shipped.includes("p_currency_minor_unit"), `${CLIENT_OPS} was edited in place`);
   });
 
-  test("no migration already on main was modified", () => {
-    let changed: string;
+  /**
+   * Lists migration paths that differ from origin/main under a given --diff-filter.
+   *
+   * Returns null when git cannot answer — no git, no origin/main, or a shallow checkout —
+   * so a caller can skip rather than pass vacuously.
+   */
+  function migrationsDiffering(filter: string): string[] | null {
     try {
-      changed = execFileSync(
+      return execFileSync(
         "git",
-        ["diff", "--name-only", "origin/main", "--", "supabase/migrations"],
+        [
+          "diff",
+          "--name-only",
+          `--diff-filter=${filter}`,
+          "origin/main",
+          "--",
+          "supabase/migrations",
+        ],
         { cwd: ROOT, encoding: "utf8", env: gitEnv() },
-      );
+      )
+        .split("\n")
+        .filter(Boolean);
     } catch {
-      // No git, no origin/main, or a shallow checkout. The assertion above still holds.
+      return null;
+    }
+  }
+
+  test("no migration already on main was modified or deleted", () => {
+    // --diff-filter=MD: MODIFIED or DELETED only.
+    //
+    // WHY THE FILTER IS LOAD-BEARING. This assertion used to run a bare
+    // `git diff --name-only origin/main -- supabase/migrations`, which also reports ADDED
+    // files. That made it forbid adding ANY new migration, ever — the opposite of what its
+    // own name says, and a guard every future migration milestone would have had to
+    // weaken or delete. It went unnoticed because `git diff` cannot see UNTRACKED files,
+    // so a full run performed before `git add` passed while the very same tree failed once
+    // the files were staged. Verification therefore has to run against the committed tree,
+    // and this guard has to name the change KIND it actually cares about.
+    //
+    // Rewriting history that is already on main is the real hazard: a migration other
+    // people have applied cannot be edited, because their database will never re-run it.
+    // Adding a new one is ordinary forward progress and is what MD deliberately permits.
+    const touched = migrationsDiffering("MD");
+    if (touched === null) return;
+    assert.deepEqual(
+      touched,
+      [],
+      `migrations already on origin/main must not be modified or deleted:\n${touched.join("\n")}`,
+    );
+  });
+
+  /**
+   * Every migration this branch ADDS relative to origin/main — whether it has been staged
+   * yet or not.
+   *
+   * `git diff` cannot see untracked files, so a tracked-only answer would change depending
+   * on whether `git add` had been run. That is precisely the blind spot that let a broken
+   * suite look green, so this unions the tracked additions with the untracked ones and
+   * gives the same answer either way.
+   */
+  function addedMigrations(): string[] | null {
+    const tracked = migrationsDiffering("A");
+    if (tracked === null) return null;
+
+    let untracked: string[];
+    try {
+      untracked = execFileSync(
+        "git",
+        ["ls-files", "--others", "--exclude-standard", "--", "supabase/migrations"],
+        { cwd: ROOT, encoding: "utf8", env: gitEnv() },
+      )
+        .split("\n")
+        .filter(Boolean);
+    } catch {
+      untracked = [];
+    }
+
+    return [...new Set([...tracked, ...untracked])].sort();
+  }
+
+  test("adding a new migration is permitted, and this branch does add some", () => {
+    // The other half of the same rule, asserted rather than assumed. If a future refactor
+    // reintroduced the over-broad command, this test would start failing — which is the
+    // point: the two together pin the guard to "modified or deleted", not "different".
+    const added = addedMigrations();
+    if (added === null) return;
+
+    for (const path of added) {
+      assert.match(
+        path,
+        /^supabase\/migrations\/\d{14}_[a-z0-9_]+\.sql$/,
+        `an added migration has a non-conforming name: ${path}`,
+      );
+    }
+
+    // This branch adds the campaign work and the assignment timeline it rests on. Naming
+    // them here means a reviewer can see exactly which additions the guard is tolerating.
+    const names = added.map((path) => path.replace("supabase/migrations/", ""));
+    for (const expected of [
+      "20260814210000_vendor_product_assignment_history.sql",
+      "20260815090000_vendor_campaign_foundation.sql",
+      "20260815210000_vendor_campaign_operations.sql",
+    ]) {
+      assert.ok(names.includes(expected), `expected this branch to add ${expected}`);
+    }
+  });
+
+  test("every migration on origin/main is still present and byte-identical", () => {
+    // The strongest form of the rule, and the one that does not depend on --diff-filter
+    // behaving as documented: read what origin/main has, and compare each file's bytes.
+    // A deletion shows up as a missing file; an edit shows up as a hash mismatch.
+    let mainFiles: string[];
+    try {
+      mainFiles = execFileSync(
+        "git",
+        ["ls-tree", "-r", "--name-only", "origin/main", "--", "supabase/migrations"],
+        { cwd: ROOT, encoding: "utf8", env: gitEnv() },
+      )
+        .split("\n")
+        .filter(Boolean);
+    } catch {
       return;
     }
-    const touched = changed.split("\n").filter(Boolean);
-    assert.deepEqual(touched, [], `existing migrations must not change:\n${touched.join("\n")}`);
+
+    assert.ok(mainFiles.length > 0, "origin/main should carry migrations");
+
+    for (const path of mainFiles) {
+      const onMain = execFileSync("git", ["show", `origin/main:${path}`], {
+        cwd: ROOT,
+        encoding: "utf8",
+        env: gitEnv(),
+        maxBuffer: 32 * 1024 * 1024,
+      });
+      assert.ok(existsSync(join(ROOT, path)), `${path} was deleted from this branch`);
+      assert.equal(
+        readFileSync(join(ROOT, path), "utf8"),
+        onMain,
+        `${path} differs from origin/main; a migration already applied elsewhere cannot be edited`,
+      );
+    }
   });
 
   test("the pgTAP suite asserts the ten-parameter list and the old signature's absence", () => {
