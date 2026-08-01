@@ -149,6 +149,7 @@ const campaignRow = {
   audience_mode: "RETAILER_GROUPS",
   performance_scope: "RETAILER_TEAM",
   product_scope: "SELECTED_PRODUCTS",
+  product_eligibility_resolution: "SNAPSHOT",
   stacking_mode: "EXCLUSIVE",
   exclusivity_key: "WINTER BONUS",
   priority: 50,
@@ -210,6 +211,25 @@ describe("normalizeVendorCampaigns", () => {
   test("12. an unrecognized stacking mode is drift, NOT a default", () => {
     const result = normalizeVendorCampaigns([{ ...campaignRow, stacking_mode: "MAYBE" }]);
     assert.deepEqual(result, { status: "malformed", reason: "stacking_mode" });
+  });
+
+  test("12b. an unrecognized product eligibility resolution is drift", () => {
+    // A campaign whose resolution is unknown must not render as either behaviour: the two
+    // make opposite promises about whether the product list can move.
+    const result = normalizeVendorCampaigns([
+      { ...campaignRow, product_eligibility_resolution: "SOMETIMES" },
+    ]);
+    assert.deepEqual(result, {
+      status: "malformed",
+      reason: "product_eligibility_resolution",
+    });
+  });
+
+  test("12c. the resolution is carried through to the UI type", () => {
+    const result = normalizeVendorCampaigns([campaignRow]);
+    assert.equal(result.status, "ok");
+    if (result.status !== "ok") return;
+    assert.equal(result.campaigns[0].productEligibilityResolution, "SNAPSHOT");
   });
 
   test("13. an unrecognized rule type is drift", () => {
@@ -312,6 +332,7 @@ describe("normalizeVersionConfig", () => {
     audience_mode: "ALL_RETAILERS",
     performance_scope: "INDIVIDUAL_STAFF",
     product_scope: "ALL_ELIGIBLE_PRODUCTS",
+    product_eligibility_resolution: "LIVE_TEMPORAL",
     stacking_mode: "STACKABLE",
     exclusivity_key: null,
     priority: 0,
@@ -344,6 +365,17 @@ describe("normalizeVersionConfig", () => {
     if (result.status !== "ok") return;
     assert.equal(result.version.eligibleProductCount, 0);
     assert.equal(result.version.productScope, "ALL_ELIGIBLE_PRODUCTS");
+  });
+
+  test("23b. a missing resolution fails the version read", () => {
+    // Required on a version: the screen cannot describe the product list without it.
+    const result = normalizeVersionConfig([
+      { ...row, product_eligibility_resolution: null },
+    ]);
+    assert.deepEqual(result, {
+      status: "malformed",
+      reason: "product_eligibility_resolution",
+    });
   });
 
   test("24. a missing start instant fails the read", () => {
@@ -448,6 +480,7 @@ const ownerRow = {
   timezone_name: "Asia/Dubai",
   performance_scope: "RETAILER_TEAM",
   product_scope: "SELECTED_PRODUCTS",
+  product_eligibility_resolution: "SNAPSHOT",
   stacking_mode: "EXCLUSIVE",
   reward_recipient_scope: "CONTRIBUTING_STAFF",
   rule_type: "TARGET_BONUS",
@@ -516,6 +549,25 @@ describe("normalizeAssignedCampaigns — the disclosure boundary", () => {
     assert.equal(result.campaigns[0].vendorName, null);
     assert.equal(result.campaigns[0].campaignStatus, null);
     assert.equal(result.campaigns[0].campaignName, "Winter Push");
+  });
+
+  test("34b. the assigned read carries the resolution to Retailers and staff alike", () => {
+    // Deliberately NOT withheld: it is the difference between "eligible when each sale
+    // happens" and "frozen at publication", and a Retailer who cannot tell those apart
+    // cannot read their own product list correctly.
+    const result = normalizeAssignedCampaigns([ownerRow]);
+    assert.equal(result.status, "ok");
+    if (result.status !== "ok") return;
+    assert.equal(result.campaigns[0].productEligibilityResolution, "SNAPSHOT");
+  });
+
+  test("34c. a missing resolution fails the assigned read", () => {
+    const row = { ...ownerRow };
+    delete (row as Record<string, unknown>).product_eligibility_resolution;
+    assert.deepEqual(normalizeAssignedCampaigns([row]), {
+      status: "malformed",
+      reason: "product_eligibility_resolution",
+    });
   });
 
   test("35. an unrecognized performance scope is drift", () => {

@@ -27,6 +27,7 @@ import {
   isGroupStatus,
   isMetricType,
   isPerformanceScope,
+  isProductEligibilityResolution,
   isProductScope,
   isRewardRecipientScope,
   isRuleType,
@@ -37,6 +38,7 @@ import {
   type GroupStatus,
   type MetricType,
   type PerformanceScope,
+  type ProductEligibilityResolution,
   type ProductScope,
   type RewardRecipientScope,
   type RuleType,
@@ -299,6 +301,8 @@ export type VendorCampaignSummary = {
   audienceMode: AudienceMode | null;
   performanceScope: PerformanceScope | null;
   productScope: ProductScope | null;
+  /** How that scope is resolved. Paired with productScope by a database CHECK. */
+  productEligibilityResolution: ProductEligibilityResolution | null;
   stackingMode: StackingMode | null;
   exclusivityKey: string | null;
   priority: number | null;
@@ -361,6 +365,14 @@ export function normalizeVendorCampaigns(data: unknown): VendorCampaignsNormaliz
     if (productScope !== null && productScope !== undefined && !isProductScope(productScope)) {
       return { status: "malformed", reason: "product_scope" };
     }
+    const resolution = record.product_eligibility_resolution;
+    if (
+      resolution !== null &&
+      resolution !== undefined &&
+      !isProductEligibilityResolution(resolution)
+    ) {
+      return { status: "malformed", reason: "product_eligibility_resolution" };
+    }
     if (stackingMode !== null && stackingMode !== undefined && !isStackingMode(stackingMode)) {
       return { status: "malformed", reason: "stacking_mode" };
     }
@@ -390,6 +402,9 @@ export function normalizeVendorCampaigns(data: unknown): VendorCampaignsNormaliz
       audienceMode: isAudienceMode(audienceMode) ? audienceMode : null,
       performanceScope: isPerformanceScope(performanceScope) ? performanceScope : null,
       productScope: isProductScope(productScope) ? productScope : null,
+      productEligibilityResolution: isProductEligibilityResolution(resolution)
+        ? resolution
+        : null,
       stackingMode: isStackingMode(stackingMode) ? stackingMode : null,
       exclusivityKey: optionalText(record.exclusivity_key),
       priority: optionalWholeNumber(record.priority),
@@ -487,6 +502,7 @@ export type CampaignVersionConfig = {
   audienceMode: AudienceMode;
   performanceScope: PerformanceScope;
   productScope: ProductScope;
+  productEligibilityResolution: ProductEligibilityResolution;
   stackingMode: StackingMode;
   exclusivityKey: string | null;
   priority: number;
@@ -540,6 +556,9 @@ export function normalizeVersionConfig(data: unknown): VersionConfigNormalizatio
   if (!isProductScope(record.product_scope)) {
     return { status: "malformed", reason: "product_scope" };
   }
+  if (!isProductEligibilityResolution(record.product_eligibility_resolution)) {
+    return { status: "malformed", reason: "product_eligibility_resolution" };
+  }
   if (!isStackingMode(record.stacking_mode)) {
     return { status: "malformed", reason: "stacking_mode" };
   }
@@ -564,6 +583,7 @@ export function normalizeVersionConfig(data: unknown): VersionConfigNormalizatio
       audienceMode: record.audience_mode,
       performanceScope: record.performance_scope,
       productScope: record.product_scope,
+      productEligibilityResolution: record.product_eligibility_resolution,
       stackingMode: record.stacking_mode,
       exclusivityKey: optionalText(record.exclusivity_key),
       priority,
@@ -825,6 +845,12 @@ export type AssignedCampaign = {
   timezoneName: string | null;
   performanceScope: PerformanceScope;
   productScope: ProductScope;
+  /**
+   * Returned to Retailers and Sales Staff deliberately: it is the difference between "the
+   * products eligible when each sale happens" and "the list frozen at publication", and a
+   * reader who cannot tell those apart cannot read the product list correctly.
+   */
+  productEligibilityResolution: ProductEligibilityResolution;
   stackingMode: StackingMode;
   rewardRecipientScope: RewardRecipientScope | null;
   reward: CampaignReward;
@@ -847,6 +873,9 @@ function readAssignedCampaign(
   if (!isCampaignState(record.derived_state)) return { reason: "derived_state" };
   if (!isPerformanceScope(record.performance_scope)) return { reason: "performance_scope" };
   if (!isProductScope(record.product_scope)) return { reason: "product_scope" };
+  if (!isProductEligibilityResolution(record.product_eligibility_resolution)) {
+    return { reason: "product_eligibility_resolution" };
+  }
   if (!isStackingMode(record.stacking_mode)) return { reason: "stacking_mode" };
   if (eligibleProductCount === null) return { reason: "eligible_product_count" };
 
@@ -885,6 +914,7 @@ function readAssignedCampaign(
     timezoneName: optionalText(record.timezone_name),
     performanceScope: record.performance_scope,
     productScope: record.product_scope,
+    productEligibilityResolution: record.product_eligibility_resolution,
     stackingMode: record.stacking_mode,
     rewardRecipientScope: isRewardRecipientScope(recipientScope) ? recipientScope : null,
     reward,

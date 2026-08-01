@@ -104,7 +104,8 @@
 -- Dependencies: 20260716124419 (profiles, organizations), 20260716125559 (roles,
 --   permissions, role_permissions, set_updated_at), 20260717094520 (vendor_retailers),
 --   20260722210000 (RETAILER_OWNER / SALES_STAFF roles), 20260727090000
---   (vendor_products).
+--   (vendor_products), 20260814210000 (the assignment timeline that
+--   product_eligibility_resolution = 'LIVE_TEMPORAL' is resolved against).
 
 -- ============================================================================
 -- PART 1 — permissions and their role mappings
@@ -607,9 +608,32 @@ create table public.campaign_versions (
   reward_recipient_scope text not null default 'CONTRIBUTING_STAFF',
 
   -- ---- Product scope -------------------------------------------------------
-  --   ALL_ELIGIBLE_PRODUCTS  -- whatever is actively assigned to the Retailer
+  --   ALL_ELIGIBLE_PRODUCTS  -- whatever is eligible for the Retailer at the moment that
+  --                             matters, resolved from the assignment TIMELINE
   --   SELECTED_PRODUCTS      -- the campaign_version_products rows
   product_scope text not null,
+
+  -- HOW the product scope is resolved. Made explicit rather than inferred, because the two
+  -- scopes answer the eligibility question in genuinely different ways and a reader — or a
+  -- reward engine — must never have to guess which one applies:
+  --
+  --   SNAPSHOT       -- publication resolved the eligible (Retailer, product) pairs once
+  --                     and froze them into campaign_eligible_products. Later assignment
+  --                     changes cannot alter them. This is what SELECTED_PRODUCTS means.
+  --
+  --   LIVE_TEMPORAL  -- eligibility is resolved AS OF a moment, from
+  --                     vendor_product_retailer_assignment_history (migration
+  --                     20260814210000). A product assigned after publication qualifies
+  --                     for later sales; one withdrawn after publication stops qualifying
+  --                     for later sales; and a sale that already happened keeps the answer
+  --                     that was true when it happened. This is what ALL_ELIGIBLE_PRODUCTS
+  --                     means.
+  --
+  -- LIVE_TEMPORAL IS NOT A MUTABLE CAMPAIGN. The version row stays frozen and its
+  -- configured meaning never changes — "all products eligible at the relevant moment" says
+  -- the same thing on day one and on day ninety. What moves is the external assignment
+  -- timeline, which is business history recorded elsewhere, not campaign configuration.
+  product_eligibility_resolution text not null default 'SNAPSHOT',
 
   -- ---- Stacking ------------------------------------------------------------
   --   STACKABLE  -- may pay alongside other campaigns; exclusivity_key must be NULL
@@ -644,6 +668,21 @@ create table public.campaign_versions (
     check (product_scope = any (array[
       'ALL_ELIGIBLE_PRODUCTS'::text, 'SELECTED_PRODUCTS'::text
     ])),
+  constraint campaign_versions_resolution_allowed
+    check (product_eligibility_resolution = any (array[
+      'SNAPSHOT'::text, 'LIVE_TEMPORAL'::text
+    ])),
+  -- THE PAIRING IS FIXED, so no inconsistent combination can be stored at all. Written as
+  -- an equivalence rather than two implications: a SELECTED_PRODUCTS version that claimed
+  -- LIVE_TEMPORAL would silently ignore its own frozen snapshot, and an
+  -- ALL_ELIGIBLE_PRODUCTS version that claimed SNAPSHOT would freeze a list its own name
+  -- says is open-ended. Both are refused here rather than in a function that could be
+  -- edited around.
+  constraint campaign_versions_resolution_matches_scope
+    check (
+      (product_scope = 'SELECTED_PRODUCTS')
+      = (product_eligibility_resolution = 'SNAPSHOT')
+    ),
   constraint campaign_versions_stacking_allowed
     check (stacking_mode = any (array['STACKABLE'::text, 'EXCLUSIVE'::text])),
 
@@ -947,7 +986,31 @@ create table public.campaign_rules (
 
   -- A cap of zero is a campaign that pays nothing, which no operator means to configure.
   constraint campaign_rules_cap_positive
-    check (max_reward_coins is null or max_reward_coins > 0)
+    check (max_reward_coins is null or max_reward_coins > 0),
+
+  -- ---- THE COIN CEILING ----------------------------------------------------
+  -- 1,000,000,000 coins, on every configured amount in this schema.
+  --
+  -- WHY A CEILING AT ALL. bigint tempts you into thinking no bound is needed, but a
+  -- reward engine multiplies a RATE by a QUANTITY, and an unbounded rate makes that
+  -- product unbounded too. The arithmetic that has to stay safe is:
+  --
+  --     max coins_per_unit  x  max units a campaign could ever count
+  --       = 1e9 x 2,147,483,647 (integer max)  =  2.147e18
+  --       < bigint max                          =  9.223e18
+  --
+  -- So the largest configurable rate, multiplied by more units than any integer column in
+  -- this schema can even hold, still cannot overflow. Without the ceiling, a hand-crafted
+  -- RPC call could store bigint max and the engine's FIRST multiplication would raise
+  -- `bigint out of range` — an error nobody could act on, discovered long after the
+  -- campaign was published.
+  --
+  -- Enforced HERE as well as in the RPC deliberately. The RPC gives an operator a message
+  -- they can act on; this makes the bound true for every writer, including a future one.
+  constraint campaign_rules_rate_within_ceiling
+    check (coins_per_unit is null or coins_per_unit <= 1000000000),
+  constraint campaign_rules_cap_within_ceiling
+    check (max_reward_coins is null or max_reward_coins <= 1000000000)
 );
 
 comment on table public.campaign_rules is
@@ -978,7 +1041,10 @@ create table public.campaign_rule_tiers (
   constraint campaign_rule_tiers_threshold_positive
     check (threshold_units >= 1),
   constraint campaign_rule_tiers_reward_positive
-    check (reward_coins >= 1)
+    check (reward_coins >= 1),
+  -- The same 1,000,000,000 ceiling, for the same reason. See campaign_rules above.
+  constraint campaign_rule_tiers_reward_within_ceiling
+    check (reward_coins <= 1000000000)
 );
 
 comment on table public.campaign_rule_tiers is

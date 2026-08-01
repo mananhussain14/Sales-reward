@@ -22,6 +22,8 @@ import {
   audienceLabel,
   performanceExplanation,
   performanceLabel,
+  productResolutionExplanation,
+  productResolutionLabel,
   productScopeLabel,
   rewardSummary,
   stackingExplanation,
@@ -246,7 +248,16 @@ export default async function CampaignDetailPage({
           <Detail label="Measured">{performanceLabel(config.performanceScope)}</Detail>
         </div>
         <div className={cardClasses("standard", "p-4")}>
-          <Detail label="Products">{productScopeLabel(config.productScope)}</Detail>
+          <Detail label="Products">
+            {productScopeLabel(config.productScope)}
+            {/* WHICH products, then HOW they are resolved. The second is the difference
+                between a list that moves with the catalogue and one frozen at
+                publication, and a Vendor reading an eligibility count needs to know
+                which they are looking at. */}
+            <span className="mt-0.5 block text-xs text-slate-500">
+              {productResolutionLabel(config.productEligibilityResolution)}
+            </span>
+          </Detail>
         </div>
         <div className={cardClasses("standard", "p-4")}>
           <Detail label="Reward">{reward ?? "—"}</Detail>
@@ -342,6 +353,9 @@ export default async function CampaignDetailPage({
 
             <Detail label="Product scope">
               {productScopeLabel(config.productScope)}
+              <span className="mt-1 block text-xs text-slate-500">
+                {productResolutionExplanation(config.productEligibilityResolution)}
+              </span>
               {config.productScope === "SELECTED_PRODUCTS" &&
                 products.status === "ok" && (
                   <ul className="mt-1 space-y-0.5">
@@ -376,7 +390,11 @@ export default async function CampaignDetailPage({
         <SectionCard
           className="mt-6"
           title="Eligibility at publication"
-          description="Frozen when this version was published. Later group and product-assignment changes do not alter it."
+          description={
+            config.productEligibilityResolution === "SNAPSHOT"
+              ? "Retailers and products were both frozen when this version was published. Later group and product-assignment changes do not alter either."
+              : "The Retailers below were frozen when this version was published and later group changes do not alter them. Products are NOT frozen: this campaign covers whatever is eligible at the time of each verified sale."
+          }
         >
           {eligible.status !== "ok" ? (
             <Alert tone="warning" role="alert">
@@ -418,8 +436,10 @@ export default async function CampaignDetailPage({
                             : (row.sourceGroupName ?? "Retailer group")}
                       </td>
                       <td className="px-3 py-2 text-slate-600">
-                        {config.productScope === "ALL_ELIGIBLE_PRODUCTS"
-                          ? "All assigned products"
+                        {/* A LIVE_TEMPORAL campaign has no frozen per-Retailer count, and
+                            printing the snapshot's zero would read as "no products". */}
+                        {config.productEligibilityResolution === "LIVE_TEMPORAL"
+                          ? "Eligible at time of sale"
                           : row.eligibleProductCount}
                       </td>
                     </tr>

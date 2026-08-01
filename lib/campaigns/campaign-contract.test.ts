@@ -36,6 +36,7 @@ import { join } from "node:path";
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const MIGRATIONS_DIR = join(ROOT, "supabase/migrations");
 
+const HISTORY_NAME = "20260814210000_vendor_product_assignment_history.sql";
 const FOUNDATION_NAME = "20260815090000_vendor_campaign_foundation.sql";
 const OPERATIONS_NAME = "20260815210000_vendor_campaign_operations.sql";
 
@@ -106,6 +107,7 @@ const GRANTED_FUNCTIONS = [
 const INTERNAL_FUNCTIONS = [
   "resolve_campaign_vendor_organization",
   "campaign_derived_state",
+  "campaign_product_eligibility_as_of",
   "campaign_apply_draft_config",
 ];
 
@@ -114,10 +116,84 @@ const INTERNAL_FUNCTIONS = [
  * ======================================================================== */
 
 describe("1. migration hygiene", () => {
-  test("1.1 both migrations are the newest two in the tree", () => {
+  test("1.1 the three migrations exist and are correctly ordered relative to each other", () => {
+    // ORDER RELATIVE TO EACH OTHER — NOT "newest in the tree".
+    //
+    // This assertion used to require the campaign migrations to be the last two files in
+    // the directory. That is true today and false the moment anyone adds a migration for
+    // anything else, so it would have failed the NEXT milestone for doing nothing wrong —
+    // the same over-broad-guard mistake that
+    // lib/receipts/receipt-confirmation-currency-contract.test.ts made with `git diff`.
+    // What actually matters is that these three exist and that each depends only on ones
+    // that run before it.
     const migrations = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql")).sort();
-    assert.equal(migrations[migrations.length - 2], FOUNDATION_NAME);
-    assert.equal(migrations[migrations.length - 1], OPERATIONS_NAME);
+
+    for (const name of [HISTORY_NAME, FOUNDATION_NAME, OPERATIONS_NAME]) {
+      assert.ok(migrations.includes(name), `${name} is missing`);
+    }
+
+    // The assignment timeline must precede the campaign schema that references it, and the
+    // foundation must precede the operations that create functions over its tables.
+    assert.ok(
+      migrations.indexOf(HISTORY_NAME) < migrations.indexOf(FOUNDATION_NAME),
+      "the assignment history migration must run before the campaign foundation",
+    );
+    assert.ok(
+      migrations.indexOf(FOUNDATION_NAME) < migrations.indexOf(OPERATIONS_NAME),
+      "the campaign foundation must run before the campaign operations",
+    );
+  });
+
+  test("1.1b the ordering rule tolerates any later unrelated migration", () => {
+    // Proves the fix rather than asserting it in prose, and does so WITHOUT committing a
+    // fake migration: the rule is a pure predicate over a sorted list, so it can be
+    // exercised against a synthetic list that includes a plausible future filename.
+    //
+    // If someone reintroduced a "must be the newest two" rule, the second case below would
+    // fail and say exactly why.
+    function orderingHolds(names: string[]): boolean {
+      const sorted = [...names].sort();
+      return (
+        sorted.includes(HISTORY_NAME) &&
+        sorted.includes(FOUNDATION_NAME) &&
+        sorted.includes(OPERATIONS_NAME) &&
+        sorted.indexOf(HISTORY_NAME) < sorted.indexOf(FOUNDATION_NAME) &&
+        sorted.indexOf(FOUNDATION_NAME) < sorted.indexOf(OPERATIONS_NAME)
+      );
+    }
+
+    const today = [HISTORY_NAME, FOUNDATION_NAME, OPERATIONS_NAME];
+    assert.equal(orderingHolds(today), true, "today's tree should satisfy the rule");
+
+    // A perfectly ordinary next milestone, months later.
+    assert.equal(
+      orderingHolds([...today, "20260901090000_reward_calculation_foundation.sql"]),
+      true,
+      "a later unrelated migration must not break this guard",
+    );
+
+    // Several of them, including one on the same day.
+    assert.equal(
+      orderingHolds([
+        ...today,
+        "20260815210001_some_same_day_repair.sql",
+        "20261101090000_much_later_milestone.sql",
+      ]),
+      true,
+      "later migrations, including same-day ones, must not break this guard",
+    );
+
+    // The rule must still FAIL for the things it is actually there to catch.
+    assert.equal(
+      orderingHolds([FOUNDATION_NAME, OPERATIONS_NAME]),
+      false,
+      "a missing history migration must be caught",
+    );
+    assert.equal(
+      orderingHolds([HISTORY_NAME, OPERATIONS_NAME]),
+      false,
+      "a missing foundation must be caught",
+    );
   });
 
   test("1.2 neither uses IF NOT EXISTS, CREATE OR REPLACE or ON CONFLICT on its own objects", () => {
@@ -157,7 +233,13 @@ describe("1. migration hygiene", () => {
 
   test("1.6 no existing migration file was modified to add campaign objects", () => {
     const others = readdirSync(MIGRATIONS_DIR)
-      .filter((f) => f.endsWith(".sql") && f !== FOUNDATION_NAME && f !== OPERATIONS_NAME);
+      .filter(
+        (f) =>
+          f.endsWith(".sql") &&
+          f !== HISTORY_NAME &&
+          f !== FOUNDATION_NAME &&
+          f !== OPERATIONS_NAME,
+      );
     for (const file of others) {
       const sql = sqlCode(readFileSync(join(MIGRATIONS_DIR, file), "utf8"));
       assert.ok(

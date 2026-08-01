@@ -33,12 +33,23 @@ import {
   isProductScope,
   isRuleType,
   isStackingMode,
+  MAX_CAMPAIGN_COINS,
+  MIN_CAMPAIGN_COINS,
   type AudienceMode,
   type PerformanceScope,
   type ProductScope,
   type RuleType,
   type StackingMode,
 } from "./campaign-vocabulary.ts";
+
+/**
+ * The largest unit target a campaign may configure.
+ *
+ * campaign_rule_tiers.threshold_units is a PostgreSQL `integer`, so its own ceiling is
+ * 2,147,483,647 and this mirrors it. Together with MAX_CAMPAIGN_COINS it is what bounds
+ * the future reward engine's rate x quantity arithmetic inside bigint.
+ */
+export const MAX_UNIT_TARGET = 2_147_483_647;
 
 /** Canonical UUID form: 8-4-4-4-12 hexadecimal, matched case-insensitively. */
 const UUID_PATTERN =
@@ -383,28 +394,33 @@ export function validateCampaignForm(values: CampaignFormValues): CampaignValida
     errors.performanceScope = "Choose how performance is measured.";
   }
 
+  // COIN BOUNDS mirror the database exactly: 1 .. MAX_CAMPAIGN_COINS on every configured
+  // amount. `parseWholeNumber` already refuses anything beyond Number.MAX_SAFE_INTEGER, so
+  // a value that reaches the range check has survived JSON transport exactly; the ceiling
+  // then keeps a future rate x quantity inside bigint. See MAX_CAMPAIGN_COINS.
+  const coinRangeMessage = `Enter a whole number between ${MIN_CAMPAIGN_COINS} and ${MAX_CAMPAIGN_COINS.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",")}.`;
+  const outOfCoinRange = (value: number | null) =>
+    value === null || value < MIN_CAMPAIGN_COINS || value > MAX_CAMPAIGN_COINS;
+
   if (!isRuleType(v.ruleType)) {
     errors.ruleType = "Choose a reward type.";
   } else if (v.ruleType === "PER_UNIT_COINS") {
-    const coins = parseWholeNumber(v.coinsPerUnit);
-    if (coins === null || coins < 1) {
-      errors.coinsPerUnit = "Enter the whole number of coins awarded per unit.";
+    if (outOfCoinRange(parseWholeNumber(v.coinsPerUnit))) {
+      errors.coinsPerUnit = `Coins per unit. ${coinRangeMessage}`;
     }
   } else {
     const target = parseWholeNumber(v.thresholdUnits);
-    const bonus = parseWholeNumber(v.rewardCoins);
-    if (target === null || target < 1) {
-      errors.thresholdUnits = "Enter the unit target as a whole number of at least 1.";
+    if (target === null || target < 1 || target > MAX_UNIT_TARGET) {
+      errors.thresholdUnits = `Unit target. Enter a whole number between 1 and ${MAX_UNIT_TARGET.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",")}.`;
     }
-    if (bonus === null || bonus < 1) {
-      errors.rewardCoins = "Enter the bonus as a whole number of at least 1 coin.";
+    if (outOfCoinRange(parseWholeNumber(v.rewardCoins))) {
+      errors.rewardCoins = `Bonus coins. ${coinRangeMessage}`;
     }
   }
 
   if (v.maxRewardCoins.length > 0) {
-    const cap = parseWholeNumber(v.maxRewardCoins);
-    if (cap === null || cap < 1) {
-      errors.maxRewardCoins = "Leave the cap blank, or enter at least 1 coin.";
+    if (outOfCoinRange(parseWholeNumber(v.maxRewardCoins))) {
+      errors.maxRewardCoins = `Maximum coins. Leave blank, or ${coinRangeMessage.charAt(0).toLowerCase()}${coinRangeMessage.slice(1)}`;
     }
   }
 

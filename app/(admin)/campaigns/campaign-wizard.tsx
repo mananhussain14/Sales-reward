@@ -15,6 +15,7 @@ import {
   audienceLabel,
   performanceExplanation,
   performanceLabel,
+  productResolutionExplanation,
   productScopeLabel,
   rewardSummary,
   stackingExplanation,
@@ -24,6 +25,7 @@ import {
   PRODUCT_SCOPES,
   RULE_TYPES,
   STACKING_MODES,
+  MAX_CAMPAIGN_COINS,
 } from "@/lib/campaigns/campaign-vocabulary";
 import type { CampaignFormState } from "@/app/(admin)/campaigns/campaign-action-state";
 import { INITIAL_CAMPAIGN_FORM_STATE } from "@/app/(admin)/campaigns/campaign-action-state";
@@ -586,8 +588,8 @@ export function CampaignWizard({
                 title={productScopeLabel(option)}
                 description={
                   option === "ALL_ELIGIBLE_PRODUCTS"
-                    ? "Whatever each Retailer is actively assigned, resolved as sales happen."
-                    : "Choose products. A product not assigned to a Retailer is excluded for that Retailer."
+                    ? productResolutionExplanation("LIVE_TEMPORAL")
+                    : productResolutionExplanation("SNAPSHOT")
                 }
                 onChange={(value) => update("productScope", value)}
               />
@@ -692,7 +694,7 @@ export function CampaignWizard({
             <Field
               label="Coins per unit"
               htmlFor={`${fieldId}-coins`}
-              hint="Whole coins. Never a fraction."
+              hint={`Whole coins, 1 to ${MAX_CAMPAIGN_COINS.toLocaleString("en-GB")}. Never a fraction.`}
               error={currentErrors.coinsPerUnit}
             >
               <input
@@ -700,6 +702,8 @@ export function CampaignWizard({
                 name="coinsPerUnit"
                 inputMode="numeric"
                 pattern="[0-9]*"
+                min={1}
+                max={MAX_CAMPAIGN_COINS}
                 value={values.coinsPerUnit}
                 onChange={(event) => update("coinsPerUnit", event.target.value)}
                 aria-invalid={currentErrors.coinsPerUnit !== undefined}
@@ -734,6 +738,8 @@ export function CampaignWizard({
                   name="rewardCoins"
                   inputMode="numeric"
                   pattern="[0-9]*"
+                  min={1}
+                  max={MAX_CAMPAIGN_COINS}
                   value={values.rewardCoins}
                   onChange={(event) => update("rewardCoins", event.target.value)}
                   aria-invalid={currentErrors.rewardCoins !== undefined}
@@ -754,6 +760,8 @@ export function CampaignWizard({
               name="maxRewardCoins"
               inputMode="numeric"
               pattern="[0-9]*"
+              min={1}
+              max={MAX_CAMPAIGN_COINS}
               value={values.maxRewardCoins}
               onChange={(event) => update("maxRewardCoins", event.target.value)}
               aria-invalid={currentErrors.maxRewardCoins !== undefined}
@@ -916,6 +924,16 @@ export function CampaignWizard({
                 {values.productScope === "ALL_ELIGIBLE_PRODUCTS"
                   ? "All eligible products"
                   : `${values.productIds.length} selected products`}
+                {/* The behaviour, not just the count: these two resolve eligibility in
+                    genuinely different ways and the review step is the last place to say
+                    so before the draft is saved. */}
+                <span className="mt-0.5 block text-xs text-slate-500">
+                  {productResolutionExplanation(
+                    values.productScope === "SELECTED_PRODUCTS"
+                      ? "SNAPSHOT"
+                      : "LIVE_TEMPORAL",
+                  )}
+                </span>
               </dd>
             </div>
             <div>

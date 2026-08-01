@@ -111,6 +111,63 @@ export function productScopeLabel(scope: ProductScope): string {
 }
 
 /* ---------------------------------------------------------------------------
+ * Product eligibility resolution
+ *
+ * HOW a product scope is resolved, as opposed to WHAT it selects. The database stores it
+ * explicitly on the version row and pairs it with the scope under a CHECK constraint, so
+ * these two values are not independent settings — they are the resolution each scope
+ * implies, surfaced so no screen has to infer it.
+ * ------------------------------------------------------------------------- */
+
+export const PRODUCT_ELIGIBILITY_RESOLUTIONS = ["SNAPSHOT", "LIVE_TEMPORAL"] as const;
+export type ProductEligibilityResolution =
+  (typeof PRODUCT_ELIGIBILITY_RESOLUTIONS)[number];
+
+export function isProductEligibilityResolution(
+  value: unknown,
+): value is ProductEligibilityResolution {
+  return (
+    typeof value === "string" &&
+    (PRODUCT_ELIGIBILITY_RESOLUTIONS as readonly string[]).includes(value)
+  );
+}
+
+/**
+ * The sentence that tells a reader which of the two behaviours applies.
+ *
+ * These are the distinction the requirement insists on making visible, worded once here so
+ * a Vendor screen and a Retailer screen cannot describe the same campaign differently:
+ *
+ *   LIVE_TEMPORAL  — the product set moves with the catalogue, and each sale is judged
+ *                    against the moment it happened.
+ *   SNAPSHOT       — the product set was fixed at publication and cannot move.
+ */
+const RESOLUTION_EXPLANATIONS: Record<ProductEligibilityResolution, string> = {
+  LIVE_TEMPORAL:
+    "All products eligible at the time of each verified sale. Products your Vendor assigns later will count for later sales; products withdrawn will stop counting from that point.",
+  SNAPSHOT:
+    "Only the selected products frozen when this campaign version was published. Later product-assignment changes do not affect it.",
+};
+
+export function productResolutionExplanation(
+  resolution: ProductEligibilityResolution,
+): string {
+  return RESOLUTION_EXPLANATIONS[resolution];
+}
+
+/** A short badge-sized label for the same distinction. */
+const RESOLUTION_LABELS: Record<ProductEligibilityResolution, string> = {
+  LIVE_TEMPORAL: "Eligible at time of sale",
+  SNAPSHOT: "Frozen at publication",
+};
+
+export function productResolutionLabel(
+  resolution: ProductEligibilityResolution,
+): string {
+  return RESOLUTION_LABELS[resolution];
+}
+
+/* ---------------------------------------------------------------------------
  * Stacking
  * ------------------------------------------------------------------------- */
 
@@ -223,6 +280,28 @@ export type GroupStatus = (typeof GROUP_STATUSES)[number];
 export function isGroupStatus(value: unknown): value is GroupStatus {
   return typeof value === "string" && (GROUP_STATUSES as readonly string[]).includes(value);
 }
+
+/* ---------------------------------------------------------------------------
+ * Coin bounds
+ * ------------------------------------------------------------------------- */
+
+/**
+ * The largest coin amount any campaign field may hold: 1,000,000,000.
+ *
+ * A MIRROR of campaign_rules_rate_within_ceiling / campaign_rules_cap_within_ceiling /
+ * campaign_rule_tiers_reward_within_ceiling, not a second opinion — the database refuses
+ * anything above this regardless of what the browser sends, and campaign_apply_draft_config
+ * refuses it again with a message an operator can act on.
+ *
+ * The bound exists so a future reward engine's rate x quantity cannot overflow bigint:
+ * 1e9 x 2,147,483,647 (integer max) = 2.147e18, comfortably below bigint's 9.223e18. It is
+ * also far below Number.MAX_SAFE_INTEGER, so every value in range survives JSON transport
+ * and JavaScript arithmetic exactly.
+ */
+export const MAX_CAMPAIGN_COINS = 1_000_000_000;
+
+/** The smallest coin amount any campaign field may hold. */
+export const MIN_CAMPAIGN_COINS = 1;
 
 /* ---------------------------------------------------------------------------
  * Reward summaries

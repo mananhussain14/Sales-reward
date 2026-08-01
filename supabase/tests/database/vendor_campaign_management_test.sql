@@ -723,7 +723,7 @@ select is(
 
 select throws_ok(
   $$ select pg_temp.draft('X', p_rule => 'PER_UNIT_COINS', p_per_unit => 0) $$,
-  '23514', 'Enter the coins awarded per unit',
+  '23514', 'Enter coins per unit between 1 and 1,000,000,000',
   'D14. zero coins per unit is refused'
 );
 
@@ -743,7 +743,7 @@ select throws_ok(
 select throws_ok(
   $$ select pg_temp.draft('X', p_rule => 'TARGET_BONUS', p_per_unit => null,
                           p_threshold => 10, p_bonus => 0) $$,
-  '23514', 'Enter the bonus coins',
+  '23514', 'Enter bonus coins between 1 and 1,000,000,000',
   'D17. a zero bonus is refused'
 );
 
@@ -1590,6 +1590,302 @@ select is(
      and t.typname in ('float4', 'float8', 'numeric')),
   0,
   'L5. no campaign table stores a floating-point or numeric value — coins never round'
+);
+
+-- ============================================================================
+-- SECTION M — product eligibility resolution: SNAPSHOT vs LIVE_TEMPORAL
+-- ============================================================================
+-- The two product scopes answer the eligibility question in genuinely different ways, and
+-- campaign_versions.product_eligibility_resolution states which applies rather than
+-- leaving a reader to infer it.
+--
+-- HOW TIME IS HANDLED HERE. Everything in this suite runs inside ONE transaction, so now()
+-- is frozen at its start while the maintenance trigger stamps boundaries with
+-- clock_timestamp() — which is always LATER. A withdrawal performed through the RPC in
+-- this transaction therefore takes effect at an instant now() has not reached, and a read
+-- resolved at now() would correctly still include the product. That is a property of the
+-- test harness, not of the product.
+--
+-- So the READ-PATH assertions below drive a timeline whose boundaries lie in the PAST,
+-- exactly as one left behind by an earlier transaction, by closing an open interval and
+-- opening its successor directly. Both operations are permitted; Section D of
+-- vendor_product_assignment_history_test.sql proves a CLOSED interval is frozen and that
+-- nothing can be deleted. The RPC-driven path is proven there too (Section C), and M9/M10
+-- below prove the resolver against the RPC's own writes.
+select pg_temp.act_as(pg_temp.id('admin_a'));
+
+select is(
+  (select product_eligibility_resolution from public.get_vendor_campaign_version(
+     pg_temp.live_version(pg_temp.id('winter')))),
+  'SNAPSHOT',
+  'M1. a SELECTED_PRODUCTS version resolves by frozen SNAPSHOT'
+);
+
+select is(
+  (select product_eligibility_resolution from public.get_vendor_campaign_version(
+     pg_temp.live_version(pg_temp.id('team')))),
+  'LIVE_TEMPORAL',
+  'M2. an ALL_ELIGIBLE_PRODUCTS version resolves LIVE_TEMPORAL'
+);
+
+-- DERIVED, never supplied. There is no argument for it in either draft contract.
+select is(
+  (select count(*)::integer
+   from pg_catalog.pg_proc p
+   join pg_catalog.pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public'
+     and p.proname in ('create_vendor_campaign_draft', 'update_vendor_campaign_draft')
+     and pg_catalog.pg_get_function_arguments(p.oid) like '%eligibility_resolution%'),
+  0,
+  'M3. no draft contract accepts the resolution from a client — it is derived from the scope'
+);
+
+-- The pairing cannot be broken. Asserted against a DRAFT whose scope is
+-- ALL_ELIGIBLE_PRODUCTS, so 'SNAPSHOT' is genuinely the inconsistent value for it.
+do $$
+begin
+  insert into pg_temp.f values ('pairing', pg_temp.draft('Pairing probe'));
+end;
+$$;
+
+select throws_ok(
+  format($$ update public.campaign_versions set product_eligibility_resolution = 'SNAPSHOT'
+            where id = %L $$, pg_temp.draft_version(pg_temp.id('pairing'))),
+  '23514', null,
+  'M4. SNAPSHOT on an ALL_ELIGIBLE_PRODUCTS version is refused by the database'
+);
+
+-- The mirror case needs a SELECTED_PRODUCTS DRAFT of its own: 'winter' has already
+-- published version 2 by this point, so its draft pointer is null and an UPDATE keyed on it
+-- would match no row and prove nothing.
+do $$
+begin
+  insert into pg_temp.f values ('pairing_sel', pg_temp.draft(
+    'Pairing probe selected',
+    p_scope => 'SELECTED_PRODUCTS',
+    p_products => array[pg_temp.id('p1')]::uuid[]));
+end;
+$$;
+
+select throws_ok(
+  format($$ update public.campaign_versions set product_eligibility_resolution = 'LIVE_TEMPORAL'
+            where id = %L $$, pg_temp.draft_version(pg_temp.id('pairing_sel'))),
+  '23514', null,
+  'M5. and LIVE_TEMPORAL on a SELECTED_PRODUCTS version is refused too'
+);
+
+-- ---- A timeline whose boundaries lie in the past ---------------------------
+-- One extra product, assigned to Alpha ten days ago. The team campaign is
+-- ALL_ELIGIBLE_PRODUCTS, so it covers whatever is eligible at the relevant moment.
+do $$
+declare v_product uuid; v_assign uuid;
+begin
+  v_product := pg_temp.raw_product(pg_temp.id('vendor_a'), 'P-T', 'Timeline Product',
+                                   pg_temp.id('admin_a'));
+  insert into pg_temp.f values ('p_t', v_product);
+
+  insert into public.vendor_product_retailer_assignments
+    (vendor_product_id, retailer_organization_id, status, assigned_by_profile_id,
+     assigned_at, updated_at)
+  values (v_product, pg_temp.id('ret_a'), 'ACTIVE', pg_temp.id('admin_a'),
+          now() - interval '10 days', now() - interval '10 days')
+  returning id into v_assign;
+  insert into pg_temp.f values ('assign_t', v_assign);
+end;
+$$;
+
+select pg_temp.act_as(pg_temp.id('owner_a'));
+
+select is(
+  (select count(*)::integer from public.list_my_retailer_campaign_products(pg_temp.id('team'))
+   where product_code = 'P-T'),
+  1,
+  'M6. a LIVE_TEMPORAL campaign includes a product once its eligible interval has begun'
+);
+
+-- Withdraw it, effective one day ago — the shape an earlier transaction would have left.
+do $$
+begin
+  update public.vendor_product_retailer_assignment_history
+  set valid_to = now() - interval '1 day'
+  where vendor_product_id = pg_temp.id('p_t')
+    and retailer_organization_id = pg_temp.id('ret_a')
+    and valid_to is null;
+
+  insert into public.vendor_product_retailer_assignment_history
+    (assignment_id, vendor_product_id, retailer_organization_id,
+     assignment_status, valid_from, valid_to)
+  values (pg_temp.id('assign_t'), pg_temp.id('p_t'), pg_temp.id('ret_a'),
+          'INACTIVE', now() - interval '1 day', null);
+end;
+$$;
+
+select is(
+  (select count(*)::integer from public.list_my_retailer_campaign_products(pg_temp.id('team'))
+   where product_code = 'P-T'),
+  0,
+  'M7. and excludes it at and after the instant it was withdrawn'
+);
+
+-- THE HISTORICAL ANSWER SURVIVES — the whole point of the timeline.
+select ok(
+  public.vendor_product_eligible_for_retailer_at(
+    pg_temp.id('p_t'), pg_temp.id('ret_a'), now() - interval '5 days'),
+  'M8. the withdrawn product is STILL eligible for a sale timestamp before the withdrawal'
+);
+
+select ok(
+  not public.vendor_product_eligible_for_retailer_at(
+    pg_temp.id('p_t'), pg_temp.id('ret_a'), now()),
+  'M9. and not eligible now'
+);
+
+-- The campaign itself was NOT touched by any of that. These are VENDOR reads, so the
+-- session switches back: get_vendor_campaign* require CAMPAIGNS_MANAGE and correctly
+-- refuse the Retailer Owner the assertions above were acting as.
+select pg_temp.act_as(pg_temp.id('admin_a'));
+
+select is(
+  (select product_scope || '/' || product_eligibility_resolution
+   from public.get_vendor_campaign_version(pg_temp.live_version(pg_temp.id('team')))),
+  'ALL_ELIGIBLE_PRODUCTS/LIVE_TEMPORAL',
+  'M10. the published configuration is unchanged by an assignment change'
+);
+
+select is(
+  (select version_count from public.get_vendor_campaign(pg_temp.id('team'))),
+  1,
+  'M11. and no new campaign version was created'
+);
+
+-- A product that becomes eligible again qualifies for future sales, with no new version.
+do $$
+begin
+  perform pg_temp.act_as(pg_temp.id('owner_a'));
+
+  update public.vendor_product_retailer_assignment_history
+  set valid_to = now() - interval '1 hour'
+  where vendor_product_id = pg_temp.id('p_t')
+    and retailer_organization_id = pg_temp.id('ret_a')
+    and valid_to is null;
+
+  insert into public.vendor_product_retailer_assignment_history
+    (assignment_id, vendor_product_id, retailer_organization_id,
+     assignment_status, valid_from, valid_to)
+  values (pg_temp.id('assign_t'), pg_temp.id('p_t'), pg_temp.id('ret_a'),
+          'ACTIVE', now() - interval '1 hour', null);
+end;
+$$;
+
+select is(
+  (select count(*)::integer from public.list_my_retailer_campaign_products(pg_temp.id('team'))
+   where product_code = 'P-T'),
+  1,
+  'M12. re-assignment makes it eligible again without a new campaign version'
+);
+
+select pg_temp.act_as(pg_temp.id('admin_a'));
+
+select is(
+  (select version_count from public.get_vendor_campaign(pg_temp.id('team'))),
+  1,
+  'M13. still one version'
+);
+
+-- ---- SNAPSHOT is unaffected by every one of those changes ------------------
+select pg_temp.act_as(pg_temp.id('owner_b'));
+
+select is(
+  (select count(*)::integer from public.list_my_retailer_campaign_products(pg_temp.id('winter'))),
+  1,
+  'M14. a SELECTED_PRODUCTS campaign is untouched by the whole timeline above'
+);
+
+-- Sales Staff read the SAME product semantics as their Retailer Owner.
+--
+-- A FRESH campaign, because 'team' was cancelled in Section J and Sales Staff correctly see
+-- only ACTIVE and SCHEDULED campaigns. Reusing it would have tested the cancellation rule a
+-- second time rather than the product semantics this section is about.
+do $$
+declare v_c uuid;
+begin
+  perform pg_temp.act_as(pg_temp.id('admin_a'));
+  v_c := pg_temp.draft('Live Temporal Staff', p_audience => 'ALL_RETAILERS');
+  perform public.publish_vendor_campaign(v_c);
+  insert into pg_temp.f values ('live_staff', v_c);
+end;
+$$;
+
+select pg_temp.act_as(pg_temp.id('staff_a'));
+
+select is(
+  (select product_eligibility_resolution from public.list_my_staff_campaigns()
+   where campaign_name = 'Live Temporal Staff'),
+  'LIVE_TEMPORAL',
+  'M15. the Sales Staff contract exposes the same resolution'
+);
+
+select is(
+  (select count(*)::integer from public.list_my_staff_campaign_products(pg_temp.id('live_staff'))
+   where product_code = 'P-T'),
+  1,
+  'M16. and the same temporal product set'
+);
+
+select pg_temp.act_as(pg_temp.id('admin_a'));
+
+-- ============================================================================
+-- SECTION N — the coin ceiling
+-- ============================================================================
+select pg_temp.act_as(pg_temp.id('admin_a'));
+
+select lives_ok(
+  $$ select pg_temp.draft('At the ceiling', p_per_unit => 1000000000) $$,
+  'N1. exactly 1,000,000,000 coins per unit is accepted'
+);
+
+select throws_ok(
+  $$ select pg_temp.draft('Over the ceiling', p_per_unit => 1000000001) $$,
+  '23514', 'Enter coins per unit between 1 and 1,000,000,000',
+  'N2. 1,000,000,001 is refused'
+);
+
+select throws_ok(
+  $$ select pg_temp.draft('Bigint max', p_per_unit => 9223372036854775807) $$,
+  '23514', null,
+  'N3. bigint maximum is refused'
+);
+
+select throws_ok(
+  $$ select pg_temp.draft('Bonus over ceiling', p_rule => 'TARGET_BONUS', p_per_unit => null,
+                          p_threshold => 10, p_bonus => 1000000001) $$,
+  '23514', 'Enter bonus coins between 1 and 1,000,000,000',
+  'N4. a bonus above the ceiling is refused'
+);
+
+select throws_ok(
+  $$ select public.create_vendor_campaign_draft('Cap over ceiling', null, now(), null,
+       'Asia/Dubai', 'ALL_RETAILERS','INDIVIDUAL_STAFF','ALL_ELIGIBLE_PRODUCTS','STACKABLE',
+       null, 0, 'PER_UNIT_COINS', 5, null, null, 1000000001, null, null, null) $$,
+  '23514', 'The maximum coins must be between 1 and 1,000,000,000',
+  'N5. a cap above the ceiling is refused'
+);
+
+-- The CONSTRAINT, not only the RPC. A future writer that bypassed campaign_apply_draft_config
+-- would still be bounded.
+select throws_ok(
+  format($$ insert into public.campaign_rules (campaign_version_id, rule_type, coins_per_unit)
+            values (%L, 'PER_UNIT_COINS', 9223372036854775807) $$,
+         pg_temp.draft_version(pg_temp.id('pairing'))),
+  '23514', null,
+  'N6. the ceiling is a CHECK constraint too, not only an RPC guard'
+);
+
+-- THE ARITHMETIC THE CEILING PROTECTS: the largest configurable rate multiplied by more
+-- units than threshold_units (an integer) can hold still fits in bigint.
+select ok(
+  (1000000000::bigint * 2147483647::bigint) < 9223372036854775807::bigint,
+  'N7. max coins per unit x max integer units stays inside bigint'
 );
 
 select * from finish();

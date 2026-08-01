@@ -220,6 +220,17 @@ describe("2. the Retailer Owner page cannot mutate anything", () => {
     }
   });
 
+  test("2.8b it distinguishes dynamic from frozen product eligibility", () => {
+    // The two behaviours make opposite promises about whether the product list can move,
+    // and a Retailer who cannot tell them apart cannot read their own list correctly.
+    assert.match(RETAILER_PAGE_CODE, /productResolutionLabel\(/);
+    assert.match(RETAILER_PAGE_CODE, /productResolutionExplanation\(/);
+    // And it states which instant a historical list reflects.
+    const prose = RETAILER_PAGE.replace(/\s+/g, " ");
+    assert.match(prose, /what is eligible today while the campaign is running/i);
+    assert.match(prose, /what was eligible when it ended/i);
+  });
+
   test("2.9 it uses the shared team wording rather than restating it", () => {
     // One sentence, defined once, so two surfaces cannot describe a team campaign
     // differently.
@@ -506,6 +517,21 @@ describe("4. the creation wizard", () => {
     assert.match(prose, /calculation engine is connected/);
   });
 
+  test("4.13b the product step states the two eligibility behaviours", () => {
+    // Sourced from the shared vocabulary, not restated, so the Vendor and the Retailer
+    // cannot be told different things about the same campaign.
+    assert.match(WIZARD_CODE, /productResolutionExplanation\("LIVE_TEMPORAL"\)/);
+    assert.match(WIZARD_CODE, /productResolutionExplanation\("SNAPSHOT"\)/);
+  });
+
+  test("4.13c coin inputs carry the same bound the database enforces", () => {
+    // An input that accepted more than the database does would produce a round trip that
+    // fails for a reason the operator could not see coming.
+    assert.match(WIZARD_CODE, /max=\{MAX_CAMPAIGN_COINS\}/);
+    const bounded = [...WIZARD_CODE.matchAll(/max=\{MAX_CAMPAIGN_COINS\}/g)].length;
+    assert.equal(bounded, 3, "coins per unit, bonus coins and the cap must all be bounded");
+  });
+
   test("4.14 no internal identifier is rendered as visible text", () => {
     // Ids live in `value` attributes and React keys only.
     assert.ok(!/>\{[a-zA-Z.]*[Ii]d\}</.test(WIZARD_CODE));
@@ -647,6 +673,18 @@ describe("6. the Vendor pages", () => {
 
   test("6.9 the detail page never fabricates a reward when the rule is missing", () => {
     assert.match(code(DETAIL), /reward \?\? "—"/);
+  });
+
+  test("6.9b the Vendor detail distinguishes frozen from dynamic product eligibility", () => {
+    const source = code(DETAIL);
+    assert.match(source, /productResolutionLabel\(/);
+    assert.match(source, /productResolutionExplanation\(/);
+    // The snapshot panel must not describe a LIVE_TEMPORAL campaign's products as frozen.
+    const prose = DETAIL.replace(/\s+/g, " ");
+    assert.match(prose, /Products are NOT frozen/);
+    assert.match(prose, /eligible at the time of each verified sale/i);
+    // And it must not print a snapshot count of zero as if it meant "no products".
+    assert.match(source, /LIVE_TEMPORAL"\s*\?\s*"Eligible at time of sale"/);
   });
 
   test("6.10 the group screens explain that an edit does not change a published campaign", () => {

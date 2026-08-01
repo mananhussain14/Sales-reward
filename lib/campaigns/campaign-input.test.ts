@@ -17,8 +17,10 @@
  */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
+import { MAX_CAMPAIGN_COINS } from "./campaign-vocabulary.ts";
 import {
   EMPTY_CAMPAIGN_FORM,
+  MAX_UNIT_TARGET,
   WIZARD_STEPS,
   hasMembershipChanged,
   isStepComplete,
@@ -234,6 +236,80 @@ describe("validation mirrors the RPC's rules", () => {
     assert.equal(validateCampaignForm(validForm({ maxRewardCoins: "" })).ok, true);
     assert.equal(validateCampaignForm(validForm({ maxRewardCoins: "10000" })).ok, true);
     assert.equal(validateCampaignForm(validForm({ maxRewardCoins: "0" })).ok, false);
+  });
+
+  test("21b. exactly the ceiling is accepted, one above is refused", () => {
+    assert.equal(
+      validateCampaignForm(validForm({ coinsPerUnit: "1000000000" })).ok,
+      true,
+      "1,000,000,000 coins per unit must be accepted",
+    );
+    assert.equal(
+      validateCampaignForm(validForm({ coinsPerUnit: "1000000001" })).ok,
+      false,
+      "1,000,000,001 must be refused",
+    );
+    assert.equal(
+      validateCampaignForm(validForm({ maxRewardCoins: "1000000000" })).ok,
+      true,
+    );
+    assert.equal(
+      validateCampaignForm(validForm({ maxRewardCoins: "1000000001" })).ok,
+      false,
+    );
+  });
+
+  test("21c. bigint maximum is refused, and never silently rounded", () => {
+    // 9223372036854775807 is far beyond Number.MAX_SAFE_INTEGER, so parsing it would round.
+    // The validator refuses it outright rather than accepting a different number than the
+    // operator typed.
+    const result = validateCampaignForm(
+      validForm({ coinsPerUnit: "9223372036854775807" }),
+    );
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.ok(result.fieldErrors.coinsPerUnit !== undefined);
+  });
+
+  test("21d. a target bonus is bounded on both fields", () => {
+    const base = { ruleType: "TARGET_BONUS", coinsPerUnit: "" };
+    assert.equal(
+      validateCampaignForm(
+        validForm({ ...base, thresholdUnits: "10", rewardCoins: "1000000000" }),
+      ).ok,
+      true,
+    );
+    assert.equal(
+      validateCampaignForm(
+        validForm({ ...base, thresholdUnits: "10", rewardCoins: "1000000001" }),
+      ).ok,
+      false,
+    );
+    // The unit target is an integer column, so its own ceiling is integer max.
+    assert.equal(
+      validateCampaignForm(
+        validForm({ ...base, thresholdUnits: String(MAX_UNIT_TARGET), rewardCoins: "5" }),
+      ).ok,
+      true,
+    );
+    assert.equal(
+      validateCampaignForm(
+        validForm({
+          ...base,
+          thresholdUnits: String(MAX_UNIT_TARGET + 1),
+          rewardCoins: "5",
+        }),
+      ).ok,
+      false,
+    );
+  });
+
+  test("21e. every accepted coin value survives JavaScript arithmetic exactly", () => {
+    assert.ok(MAX_CAMPAIGN_COINS < Number.MAX_SAFE_INTEGER);
+    const args = toCampaignRpcArgs(validForm({ coinsPerUnit: String(MAX_CAMPAIGN_COINS) }));
+    assert.ok(args !== null);
+    assert.equal(args.p_coins_per_unit, MAX_CAMPAIGN_COINS);
+    assert.ok(Number.isSafeInteger(args.p_coins_per_unit));
   });
 
   test("22. an out-of-range priority is refused", () => {

@@ -13,6 +13,8 @@ import type { AssignedCampaign } from "@/lib/campaigns/campaign-normalization";
 import {
   performanceExplanation,
   performanceLabel,
+  productResolutionExplanation,
+  productResolutionLabel,
   productScopeLabel,
   rewardSummary,
   stackingExplanation,
@@ -159,6 +161,12 @@ function CampaignCard({ campaign }: { campaign: AssignedCampaign }) {
               : `${campaign.eligibleProductCount} ${
                   campaign.eligibleProductCount === 1 ? "product" : "products"
                 }`}
+            {/* WHICH products, then HOW they are decided. A Retailer reading "all eligible
+                products" must know the set moves with their assignments; one reading a
+                frozen selection must know it does not. */}
+            <span className="mt-0.5 block text-xs text-slate-500">
+              {productResolutionLabel(campaign.productEligibilityResolution)}
+            </span>
           </dd>
         </div>
         <div>
@@ -176,6 +184,7 @@ function CampaignCard({ campaign }: { campaign: AssignedCampaign }) {
           @/lib/campaigns/campaign-vocabulary so every surface says it identically. */}
       <p className="mt-4 rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-600">
         {performanceExplanation(campaign.performanceScope)}{" "}
+        {productResolutionExplanation(campaign.productEligibilityResolution)}{" "}
         {stackingExplanation(campaign.stackingMode)}
         {campaign.timezoneName && ` Dates are shown in ${campaign.timezoneName}.`}
       </p>
@@ -264,7 +273,10 @@ export default async function RetailerCampaignsPage() {
           Retailer can read the numbers above correctly. */}
       <p className="mt-10 rounded-2xl border border-dashed border-slate-300 px-4 py-3 text-sm text-slate-500">
         Campaign results and coin calculations will appear here when the calculation engine
-        is connected. Nothing on this page is a sales total or a coin balance.
+        is connected. Nothing on this page is a sales total or a coin balance. For a
+        campaign that covers all eligible products, the product list shows what is eligible
+        today while the campaign is running, and what was eligible when it ended once it
+        has finished.
       </p>
     </div>
   );

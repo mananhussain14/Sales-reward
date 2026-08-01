@@ -12,6 +12,7 @@ import type { VendorCampaignSummary } from "@/lib/campaigns/campaign-normalizati
 import {
   audienceLabel,
   performanceLabel,
+  productResolutionLabel,
   productScopeLabel,
   rewardSummary,
   stackingLabel,
@@ -268,6 +269,11 @@ export function CampaignList({ campaigns }: { campaigns: VendorCampaignSummary[]
                           : campaign.productScope === "ALL_ELIGIBLE_PRODUCTS"
                             ? productScopeLabel("ALL_ELIGIBLE_PRODUCTS")
                             : `${campaign.selectedProductCount} selected`}
+                        {campaign.productEligibilityResolution !== null && (
+                          <span className="mt-0.5 block text-xs text-slate-400">
+                            {productResolutionLabel(campaign.productEligibilityResolution)}
+                          </span>
+                        )}
                       </dd>
                     </div>
                     <div>

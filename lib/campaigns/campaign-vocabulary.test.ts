@@ -25,8 +25,11 @@ import {
   CAMPAIGN_STATES,
   CAMPAIGN_STATUSES,
   GROUP_STATUSES,
+  MAX_CAMPAIGN_COINS,
   METRIC_TYPES,
+  MIN_CAMPAIGN_COINS,
   PERFORMANCE_SCOPES,
+  PRODUCT_ELIGIBILITY_RESOLUTIONS,
   PRODUCT_SCOPES,
   RETAILER_TEAM_EXPLANATION,
   REWARD_RECIPIENT_SCOPES,
@@ -41,12 +44,15 @@ import {
   isGroupStatus,
   isMetricType,
   isPerformanceScope,
+  isProductEligibilityResolution,
   isProductScope,
   isRewardRecipientScope,
   isRuleType,
   isStackingMode,
   performanceExplanation,
   performanceLabel,
+  productResolutionExplanation,
+  productResolutionLabel,
   productScopeLabel,
   rewardSummary,
   stackingExplanation,
@@ -146,6 +152,55 @@ describe("vocabularies mirror the database exactly", () => {
     assert.deepEqual([...new Set(emitted)].sort(), [...CAMPAIGN_STATES].sort());
   });
 
+  test("10b. resolutions match campaign_versions_resolution_allowed", () => {
+    assert.deepEqual(
+      [...PRODUCT_ELIGIBILITY_RESOLUTIONS].sort(),
+      constraintValues("campaign_versions_resolution_allowed"),
+    );
+  });
+
+  test("10c. the scope/resolution pairing is enforced by the DATABASE, not by this module", () => {
+    // The two are not independent settings. A campaign cannot be SELECTED_PRODUCTS with
+    // LIVE_TEMPORAL, or ALL_ELIGIBLE_PRODUCTS with SNAPSHOT, and the constraint says so as
+    // an equivalence rather than two implications that could drift apart.
+    const index = FOUNDATION.indexOf("constraint campaign_versions_resolution_matches_scope");
+    assert.notEqual(index, -1, "the pairing constraint is missing");
+    const block = FOUNDATION.slice(index, index + 400).replace(/\s+/g, " ");
+    assert.match(block, /product_scope = 'SELECTED_PRODUCTS'/);
+    assert.match(block, /product_eligibility_resolution = 'SNAPSHOT'/);
+    assert.match(block, /\)\s*=\s*\(/, "the pairing must be an equivalence");
+  });
+
+  test("10d. the coin ceiling mirrors the database constraint exactly", () => {
+    // Not a second opinion: the same literal must appear in the CHECK constraints.
+    const literal = MAX_CAMPAIGN_COINS.toString();
+    for (const name of [
+      "campaign_rules_rate_within_ceiling",
+      "campaign_rules_cap_within_ceiling",
+      "campaign_rule_tiers_reward_within_ceiling",
+    ]) {
+      const at = FOUNDATION.indexOf(`constraint ${name}`);
+      assert.notEqual(at, -1, `${name} is missing from the migration`);
+      assert.ok(
+        FOUNDATION.slice(at, at + 300).includes(literal),
+        `${name} does not use ${literal}`,
+      );
+    }
+    assert.equal(MIN_CAMPAIGN_COINS, 1);
+  });
+
+  test("10e. the ceiling keeps a future rate x quantity inside bigint", () => {
+    // The arithmetic the bound exists for: largest configurable rate, multiplied by more
+    // units than a PostgreSQL integer can hold, must still fit in bigint.
+    // BigInt(string) rather than a `…n` literal: this project targets ES2017, where BigInt
+    // literals are a syntax error. The runtime supports BigInt regardless.
+    const INTEGER_MAX = 2_147_483_647;
+    const BIGINT_MAX = BigInt("9223372036854775807");
+    assert.ok(BigInt(MAX_CAMPAIGN_COINS) * BigInt(INTEGER_MAX) < BIGINT_MAX);
+    // And every in-range coin value survives JavaScript arithmetic exactly.
+    assert.ok(MAX_CAMPAIGN_COINS < Number.MAX_SAFE_INTEGER);
+  });
+
   test("11. there is NO percentage-of-value metric anywhere", () => {
     assert.equal(METRIC_TYPES.length, 1);
     assert.equal(METRIC_TYPES[0], "UNITS_SOLD");
@@ -196,6 +251,8 @@ describe("guards reject everything outside their list", () => {
         isGroupStatus(value) && (GROUP_STATUSES as readonly unknown[]).includes(value),
         isRewardRecipientScope(value) &&
           (REWARD_RECIPIENT_SCOPES as readonly unknown[]).includes(value),
+        isProductEligibilityResolution(value) &&
+          (PRODUCT_ELIGIBILITY_RESOLUTIONS as readonly unknown[]).includes(value),
       ];
       // A guard may only return true for a member of its own list; none of these are.
       assert.ok(
@@ -237,6 +294,36 @@ describe("labels", () => {
       ...STACKING_MODES.map(stackingLabel),
     ];
     for (const label of labels) assert.ok(!/_/.test(label), `raw enum in "${label}"`);
+  });
+
+  test("16b. the two resolutions are described in the words the requirement asks for", () => {
+    // The distinction a reader must be able to make: a set that moves with the catalogue
+    // versus one fixed at publication.
+    assert.match(
+      productResolutionExplanation("LIVE_TEMPORAL"),
+      /eligible at the time of each verified sale/i,
+    );
+    assert.match(
+      productResolutionExplanation("SNAPSHOT"),
+      /frozen when this campaign version was published/i,
+    );
+    // Each must say something the other does not, or the wording is not doing its job.
+    assert.notEqual(
+      productResolutionExplanation("LIVE_TEMPORAL"),
+      productResolutionExplanation("SNAPSHOT"),
+    );
+    for (const resolution of PRODUCT_ELIGIBILITY_RESOLUTIONS) {
+      assert.ok(productResolutionLabel(resolution).length > 0);
+      // No raw enum leaks into a label a person reads.
+      assert.ok(!/_/.test(productResolutionLabel(resolution)));
+    }
+  });
+
+  test("16c. neither resolution's wording implies progress or an amount earned", () => {
+    for (const resolution of PRODUCT_ELIGIBILITY_RESOLUTIONS) {
+      const text = `${productResolutionLabel(resolution)} ${productResolutionExplanation(resolution)}`;
+      assert.ok(!/earned|balance|progress|total so far/i.test(text));
+    }
   });
 
   test("17. the team wording states the per-Retailer boundary", () => {

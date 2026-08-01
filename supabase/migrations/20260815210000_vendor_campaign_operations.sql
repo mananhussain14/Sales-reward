@@ -104,10 +104,21 @@
 -- yields zero eligible Retailers, or when product_scope = SELECTED_PRODUCTS and it
 -- yields zero eligible (Retailer, product) pairs.
 --
--- Product pairs are snapshotted ONLY for SELECTED_PRODUCTS. ALL_ELIGIBLE_PRODUCTS means
--- "whatever this Retailer is actively assigned" and is resolved live by design: freezing
--- a list would contradict the words, and would mean a product added to a Retailer next
--- week was excluded from an evergreen campaign that says it includes everything.
+-- Product pairs are snapshotted ONLY for SELECTED_PRODUCTS, whose
+-- product_eligibility_resolution is 'SNAPSHOT'. ALL_ELIGIBLE_PRODUCTS carries
+-- 'LIVE_TEMPORAL' and is resolved AS OF a moment from
+-- vendor_product_retailer_assignment_history (migration 20260814210000): freezing a list
+-- would contradict the words, and would mean a product added to a Retailer next week was
+-- excluded from an evergreen campaign that says it includes everything.
+--
+-- WHY PUBLICATION AND PREVIEW STILL READ THE LIVE ASSIGNMENT TABLE, deliberately.
+-- Both answer a question about RIGHT NOW — "which pairs are eligible at this instant?" —
+-- and for that question vendor_product_retailer_assignments is the authoritative source
+-- and cannot be incomplete. The history table answers a question about a PAST instant, and
+-- is authoritative only from its own migration onward. Using the timeline for the "now"
+-- question would gain nothing and would make publication depend on a backfill. The two
+-- agree by construction: the trigger opens an interval for every row, so the open interval
+-- always carries the row's current status.
 --
 -- ============================================================================
 -- WHAT THIS MIGRATION DELIBERATELY DOES NOT DO
@@ -218,6 +229,47 @@ $$;
 revoke all     on function public.campaign_derived_state(text, timestamptz, timestamptz) from public;
 revoke execute on function public.campaign_derived_state(text, timestamptz, timestamptz) from anon;
 revoke execute on function public.campaign_derived_state(text, timestamptz, timestamptz) from authenticated;
+
+-- ============================================================================
+-- INTERNAL HELPER 2b — campaign_product_eligibility_as_of(timestamptz, timestamptz)
+-- ============================================================================
+-- THE ONE DOCUMENTED INSTANT a LIVE_TEMPORAL campaign's product list is resolved at, so
+-- every read that shows such a list shows the same list.
+--
+--     least(now(), coalesce(ends_at, 'infinity'))
+--
+--   * A campaign that is still running, scheduled, paused, or evergreen resolves at
+--     now() — "what is eligible for this Retailer today".
+--   * A campaign whose period has PASSED resolves at its own ends_at — "what was eligible
+--     when it stopped". Without this, an ended campaign would silently show today's
+--     catalogue, which is the one thing the requirement forbids: a historical campaign
+--     must not be described by a present-day product list.
+--
+-- BOUNDARY: resolution is half-open, so an assignment interval that closed exactly at
+-- ends_at is NOT included at ends_at. The last instant the campaign could reward is the
+-- instant before it ended, and that is the reading applied.
+--
+-- KNOWN LIMITATION, stated rather than hidden: a CANCELLED campaign that had not yet
+-- reached its end date resolves at now(), because the exact cancellation instant is not
+-- persisted on the campaign row — it exists only in the audit trail. The list is
+-- informational and the campaign rewards nothing once cancelled, so this is acceptable
+-- here; a reward engine must use the verified SALE timestamp regardless, never this.
+create function public.campaign_product_eligibility_as_of(
+  p_starts_at timestamptz,
+  p_ends_at   timestamptz
+)
+returns timestamptz
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select least(now(), coalesce(p_ends_at, 'infinity'::timestamptz));
+$$;
+
+revoke all     on function public.campaign_product_eligibility_as_of(timestamptz, timestamptz) from public;
+revoke execute on function public.campaign_product_eligibility_as_of(timestamptz, timestamptz) from anon;
+revoke execute on function public.campaign_product_eligibility_as_of(timestamptz, timestamptz) from authenticated;
 
 -- ============================================================================
 -- FUNCTION 1 — list_vendor_retailer_groups()
@@ -792,6 +844,7 @@ returns table (
   audience_mode          text,
   performance_scope      text,
   product_scope          text,
+  product_eligibility_resolution text,
   stacking_mode          text,
   exclusivity_key        text,
   priority               integer,
@@ -840,6 +893,7 @@ begin
     cv.audience_mode,
     cv.performance_scope,
     cv.product_scope,
+    cv.product_eligibility_resolution,
     cv.stacking_mode,
     cv.exclusivity_key,
     cv.priority,
@@ -976,6 +1030,7 @@ returns table (
   audience_mode          text,
   performance_scope      text,
   product_scope          text,
+  product_eligibility_resolution text,
   stacking_mode          text,
   exclusivity_key        text,
   priority               integer,
@@ -1018,6 +1073,7 @@ begin
     cv.audience_mode,
     cv.performance_scope,
     cv.product_scope,
+    cv.product_eligibility_resolution,
     cv.stacking_mode,
     cv.exclusivity_key,
     cv.priority,
@@ -1563,14 +1619,20 @@ begin
   end if;
 
   -- ---- Reward --------------------------------------------------------------
-  if p_max_reward_coins is not null and p_max_reward_coins <= 0 then
-    raise exception 'The maximum coins must be greater than zero'
+  -- THE COIN CEILING is 1,000,000,000 on every configured amount, and it is checked here
+  -- as well as by the CHECK constraints in 20260815090000. The constraint makes the bound
+  -- true for every writer; this raises a message an operator can act on rather than a
+  -- constraint name. See the storage migration for the overflow arithmetic it protects.
+  if p_max_reward_coins is not null
+     and (p_max_reward_coins <= 0 or p_max_reward_coins > 1000000000) then
+    raise exception 'The maximum coins must be between 1 and 1,000,000,000'
       using errcode = 'check_violation';
   end if;
 
   if v_rule_type = 'PER_UNIT_COINS' then
-    if p_coins_per_unit is null or p_coins_per_unit <= 0 then
-      raise exception 'Enter the coins awarded per unit'
+    if p_coins_per_unit is null
+       or p_coins_per_unit <= 0 or p_coins_per_unit > 1000000000 then
+      raise exception 'Enter coins per unit between 1 and 1,000,000,000'
         using errcode = 'check_violation';
     end if;
   else
@@ -1578,8 +1640,9 @@ begin
       raise exception 'Enter the unit target'
         using errcode = 'check_violation';
     end if;
-    if p_reward_coins is null or p_reward_coins < 1 then
-      raise exception 'Enter the bonus coins'
+    if p_reward_coins is null
+       or p_reward_coins < 1 or p_reward_coins > 1000000000 then
+      raise exception 'Enter bonus coins between 1 and 1,000,000,000'
         using errcode = 'check_violation';
     end if;
   end if;
@@ -1660,6 +1723,11 @@ begin
       audience_mode          = v_audience,
       performance_scope      = v_performance,
       product_scope          = v_scope,
+      -- DERIVED, never accepted from the caller. There is no p_product_eligibility_resolution
+      -- argument anywhere in this contract: the pairing is a property of the product scope,
+      -- and campaign_versions_resolution_matches_scope refuses any other combination.
+      product_eligibility_resolution =
+        case when v_scope = 'SELECTED_PRODUCTS' then 'SNAPSHOT' else 'LIVE_TEMPORAL' end,
       stacking_mode          = v_stacking,
       exclusivity_key        = v_key,
       priority               = v_priority,
@@ -1793,13 +1861,18 @@ begin
   -- other session can see either until it commits.
   insert into public.campaign_versions (
     campaign_id, version_number, starts_at, timezone_name,
-    audience_mode, performance_scope, product_scope, stacking_mode,
-    created_by_profile_id
+    audience_mode, performance_scope, product_scope, product_eligibility_resolution,
+    stacking_mode, created_by_profile_id
   )
   values (
     v_campaign_id, 1, coalesce(p_starts_at, now()), 'UTC',
-    'ALL_RETAILERS', 'INDIVIDUAL_STAFF', 'ALL_ELIGIBLE_PRODUCTS', 'STACKABLE',
-    v_actor
+    'ALL_RETAILERS', 'INDIVIDUAL_STAFF', 'ALL_ELIGIBLE_PRODUCTS',
+    -- Stated explicitly rather than left to the column default, because
+    -- campaign_versions_resolution_matches_scope requires the pair to agree and the
+    -- placeholder scope above is ALL_ELIGIBLE_PRODUCTS. The shared config writer replaces
+    -- both consistently in the same transaction.
+    'LIVE_TEMPORAL',
+    'STACKABLE', v_actor
   )
   returning id into v_version_id;
 
@@ -2428,13 +2501,14 @@ begin
 
   insert into public.campaign_versions (
     campaign_id, version_number, starts_at, ends_at, timezone_name,
-    audience_mode, performance_scope, product_scope, stacking_mode,
-    exclusivity_key, priority, reward_recipient_scope, created_by_profile_id
+    audience_mode, performance_scope, product_scope, product_eligibility_resolution,
+    stacking_mode, exclusivity_key, priority, reward_recipient_scope, created_by_profile_id
   )
   values (
     v_campaign.id, v_new_number, v_source.starts_at, v_source.ends_at,
     v_source.timezone_name, v_source.audience_mode, v_source.performance_scope,
-    v_source.product_scope, v_source.stacking_mode, v_source.exclusivity_key,
+    v_source.product_scope, v_source.product_eligibility_resolution,
+    v_source.stacking_mode, v_source.exclusivity_key,
     v_source.priority, v_source.reward_recipient_scope, v_actor
   )
   returning id into v_new_id;
@@ -2561,6 +2635,7 @@ returns table (
   timezone_name          text,
   performance_scope      text,
   product_scope          text,
+  product_eligibility_resolution text,
   stacking_mode          text,
   reward_recipient_scope text,
   rule_type              text,
@@ -2599,6 +2674,7 @@ begin
     cv.timezone_name,
     cv.performance_scope,
     cv.product_scope,
+    cv.product_eligibility_resolution,
     cv.stacking_mode,
     cv.reward_recipient_scope,
     r.rule_type,
@@ -2617,13 +2693,14 @@ begin
           and ep.retailer_organization_id = v_retailer
       )
       else (
+        -- LIVE_TEMPORAL: resolved from the ASSIGNMENT TIMELINE at the documented instant,
+        -- not from current assignment status. An ended campaign therefore reports what was
+        -- eligible when it ended rather than what happens to be assigned today.
         select count(*)::integer
-        from public.vendor_product_retailer_assignments pa
-        join public.vendor_products vp on vp.id = pa.vendor_product_id
-        where pa.retailer_organization_id = v_retailer
-          and pa.status = 'ACTIVE'
-          and vp.status = 'ACTIVE'
-          and vp.vendor_organization_id = c.vendor_organization_id
+        from public.vendor_retailer_eligible_products_at(
+               v_retailer,
+               c.vendor_organization_id,
+               public.campaign_product_eligibility_as_of(cv.starts_at, cv.ends_at)) e
       )
     end
   from public.campaign_eligible_retailers er
@@ -2672,6 +2749,7 @@ returns table (
   timezone_name          text,
   performance_scope      text,
   product_scope          text,
+  product_eligibility_resolution text,
   stacking_mode          text,
   reward_recipient_scope text,
   rule_type              text,
@@ -2702,7 +2780,8 @@ begin
     c.id, c.name, c.description, vo.name,
     public.campaign_derived_state(c.status, cv.starts_at, cv.ends_at),
     c.status, cv.starts_at, cv.ends_at, cv.timezone_name,
-    cv.performance_scope, cv.product_scope, cv.stacking_mode, cv.reward_recipient_scope,
+    cv.performance_scope, cv.product_scope, cv.product_eligibility_resolution,
+    cv.stacking_mode, cv.reward_recipient_scope,
     r.rule_type, r.metric_type, r.coins_per_unit, r.max_reward_coins,
     t.threshold_units, t.reward_coins,
     case
@@ -2712,13 +2791,14 @@ begin
           and ep.retailer_organization_id = v_retailer
       )
       else (
+        -- LIVE_TEMPORAL: resolved from the ASSIGNMENT TIMELINE at the documented instant,
+        -- not from current assignment status. An ended campaign therefore reports what was
+        -- eligible when it ended rather than what happens to be assigned today.
         select count(*)::integer
-        from public.vendor_product_retailer_assignments pa
-        join public.vendor_products vp on vp.id = pa.vendor_product_id
-        where pa.retailer_organization_id = v_retailer
-          and pa.status = 'ACTIVE'
-          and vp.status = 'ACTIVE'
-          and vp.vendor_organization_id = c.vendor_organization_id
+        from public.vendor_retailer_eligible_products_at(
+               v_retailer,
+               c.vendor_organization_id,
+               public.campaign_product_eligibility_as_of(cv.starts_at, cv.ends_at)) e
       )
     end
   from public.campaign_eligible_retailers er
@@ -2769,6 +2849,9 @@ declare
   v_version  uuid;
   v_scope    text;
   v_vendor   uuid;
+  -- The single documented instant this list is resolved at. See
+  -- campaign_product_eligibility_as_of().
+  v_as_of    timestamptz;
 begin
   v_retailer := public.resolve_retailer_member_organization('CAMPAIGNS_VIEW_ASSIGNED');
 
@@ -2779,8 +2862,9 @@ begin
 
   -- Resolved through the snapshot, so an unassigned campaign yields nothing to read
   -- rather than a different error.
-  select cv.id, cv.product_scope, c.vendor_organization_id
-    into v_version, v_scope, v_vendor
+  select cv.id, cv.product_scope, c.vendor_organization_id,
+         public.campaign_product_eligibility_as_of(cv.starts_at, cv.ends_at)
+    into v_version, v_scope, v_vendor, v_as_of
   from public.campaign_eligible_retailers er
   join public.campaign_versions cv on cv.id = er.campaign_version_id
   join public.campaigns c
@@ -2801,14 +2885,13 @@ begin
       and ep.retailer_organization_id = v_retailer
     order by vp.product_name, vp.product_code, vp.id;
   else
+    -- LIVE_TEMPORAL: the assignment TIMELINE at the documented instant. Identical to the
+    -- current assignment set while the campaign is still running, and correctly frozen to
+    -- what was eligible at the end once it has ended.
     return query
     select vp.id, vp.product_code, vp.barcode, vp.product_name, vp.brand
-    from public.vendor_product_retailer_assignments pa
-    join public.vendor_products vp on vp.id = pa.vendor_product_id
-    where pa.retailer_organization_id = v_retailer
-      and pa.status = 'ACTIVE'
-      and vp.status = 'ACTIVE'
-      and vp.vendor_organization_id = v_vendor
+    from public.vendor_retailer_eligible_products_at(v_retailer, v_vendor, v_as_of) e
+    join public.vendor_products vp on vp.id = e.vendor_product_id
     order by vp.product_name, vp.product_code, vp.id;
   end if;
 end;
@@ -2840,6 +2923,7 @@ returns table (
   timezone_name          text,
   performance_scope      text,
   product_scope          text,
+  product_eligibility_resolution text,
   stacking_mode          text,
   reward_recipient_scope text,
   rule_type              text,
@@ -2870,7 +2954,8 @@ begin
     c.id, c.name, c.description,
     public.campaign_derived_state(c.status, cv.starts_at, cv.ends_at),
     cv.starts_at, cv.ends_at, cv.timezone_name,
-    cv.performance_scope, cv.product_scope, cv.stacking_mode, cv.reward_recipient_scope,
+    cv.performance_scope, cv.product_scope, cv.product_eligibility_resolution,
+    cv.stacking_mode, cv.reward_recipient_scope,
     r.rule_type, r.metric_type, r.coins_per_unit, r.max_reward_coins,
     t.threshold_units, t.reward_coins,
     case
@@ -2880,13 +2965,14 @@ begin
           and ep.retailer_organization_id = v_retailer
       )
       else (
+        -- LIVE_TEMPORAL: resolved from the ASSIGNMENT TIMELINE at the documented instant,
+        -- not from current assignment status. An ended campaign therefore reports what was
+        -- eligible when it ended rather than what happens to be assigned today.
         select count(*)::integer
-        from public.vendor_product_retailer_assignments pa
-        join public.vendor_products vp on vp.id = pa.vendor_product_id
-        where pa.retailer_organization_id = v_retailer
-          and pa.status = 'ACTIVE'
-          and vp.status = 'ACTIVE'
-          and vp.vendor_organization_id = c.vendor_organization_id
+        from public.vendor_retailer_eligible_products_at(
+               v_retailer,
+               c.vendor_organization_id,
+               public.campaign_product_eligibility_as_of(cv.starts_at, cv.ends_at)) e
       )
     end
   from public.campaign_eligible_retailers er
@@ -2926,6 +3012,7 @@ returns table (
   timezone_name          text,
   performance_scope      text,
   product_scope          text,
+  product_eligibility_resolution text,
   stacking_mode          text,
   reward_recipient_scope text,
   rule_type              text,
@@ -2956,7 +3043,8 @@ begin
     c.id, c.name, c.description,
     public.campaign_derived_state(c.status, cv.starts_at, cv.ends_at),
     cv.starts_at, cv.ends_at, cv.timezone_name,
-    cv.performance_scope, cv.product_scope, cv.stacking_mode, cv.reward_recipient_scope,
+    cv.performance_scope, cv.product_scope, cv.product_eligibility_resolution,
+    cv.stacking_mode, cv.reward_recipient_scope,
     r.rule_type, r.metric_type, r.coins_per_unit, r.max_reward_coins,
     t.threshold_units, t.reward_coins,
     case
@@ -2966,13 +3054,14 @@ begin
           and ep.retailer_organization_id = v_retailer
       )
       else (
+        -- LIVE_TEMPORAL: resolved from the ASSIGNMENT TIMELINE at the documented instant,
+        -- not from current assignment status. An ended campaign therefore reports what was
+        -- eligible when it ended rather than what happens to be assigned today.
         select count(*)::integer
-        from public.vendor_product_retailer_assignments pa
-        join public.vendor_products vp on vp.id = pa.vendor_product_id
-        where pa.retailer_organization_id = v_retailer
-          and pa.status = 'ACTIVE'
-          and vp.status = 'ACTIVE'
-          and vp.vendor_organization_id = c.vendor_organization_id
+        from public.vendor_retailer_eligible_products_at(
+               v_retailer,
+               c.vendor_organization_id,
+               public.campaign_product_eligibility_as_of(cv.starts_at, cv.ends_at)) e
       )
     end
   from public.campaign_eligible_retailers er
@@ -3021,6 +3110,9 @@ declare
   v_version  uuid;
   v_scope    text;
   v_vendor   uuid;
+  -- The single documented instant this list is resolved at. See
+  -- campaign_product_eligibility_as_of().
+  v_as_of    timestamptz;
 begin
   v_retailer := public.resolve_retailer_member_organization('STAFF_CAMPAIGNS_VIEW');
 
@@ -3029,8 +3121,9 @@ begin
       using errcode = 'insufficient_privilege';
   end if;
 
-  select cv.id, cv.product_scope, c.vendor_organization_id
-    into v_version, v_scope, v_vendor
+  select cv.id, cv.product_scope, c.vendor_organization_id,
+         public.campaign_product_eligibility_as_of(cv.starts_at, cv.ends_at)
+    into v_version, v_scope, v_vendor, v_as_of
   from public.campaign_eligible_retailers er
   join public.campaign_versions cv on cv.id = er.campaign_version_id
   join public.campaigns c
@@ -3053,14 +3146,13 @@ begin
       and ep.retailer_organization_id = v_retailer
     order by vp.product_name, vp.product_code, vp.id;
   else
+    -- LIVE_TEMPORAL: the assignment TIMELINE at the documented instant. Identical to the
+    -- current assignment set while the campaign is still running, and correctly frozen to
+    -- what was eligible at the end once it has ended.
     return query
     select vp.id, vp.product_code, vp.barcode, vp.product_name, vp.brand
-    from public.vendor_product_retailer_assignments pa
-    join public.vendor_products vp on vp.id = pa.vendor_product_id
-    where pa.retailer_organization_id = v_retailer
-      and pa.status = 'ACTIVE'
-      and vp.status = 'ACTIVE'
-      and vp.vendor_organization_id = v_vendor
+    from public.vendor_retailer_eligible_products_at(v_retailer, v_vendor, v_as_of) e
+    join public.vendor_products vp on vp.id = e.vendor_product_id
     order by vp.product_name, vp.product_code, vp.id;
   end if;
 end;
