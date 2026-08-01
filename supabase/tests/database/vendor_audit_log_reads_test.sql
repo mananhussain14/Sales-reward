@@ -926,37 +926,16 @@ select is(
 select pg_temp.act_as(pg_temp.fx('ada'));
 
 -- --- the default and the bounds ---------------------------------------------
--- The default is proved by exceeding it. Vendor A has 12 rows, so a call with no arguments
--- cannot distinguish 50 from 12; 60 extra rows push the count to exactly the default.
-insert into public.audit_logs (organization_id, actor_profile_id, action, entity_type, created_at)
-select pg_temp.fx('vendor_a'), pg_temp.fx('ada'), 'PRODUCT_UPDATED', 'VENDOR_PRODUCT',
-       timestamptz '2026-06-01 00:00:00+00' + (g || ' seconds')::interval
-from generate_series(1, 60) g;
-
-select is((select count(*) from public.list_vendor_audit_logs()), 50::bigint,
-  'the default page size is exactly 50 when no limit is given');
-select is((select count(*) from public.list_vendor_audit_logs(null, null, null)), 50::bigint,
-  'an explicit null limit also means 50');
-select is((select count(*) from public.list_vendor_audit_logs(100, null, null)), 72::bigint,
-  'the maximum of 100 is honoured and returns everything available below it');
-select is((select count(*) from public.list_vendor_audit_logs(1, null, null)), 1::bigint,
-  'a limit of 1 returns exactly one row');
-
-select is(pg_temp.sqlstate_of('select * from public.list_vendor_audit_logs(101, null, null)'),
-  '22023', 'a limit ABOVE the maximum is refused, not silently clamped');
-select is(pg_temp.sqlstate_of('select * from public.list_vendor_audit_logs(0, null, null)'),
-  '22023', 'a zero limit is refused — it would be indistinguishable from the end of history');
-select is(pg_temp.sqlstate_of('select * from public.list_vendor_audit_logs(-1, null, null)'),
-  '22023', 'a negative limit is refused — in PostgreSQL a negative LIMIT is unbounded');
-select is(pg_temp.sqlstate_of('select * from public.list_vendor_audit_logs(-2147483648, null, null)'),
-  '22023', 'the most negative integer is refused too');
-
--- Remove the 60 filler rows; the traversal assertions below reason about the 12 named ones.
-delete from public.audit_logs
-where organization_id = pg_temp.fx('vendor_a')
-  and created_at < timestamptz '2026-07-01 00:00:00+00';
-
-select is(pg_temp.page_size(100), 12::bigint, 'the filler rows are gone (fixture sanity)');
+-- MOVED TO SECTION K2, and the reason is worth stating where the reader expects the block.
+--
+-- Proving the default page size requires MORE than 50 rows, and this suite's other sections
+-- reason about the 12 named ones. The block therefore used to insert 60 filler rows and then
+-- DELETE them again -- which migration 20260816090000 now correctly refuses, because
+-- public.audit_logs is append-only in the database rather than by convention.
+--
+-- The fix is to stop needing the teardown at all: every assertion that grows the history now
+-- runs at the END of the suite, after everything that depends on a smaller count. Nothing is
+-- skipped and no coverage is lost -- see SECTION K2.
 
 -- --- cursor validation ------------------------------------------------------
 select is(
@@ -1023,33 +1002,11 @@ select is(
 -- ============================================================================
 select pg_temp.act_as(pg_temp.fx('ada'));
 
--- Write a NEWER event, then fetch page two with page one's cursor. Under OFFSET this insert
--- would shift every subsequent window by one row, duplicating one and skipping none.
-insert into pg_temp.fx (k, v) values
-  ('e_new', pg_temp.new_audit(
-     pg_temp.fx('vendor_a'), pg_temp.fx('ada'),
-     'PRODUCT_CREATED', 'VENDOR_PRODUCT',
-     timestamptz '2026-07-01 12:59:00+00',
-     jsonb_build_object('product_name', 'Arrived Later')));
-
-select is(
-  pg_temp.page_ids(5, pg_temp.f_at(pg_temp.fx('e5')), pg_temp.fx('e5')),
-  (pg_temp.expected_order())[6:10],
-  'an event arriving after page one does not shift, duplicate or skip anything on page two');
-
-select ok(
-  not (pg_temp.fx('e_new') = any (pg_temp.page_ids(5, pg_temp.f_at(pg_temp.fx('e5')), pg_temp.fx('e5')))),
-  'and the new event does not appear on an older page — it is newer than the cursor');
-
--- Refresh: a null cursor is how a client pulls to refresh, and it is where the new event is.
-select is((pg_temp.page_ids(5))[1], pg_temp.fx('e_new'),
-  'refreshing with a null cursor returns the newest page, with the new event at its head');
-
-select is(pg_temp.page_size(100), 13::bigint, 'the history has grown by exactly one');
-
--- Restore the fixture for the remaining sections.
-delete from public.audit_logs where id = pg_temp.fx('e_new');
-select is(pg_temp.page_ids(100), pg_temp.expected_order(), 'fixture restored');
+-- --- the arriving event -----------------------------------------------------
+-- MOVED TO SECTION K2, for the same reason as Section G's page-size block: it used to insert
+-- a newer event and then DELETE it to restore the fixture, and audit_logs is now append-only
+-- in the database (migration 20260816090000). Growing the history at the END of the suite
+-- removes the need for any teardown.
 
 -- --- a cursor from another Vendor -------------------------------------------
 -- b_new is NEWER than everything Vendor A has, so using it as a cursor must return Vendor A's
@@ -1191,6 +1148,83 @@ select is(
   (select count(*) from public.audit_logs a
    where a.action in ('AUDIT_LOG_READ', 'AUDIT_LOGS_READ', 'AUDIT_LOG_VIEWED')),
   0::bigint, 'reading the history is not itself recorded as an event');
+
+-- ============================================================================
+-- SECTION K2 — assertions that GROW the history
+-- ============================================================================
+-- Everything here adds audit rows and never removes any, so it runs after every section that
+-- reasons about Vendor A's history being exactly 12 rows.
+--
+-- WHY THE BLOCKS LIVE HERE RATHER THAN IN SECTIONS G AND H. Both used to insert rows and then
+-- DELETE them to restore the fixture. Migration 20260816090000 makes public.audit_logs
+-- append-only in the database -- UPDATE, DELETE and TRUNCATE are all refused, for every role
+-- including the owner -- so a teardown of that shape can no longer run, and should not: the
+-- whole point of the milestone is that an audit row, once written, stays written.
+--
+-- Ordering inside this section matters and is deliberate: the single arriving event runs
+-- FIRST, while the history is still 12 rows, and the 60 filler rows run SECOND. Reversing
+-- them would make the arriving-event counts depend on the filler.
+select pg_temp.act_as(pg_temp.fx('ada'));
+
+-- --- the arriving event (was SECTION H) --------------------------------------
+-- Write a NEWER event, then fetch page two with page one's cursor. Under OFFSET this insert
+-- would shift every subsequent window by one row, duplicating one and skipping none.
+insert into pg_temp.fx (k, v) values
+  ('e_new', pg_temp.new_audit(
+     pg_temp.fx('vendor_a'), pg_temp.fx('ada'),
+     'PRODUCT_CREATED', 'VENDOR_PRODUCT',
+     timestamptz '2026-07-01 12:59:00+00',
+     jsonb_build_object('product_name', 'Arrived Later')));
+
+select is(
+  pg_temp.page_ids(5, pg_temp.f_at(pg_temp.fx('e5')), pg_temp.fx('e5')),
+  (pg_temp.expected_order())[6:10],
+  'an event arriving after page one does not shift, duplicate or skip anything on page two');
+
+select ok(
+  not (pg_temp.fx('e_new') = any (pg_temp.page_ids(5, pg_temp.f_at(pg_temp.fx('e5')), pg_temp.fx('e5')))),
+  'and the new event does not appear on an older page — it is newer than the cursor');
+
+-- Refresh: a null cursor is how a client pulls to refresh, and it is where the new event is.
+select is((pg_temp.page_ids(5))[1], pg_temp.fx('e_new'),
+  'refreshing with a null cursor returns the newest page, with the new event at its head');
+
+select is(pg_temp.page_size(100), 13::bigint, 'the history has grown by exactly one');
+
+-- --- the default and the bounds (was SECTION G) ------------------------------
+-- The default is proved by exceeding it. Vendor A now has 13 rows, so a call with no
+-- arguments still cannot distinguish 50 from 13; 60 extra rows push the count past it.
+insert into public.audit_logs (organization_id, actor_profile_id, action, entity_type, created_at)
+select pg_temp.fx('vendor_a'), pg_temp.fx('ada'), 'PRODUCT_UPDATED', 'VENDOR_PRODUCT',
+       timestamptz '2026-06-01 00:00:00+00' + (g || ' seconds')::interval
+from generate_series(1, 60) g;
+
+select is((select count(*) from public.list_vendor_audit_logs()), 50::bigint,
+  'the default page size is exactly 50 when no limit is given');
+select is((select count(*) from public.list_vendor_audit_logs(null, null, null)), 50::bigint,
+  'an explicit null limit also means 50');
+-- 13 named + 60 filler. Was 72 before the arriving event moved ahead of this block.
+select is((select count(*) from public.list_vendor_audit_logs(100, null, null)), 73::bigint,
+  'the maximum of 100 is honoured and returns everything available below it');
+select is((select count(*) from public.list_vendor_audit_logs(1, null, null)), 1::bigint,
+  'a limit of 1 returns exactly one row');
+
+select is(pg_temp.sqlstate_of('select * from public.list_vendor_audit_logs(101, null, null)'),
+  '22023', 'a limit ABOVE the maximum is refused, not silently clamped');
+select is(pg_temp.sqlstate_of('select * from public.list_vendor_audit_logs(0, null, null)'),
+  '22023', 'a zero limit is refused — it would be indistinguishable from the end of history');
+select is(pg_temp.sqlstate_of('select * from public.list_vendor_audit_logs(-1, null, null)'),
+  '22023', 'a negative limit is refused — in PostgreSQL a negative LIMIT is unbounded');
+select is(pg_temp.sqlstate_of('select * from public.list_vendor_audit_logs(-2147483648, null, null)'),
+  '22023', 'the most negative integer is refused too');
+
+-- The filler rows are OLDER than every named event, so newest-first pagination puts them
+-- after the 13 -- which is why the cursor assertions above are unaffected by them and why
+-- this block can safely run last.
+-- e_new is at 12:59, newer than all twelve, so newest-first ordering puts it at the HEAD.
+select is(
+  (pg_temp.page_ids(100))[1:13], pg_temp.fx('e_new') || pg_temp.expected_order(),
+  'the named events still lead the history, with the arriving event at its head');
 
 -- ============================================================================
 -- SECTION L — the actor ambiguity, proved by DELETION rather than argued
