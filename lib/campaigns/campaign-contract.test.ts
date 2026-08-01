@@ -232,15 +232,25 @@ describe("1. migration hygiene", () => {
   });
 
   test("1.6 no existing migration file was modified to add campaign objects", () => {
-    const others = readdirSync(MIGRATIONS_DIR)
-      .filter(
-        (f) =>
-          f.endsWith(".sql") &&
-          f !== HISTORY_NAME &&
-          f !== FOUNDATION_NAME &&
-          f !== OPERATIONS_NAME,
-      );
-    for (const file of others) {
+    // "EXISTING" MEANS EXACTLY THAT: a file that was already shipped when the campaign
+    // milestone landed, and which must therefore never be retro-edited to add a campaign
+    // object. The comparison is against FOUNDATION_NAME, so the set is the migrations
+    // whose timestamp PRECEDES the campaign foundation.
+    //
+    // It is deliberately NOT "every file that is not one of the three". A later milestone
+    // may legitimately add a campaign-prefixed table in its OWN new migration — the Phase 0
+    // reward-engine work adds public.campaign_version_status_history in
+    // 20260816210000 — and forbidding that would make this guard block ordinary forward
+    // work rather than the retro-editing it exists to catch. Test 1.1b already establishes
+    // that later migrations are expected and must not break these guards.
+    const priorFiles = readdirSync(MIGRATIONS_DIR)
+      .filter((f) => f.endsWith(".sql") && f < FOUNDATION_NAME);
+
+    // A sanity floor: if the filter ever silently matched nothing, the loop below would
+    // pass vacuously and the guard would be dead code.
+    assert.ok(priorFiles.length > 0, "there must be migrations preceding the foundation");
+
+    for (const file of priorFiles) {
       const sql = sqlCode(readFileSync(join(MIGRATIONS_DIR, file), "utf8"));
       assert.ok(
         !/create table public\.campaign/i.test(sql),
