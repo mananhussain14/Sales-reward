@@ -35,6 +35,11 @@ import {
 import type { CampaignFormState } from "@/app/(admin)/campaigns/campaign-action-state";
 import { INITIAL_CAMPAIGN_FORM_STATE } from "@/app/(admin)/campaigns/campaign-action-state";
 import type { PublicationPreviewRow } from "@/lib/campaigns/campaign-normalization";
+import {
+  campaignStepStatuses,
+  needsAttention,
+  REVIEW_STEP_INDEX,
+} from "@/lib/campaigns/campaign-step-state";
 import { ChoiceCard, ChoiceCardGroup } from "@/components/campaigns/choice-cards";
 import { EntityPicker } from "@/components/campaigns/entity-picker";
 import { WizardStepper } from "@/components/campaigns/wizard-stepper";
@@ -206,6 +211,34 @@ export function CampaignWizard({
   const [stepIndex, setStepIndex] = useState(0);
   const fieldId = useId();
 
+  /**
+   * Which steps the operator has actually opened.
+   *
+   * WHY THIS EXISTS. `audienceMode` and `productScope` start on a legal default, so
+   * "produces no validation error" is true for those steps before anyone has seen them.
+   * Reading completion from validity alone therefore reported "Complete" on an untouched
+   * form — the defect this correction fixes. Visiting is a separate fact and is tracked
+   * separately.
+   *
+   * EDIT MODE STARTS FULLY VISITED. A saved draft's every step was configured by whoever
+   * wrote it, so presenting them as "Not started" would misdescribe work already done.
+   * Their validity is still recomputed, so a step that has since become invalid shows
+   * "Needs attention" rather than "Complete".
+   */
+  const [visited, setVisited] = useState<ReadonlySet<number>>(() =>
+    mode === "edit"
+      ? new Set(WIZARD_STEPS.map((_, index) => index))
+      : new Set([0]),
+  );
+
+  function goToStep(index: number) {
+    const next = Math.min(Math.max(index, 0), WIZARD_STEPS.length - 1);
+    setStepIndex(next);
+    setVisited((previous) =>
+      previous.has(next) ? previous : new Set(previous).add(next),
+    );
+  }
+
   const step = WIZARD_STEPS[stepIndex];
   const validation = validateCampaignForm(values);
   const serverErrors = state.fieldErrors;
@@ -249,6 +282,37 @@ export function CampaignWizard({
   const selectedProducts = new Set(values.productIds);
 
   const previewRows = preview ?? [];
+
+  /**
+   * Whether the chosen audience currently resolves to nobody.
+   *
+   * Only RETAILER_GROUPS can do this while still passing every field rule: an operator
+   * may legitimately select a group that happens to have no Retailers in it. Publication
+   * refuses such a campaign, so the audience step must not read "Complete" first. Group
+   * membership counts are data the pure validator does not hold, which is why this is
+   * computed here and passed in.
+   */
+  const audienceResolvesToNoRetailer =
+    values.audienceMode === "RETAILER_GROUPS" &&
+    values.groupIds.length > 0 &&
+    values.groupIds.every(
+      (id) => groups.find((group) => group.groupId === id)?.memberCount === 0,
+    );
+
+  // ONE computation, read by the desktop rail, the mobile header, the summary badge and
+  // the review step — so no two of them can describe the same step differently.
+  const stepStatuses = campaignStepStatuses({
+    values,
+    activeIndex: stepIndex,
+    visited,
+    saved: committed,
+    audienceResolvesToNoRetailer,
+  });
+
+  const reviewStatus = stepStatuses[REVIEW_STEP_INDEX];
+  const stepsNeedingAttention = WIZARD_STEPS.map((step, index) => ({ step, index }))
+    .filter(({ index }) => needsAttention(stepStatuses[index]))
+    .map(({ step, index }) => ({ title: step.title, index }));
 
   /* -------------------------------------------------------------------------
    * Display strings for the summary and review, derived ONCE so the panel beside
@@ -304,14 +368,29 @@ export function CampaignWizard({
         : `${stackingLabel("EXCLUSIVE")} · ${values.exclusivityKey.trim()}`
       : stackingLabel("STACKABLE");
 
+  /**
+   * A row shows a DEFAULT the operator has not reached yet when its owning step has not
+   * been visited. Such a row still displays its value — that is genuinely what the
+   * campaign currently says — but is marked, and does not count towards progress. Without
+   * this, an untouched form reported four of seven details "complete" purely because
+   * three enums start on a legal value.
+   */
+  const unconfirmed = (ownerStep: number) => stepStatuses[ownerStep] === "NOT_STARTED";
+
   const summaryRows: SummaryRow[] = [
     { key: "name", label: "Name", value: values.name.trim() || null },
-    { key: "audience", label: "Audience", value: audienceText },
+    {
+      key: "audience",
+      label: "Audience",
+      value: audienceText,
+      unconfirmed: unconfirmed(1),
+    },
     {
       key: "products",
       label: "Products",
       value: productText,
       detail: productText === null ? null : productResolutionLabel(resolution),
+      unconfirmed: unconfirmed(2),
     },
     {
       key: "performance",
@@ -321,6 +400,7 @@ export function CampaignWizard({
           ? "RETAILER_TEAM"
           : "INDIVIDUAL_STAFF",
       ),
+      unconfirmed: unconfirmed(3),
     },
     { key: "reward", label: "Reward", value: rewardPreview },
     {
@@ -329,10 +409,13 @@ export function CampaignWizard({
       value: scheduleText,
       detail: values.timezoneName || null,
     },
-    { key: "stacking", label: "Stacking", value: stackingText },
+    {
+      key: "stacking",
+      label: "Stacking",
+      value: stackingText,
+      unconfirmed: unconfirmed(4),
+    },
   ];
-
-  const summaryComplete = summaryRows.filter((row) => row.value !== null).length;
 
   /* ---------------------------------------------------------------------- */
 
@@ -351,9 +434,9 @@ export function CampaignWizard({
         <div className="order-1 lg:col-start-1 lg:row-start-1 lg:sticky lg:top-6 lg:self-start">
           <WizardStepper
             steps={WIZARD_STEPS}
+            statuses={stepStatuses}
             activeIndex={stepIndex}
-            isComplete={(index) => isStepComplete(values, WIZARD_STEPS[index].key)}
-            onSelect={setStepIndex}
+            onSelect={goToStep}
           />
         </div>
 
@@ -361,8 +444,6 @@ export function CampaignWizard({
         <CampaignSummaryPanel
           className="order-2 lg:col-start-2 lg:row-start-2 xl:col-start-3 xl:row-start-1"
           rows={summaryRows}
-          completeCount={summaryComplete}
-          totalCount={summaryRows.length}
         />
 
         {/* ---- Column 2: the step ---- */}
@@ -600,7 +681,7 @@ export function CampaignWizard({
                     : "ALL_ELIGIBLE_PRODUCTS"
                 }
                 selectedProductCount={values.productIds.length}
-                onChangeAudience={() => setStepIndex(1)}
+                onChangeAudience={() => goToStep(1)}
               />
             )}
           </div>
@@ -952,7 +1033,7 @@ export function CampaignWizard({
             <div className="grid gap-3 sm:grid-cols-2">
               <ReviewSection
                 title="Campaign"
-                onEdit={() => setStepIndex(0)}
+                onEdit={() => goToStep(0)}
                 editLabel="Edit"
                 incomplete={values.name.trim().length === 0}
                 incompleteMessage="A campaign name is required."
@@ -967,7 +1048,7 @@ export function CampaignWizard({
 
               <ReviewSection
                 title="Audience"
-                onEdit={() => setStepIndex(1)}
+                onEdit={() => goToStep(1)}
                 editLabel="Edit"
                 incomplete={audienceText === null}
                 incompleteMessage="Choose at least one Retailer or group."
@@ -982,7 +1063,7 @@ export function CampaignWizard({
 
               <ReviewSection
                 title="Products"
-                onEdit={() => setStepIndex(2)}
+                onEdit={() => goToStep(2)}
                 editLabel="Edit"
                 incomplete={productText === null}
                 incompleteMessage="Select at least one product."
@@ -997,7 +1078,7 @@ export function CampaignWizard({
 
               <ReviewSection
                 title="Performance and reward"
-                onEdit={() => setStepIndex(3)}
+                onEdit={() => goToStep(3)}
                 editLabel="Edit"
                 incomplete={rewardPreview === null}
                 incompleteMessage="Complete the reward values."
@@ -1016,7 +1097,7 @@ export function CampaignWizard({
 
               <ReviewSection
                 title="Schedule"
-                onEdit={() => setStepIndex(4)}
+                onEdit={() => goToStep(4)}
                 editLabel="Edit"
                 incomplete={scheduleText === null}
                 incompleteMessage="Choose a time zone and a start."
@@ -1029,7 +1110,7 @@ export function CampaignWizard({
 
               <ReviewSection
                 title="Stacking"
-                onEdit={() => setStepIndex(4)}
+                onEdit={() => goToStep(4)}
                 editLabel="Edit"
                 incomplete={stackingText === null}
                 incompleteMessage="An exclusive campaign needs a key."
@@ -1054,15 +1135,54 @@ export function CampaignWizard({
                     : "ALL_ELIGIBLE_PRODUCTS"
                 }
                 selectedProductCount={values.productIds.length}
-                onReviewProducts={() => setStepIndex(2)}
-                onChangeAudience={() => setStepIndex(1)}
+                onReviewProducts={() => goToStep(2)}
+                onChangeAudience={() => goToStep(1)}
               />
             )}
 
-            {!validation.ok && (
-              <Alert tone="warning" title="Some steps are still incomplete">
-                The highlighted sections above need attention before this draft can be
-                saved. Use their Edit links to go straight to the step.
+            {/* THE READINESS ANSWER, stated once and in words.
+                `Save draft` is gated on the WHOLE form because create_vendor_campaign_draft
+                requires every field — so an incomplete campaign is genuinely not saveable,
+                and saying "can be saved as a draft" here would be untrue. */}
+            {reviewStatus === "READY_TO_SAVE" ? (
+              <Alert tone="success" title="Ready to save">
+                Every step is complete. Saving stores this as a draft — it is not
+                published, and no Retailer can see it yet.
+              </Alert>
+            ) : reviewStatus === "COMPLETE" ? (
+              <Alert tone="success" title="Draft saved">
+                This campaign has been saved as a draft. Open it to publish when you are
+                ready.
+              </Alert>
+            ) : (
+              <Alert tone="warning" title="Not ready to save yet">
+                <p>
+                  This draft cannot be saved until every step is complete. Publishing is a
+                  separate step afterwards, and needs the same values.
+                </p>
+                {stepsNeedingAttention.length > 0 && (
+                  <ul className="mt-2 flex flex-wrap gap-2">
+                    {stepsNeedingAttention.map((entry) => (
+                      <li key={entry.index}>
+                        <button
+                          type="button"
+                          onClick={() => goToStep(entry.index)}
+                          className="inline-flex items-center gap-1 rounded-lg border border-amber-300 bg-white px-2.5 py-1 text-xs font-semibold text-amber-900 transition-colors hover:bg-amber-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2"
+                        >
+                          Fix {entry.title}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {/* A step never opened is not "wrong" — it simply has not been done, and
+                    saying so avoids implying the operator made a mistake. */}
+                {stepsNeedingAttention.length === 0 && (
+                  <p className="mt-2 text-sm">
+                    Use the Edit links above, or the step list, to finish the remaining
+                    steps.
+                  </p>
+                )}
               </Alert>
             )}
 
@@ -1087,7 +1207,7 @@ export function CampaignWizard({
             <Button
               type="button"
               variant="outline"
-              onClick={() => setStepIndex((index) => Math.max(0, index - 1))}
+              onClick={() => goToStep(stepIndex - 1)}
               disabled={stepIndex === 0 || pending}
             >
               Back
@@ -1124,11 +1244,7 @@ export function CampaignWizard({
                 <Button
                   type="button"
                   variant="primary"
-                  onClick={() =>
-                    setStepIndex((index) =>
-                      Math.min(WIZARD_STEPS.length - 1, index + 1),
-                    )
-                  }
+                  onClick={() => goToStep(stepIndex + 1)}
                   disabled={!canAdvance || pending}
                 >
                   Continue

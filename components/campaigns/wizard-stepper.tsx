@@ -1,7 +1,13 @@
 "use client";
 
 import { cn } from "@/components/ui/cn";
-import { CheckIcon } from "@/components/ui/icons";
+import { AlertTriangleIcon, CheckIcon } from "@/components/ui/icons";
+import {
+  isSettledStatus,
+  needsAttention,
+  stepStatusLabel,
+  type StepStatus,
+} from "@/lib/campaigns/campaign-step-state";
 
 /**
  * The campaign wizard's progress control.
@@ -16,13 +22,18 @@ import { CheckIcon } from "@/components/ui/icons";
  *   * below `lg` — a COMPACT HEADER: "Step 3 of 6", the step's own title, and a segmented
  *     progress bar. Fixed height, no wrapping, no truncation.
  *
- * Both are the same `<ol>` of buttons underneath, so keyboard order, focus and the
- * announced position are identical at every width — only the presentation differs.
+ * BOTH PRESENTATIONS READ THE SAME `statuses` ARRAY. They cannot disagree about a step,
+ * because neither of them derives anything — the state is computed once, in
+ * @/lib/campaigns/campaign-step-state, and passed in.
  *
  * A step is reachable by click whether or not the steps before it are complete: this is a
  * configuration form, not a payment funnel, and jumping back to fix step 2 from step 5 is
  * the common case. Completion is shown, never enforced by hiding — the Save control is
  * what validation actually gates.
+ *
+ * STATE IS NEVER CARRIED BY COLOUR ALONE. Every step renders its status as a WORD, and the
+ * two states an operator must act on differ in SHAPE as well: a check for a settled step,
+ * a warning triangle for one that needs attention.
  */
 
 export type StepperStep = {
@@ -32,20 +43,68 @@ export type StepperStep = {
   summary: string;
 };
 
+/** The marker inside a step's disc: a tick, a warning, or the step's number. */
+function StepMarker({
+  status,
+  index,
+  active,
+}: {
+  status: StepStatus;
+  index: number;
+  active: boolean;
+}) {
+  if (needsAttention(status)) {
+    return <AlertTriangleIcon className="h-4 w-4" />;
+  }
+  if (isSettledStatus(status) && !active) {
+    return <CheckIcon className="h-4 w-4" />;
+  }
+  return <>{index + 1}</>;
+}
+
+const DISC_TONES: Record<StepStatus, string> = {
+  NOT_STARTED: "bg-white text-slate-500 ring-slate-300",
+  IN_PROGRESS: "bg-indigo-600 text-white ring-indigo-600",
+  COMPLETE: "bg-emerald-50 text-emerald-700 ring-emerald-300",
+  NEEDS_ATTENTION: "bg-amber-50 text-amber-700 ring-amber-400",
+  NOT_READY: "bg-white text-slate-500 ring-slate-300",
+  READY_TO_SAVE: "bg-emerald-50 text-emerald-700 ring-emerald-300",
+};
+
+const SEGMENT_TONES: Record<StepStatus, string> = {
+  NOT_STARTED: "bg-slate-200 hover:bg-slate-300",
+  IN_PROGRESS: "bg-indigo-600",
+  COMPLETE: "bg-emerald-500",
+  NEEDS_ATTENTION: "bg-amber-500",
+  NOT_READY: "bg-slate-200 hover:bg-slate-300",
+  READY_TO_SAVE: "bg-emerald-500",
+};
+
+const LABEL_TONES: Record<StepStatus, string> = {
+  NOT_STARTED: "text-slate-500",
+  IN_PROGRESS: "text-indigo-700",
+  COMPLETE: "text-emerald-700",
+  NEEDS_ATTENTION: "text-amber-700",
+  NOT_READY: "text-slate-500",
+  READY_TO_SAVE: "text-emerald-700",
+};
+
 export function WizardStepper({
   steps,
+  statuses,
   activeIndex,
-  isComplete,
   onSelect,
 }: {
   steps: readonly StepperStep[];
+  /** One status per step, computed by campaignStepStatuses. */
+  statuses: readonly StepStatus[];
   activeIndex: number;
-  /** Whether the step at this index has everything it needs. */
-  isComplete: (index: number) => boolean;
   onSelect: (index: number) => void;
 }) {
   const current = steps[activeIndex];
   const total = steps.length;
+  const settled = statuses.filter((status) => isSettledStatus(status)).length;
+  const attention = statuses.filter((status) => needsAttention(status)).length;
 
   return (
     <>
@@ -56,7 +115,9 @@ export function WizardStepper({
             Step {activeIndex + 1} of {total}
           </p>
           <p className="text-xs text-slate-500">
-            {steps.filter((_, index) => isComplete(index)).length} of {total} complete
+            {attention > 0
+              ? `${attention} ${attention === 1 ? "step needs" : "steps need"} attention`
+              : `${settled} of ${total} complete`}
           </p>
         </div>
         <h2 className="mt-1 text-lg font-semibold tracking-tight text-slate-900">
@@ -64,13 +125,14 @@ export function WizardStepper({
         </h2>
         <p className="mt-0.5 text-sm text-slate-500">{current?.summary}</p>
 
-        {/* A segmented bar: one segment per step, so position is visible without labels. */}
+        {/* A segmented bar: one segment per step, so position is visible without labels.
+            Each segment's accessible name still carries the step's status in words. */}
         <ol
           className="mt-3 flex gap-1.5"
           aria-label={`Step ${activeIndex + 1} of ${total}: ${current?.title ?? ""}`}
         >
           {steps.map((step, index) => {
-            const done = isComplete(index);
+            const status = statuses[index] ?? "NOT_STARTED";
             const active = index === activeIndex;
             return (
               <li key={step.key} className="flex-1">
@@ -81,28 +143,30 @@ export function WizardStepper({
                   className={cn(
                     "h-1.5 w-full rounded-full transition-colors",
                     "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2",
-                    active
-                      ? "bg-indigo-600"
-                      : done
-                        ? "bg-emerald-500"
-                        : "bg-slate-200 hover:bg-slate-300",
+                    SEGMENT_TONES[status],
                   )}
                 >
                   <span className="sr-only">
-                    {`Step ${index + 1}: ${step.title}${done ? " (complete)" : ""}`}
+                    {`Step ${index + 1}: ${step.title} — ${stepStatusLabel(status)}`}
                   </span>
                 </button>
               </li>
             );
           })}
         </ol>
+
+        {/* The active step's own status in words, so the narrow layout states it too
+            rather than leaving it to the bar's colours. */}
+        <p className={cn("mt-2 text-xs font-medium", LABEL_TONES[statuses[activeIndex] ?? "NOT_STARTED"])}>
+          {stepStatusLabel(statuses[activeIndex] ?? "NOT_STARTED")}
+        </p>
       </div>
 
       {/* ---------------- Wide: vertical rail ---------------- */}
       <nav className="hidden lg:block" aria-label="Campaign steps">
         <ol className="relative space-y-1">
           {steps.map((step, index) => {
-            const done = isComplete(index);
+            const status = statuses[index] ?? "NOT_STARTED";
             const active = index === activeIndex;
             const last = index === steps.length - 1;
 
@@ -114,7 +178,7 @@ export function WizardStepper({
                     aria-hidden="true"
                     className={cn(
                       "absolute left-[15px] top-9 h-[calc(100%-1.25rem)] w-px",
-                      done ? "bg-emerald-300" : "bg-slate-200",
+                      isSettledStatus(status) ? "bg-emerald-300" : "bg-slate-200",
                     )}
                   />
                 )}
@@ -133,18 +197,10 @@ export function WizardStepper({
                     aria-hidden="true"
                     className={cn(
                       "relative z-10 flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold ring-1 transition-colors",
-                      active
-                        ? "bg-indigo-600 text-white ring-indigo-600"
-                        : done
-                          ? "bg-emerald-50 text-emerald-700 ring-emerald-300"
-                          : "bg-white text-slate-500 ring-slate-300",
+                      DISC_TONES[status],
                     )}
                   >
-                    {done && !active ? (
-                      <CheckIcon className="h-4 w-4" />
-                    ) : (
-                      index + 1
-                    )}
+                    <StepMarker status={status} index={index} active={active} />
                   </span>
 
                   <span className="min-w-0 pt-1">
@@ -156,9 +212,11 @@ export function WizardStepper({
                     >
                       {step.title}
                     </span>
-                    {/* Completion is stated in words as well as colour. */}
-                    <span className="mt-0.5 block text-xs text-slate-500">
-                      {done ? "Complete" : active ? "In progress" : "Not started"}
+                    {/* The status in words. Never colour alone. */}
+                    <span
+                      className={cn("mt-0.5 block text-xs font-medium", LABEL_TONES[status])}
+                    >
+                      {stepStatusLabel(status)}
                     </span>
                   </span>
                 </button>

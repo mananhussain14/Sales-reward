@@ -580,8 +580,14 @@ describe("4. the creation wizard", () => {
     assert.match(STEPPER_CODE, /aria-current=\{active \? "step" : undefined\}/);
     assert.match(STEPPER_CODE, /aria-label=\{`Step \$\{activeIndex \+ 1\} of \$\{total\}/);
     assert.match(STEPPER_CODE, /Step \{activeIndex \+ 1\} of \{total\}/);
-    // Completion is stated in words, never by colour alone.
-    assert.match(STEPPER_CODE, /"Complete"/);
+    // Completion is stated in WORDS, never by colour alone. The words themselves now
+    // come from the shared step-state module, so the rail and the mobile header cannot
+    // label the same step differently — which is checked by asserting the stepper renders
+    // the shared label rather than a literal of its own.
+    assert.match(STEPPER_CODE, /stepStatusLabel\(/);
+    const stepState = read(join(ROOT, "lib/campaigns/campaign-step-state.ts"));
+    assert.match(stepState, /COMPLETE: "Complete"/);
+    assert.match(stepState, /NEEDS_ATTENTION: "Needs attention"/);
   });
 
   test("4.9 every field has a label, and errors are announced", () => {

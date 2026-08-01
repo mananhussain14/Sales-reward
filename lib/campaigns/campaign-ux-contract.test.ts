@@ -233,7 +233,9 @@ describe("2. the wizard's progress control cannot wrap", () => {
     const review = WIZARD_CODE.slice(WIZARD_CODE.indexOf('step.key !== "review"'));
     const sections = [...review.matchAll(/<ReviewSection/g)].length;
     assert.ok(sections >= 6, `only ${sections} review sections`);
-    const edits = [...review.matchAll(/onEdit=\{\(\) => setStepIndex\((\d)\)\}/g)].map(
+    // `goToStep` rather than a bare setState: every navigation must also RECORD the
+    // visit, which is what stops an unvisited step reporting itself Complete.
+    const edits = [...review.matchAll(/onEdit=\{\(\) => goToStep\((\d)\)\}/g)].map(
       (m) => Number(m[1]),
     );
     // Every step that owns a decision is reachable from the review.
@@ -285,8 +287,8 @@ describe("3. the conflict experience says what will actually happen", () => {
     assert.match(ELIGIBILITY_CODE, /Review products/);
     assert.match(ELIGIBILITY_CODE, /Change audience/);
     // Wired to the steps that fix each one.
-    assert.match(WIZARD_CODE, /onReviewProducts=\{\(\) => setStepIndex\(2\)\}/);
-    assert.match(WIZARD_CODE, /onChangeAudience=\{\(\) => setStepIndex\(1\)\}/);
+    assert.match(WIZARD_CODE, /onReviewProducts=\{\(\) => goToStep\(2\)\}/);
+    assert.match(WIZARD_CODE, /onChangeAudience=\{\(\) => goToStep\(1\)\}/);
   });
 
   test("3.5 a blocked publication is announced; a reduced one is not", () => {
@@ -615,5 +617,179 @@ describe("8. loading, feedback and accessibility", () => {
     assert.match(flat(WIZARD), /A stackable campaign has no exclusivity key/);
     assert.match(flat(WIZARD), /not saved/);
     assert.match(WIZARD_CODE, /update\("exclusivityKey", ""\)/);
+  });
+});
+
+/* ===========================================================================
+ * 9. Wizard progress states
+ *
+ * The browser review found the rail claiming "Complete" for steps the operator had
+ * never opened, and for "Review and save" on a blank campaign, while the summary panel
+ * beside it correctly reported the same values missing. The state model itself is unit
+ * tested in campaign-step-state.test.ts; these assert that the WIRING cannot regress.
+ * ======================================================================== */
+
+describe("9. the wizard's progress states are wired to the shared model", () => {
+  const STEP_STATE = read(join(ROOT, "lib/campaigns/campaign-step-state.ts"));
+
+  test("9.1 the wizard derives status from the shared model, not from validity alone", () => {
+    assert.match(WIZARD_CODE, /campaignStepStatuses\(\{/);
+    assert.match(WIZARD_CODE, /const stepStatuses = campaignStepStatuses/);
+    // The old wiring passed a bare validity predicate into the rail. If that returns,
+    // an unvisited step with a legal default reports Complete again.
+    assert.ok(
+      !/isComplete=\{\(index\) => isStepComplete\(/.test(WIZARD_CODE),
+      "the stepper is being fed raw validity again",
+    );
+  });
+
+  test("9.2 visiting is tracked separately from validity", () => {
+    assert.match(WIZARD_CODE, /const \[visited, setVisited\]/);
+    assert.match(WIZARD_CODE, /function goToStep\(/);
+    // Every navigation records the visit. The setter is called EXACTLY ONCE in the whole
+    // component — inside goToStep — so there is no path that moves the operator to a step
+    // without marking it visited. A second call site would mean a step could be reached
+    // and still report "Not started".
+    const rawJumps = [...WIZARD_CODE.matchAll(/setStepIndex\(/g)].length;
+    assert.equal(
+      rawJumps,
+      1,
+      "setStepIndex is called outside goToStep, so a visit can go unrecorded",
+    );
+    const goToStep = WIZARD_CODE.slice(
+      WIZARD_CODE.indexOf("function goToStep("),
+      WIZARD_CODE.indexOf("const step = WIZARD_STEPS[stepIndex]"),
+    );
+    assert.match(goToStep, /setStepIndex\(next\)/);
+    assert.match(WIZARD_CODE, /setVisited\(\(previous\) =>/);
+  });
+
+  test("9.3 a saved draft starts fully visited, a new one starts on step 1 only", () => {
+    assert.match(WIZARD_CODE, /mode === "edit"/);
+    assert.match(WIZARD_CODE, /new Set\(WIZARD_STEPS\.map\(\(_, index\) => index\)\)/);
+    assert.match(WIZARD_CODE, /new Set\(\[0\]\)/);
+  });
+
+  test("9.4 both stepper presentations read the SAME statuses array", () => {
+    // This is what makes "mobile and desktop use the same logic" structural rather than
+    // a promise: neither branch derives anything.
+    assert.match(STEPPER_CODE, /statuses: readonly StepStatus\[\]/);
+    const mobile = STEPPER_CODE.slice(
+      STEPPER_CODE.indexOf("lg:hidden"),
+      STEPPER_CODE.indexOf("hidden lg:block"),
+    );
+    const desktop = STEPPER_CODE.slice(STEPPER_CODE.indexOf("hidden lg:block"));
+    for (const [name, branch] of [
+      ["mobile", mobile],
+      ["desktop", desktop],
+    ] as const) {
+      assert.match(
+        branch,
+        /statuses\[index\]|statuses\[activeIndex\]/,
+        `the ${name} stepper does not read the shared statuses`,
+      );
+      assert.ok(
+        !/isStepComplete|validateCampaignForm/.test(branch),
+        `the ${name} stepper computes its own validity`,
+      );
+    }
+  });
+
+  test("9.5 status is rendered as a word in both presentations", () => {
+    const mobile = STEPPER_CODE.slice(
+      STEPPER_CODE.indexOf("lg:hidden"),
+      STEPPER_CODE.indexOf("hidden lg:block"),
+    );
+    const desktop = STEPPER_CODE.slice(STEPPER_CODE.indexOf("hidden lg:block"));
+    assert.match(mobile, /stepStatusLabel\(/);
+    assert.match(desktop, /stepStatusLabel\(/);
+    // And the needs-attention state differs in SHAPE, not only tone.
+    assert.match(STEPPER_CODE, /<AlertTriangleIcon/);
+    assert.match(STEPPER_CODE, /<CheckIcon/);
+  });
+
+  test("9.6 the review step has its own vocabulary and never claims a publish", () => {
+    assert.match(STEP_STATE, /NOT_READY: "Not ready"/);
+    assert.match(STEP_STATE, /READY_TO_SAVE: "Ready to save"/);
+    assert.match(WIZARD_CODE, /reviewStatus === "READY_TO_SAVE"/);
+    assert.match(WIZARD_CODE, /reviewStatus === "COMPLETE"/);
+    const prose = flat(WIZARD);
+    assert.match(prose, /Not ready to save yet/);
+    assert.match(prose, /it is not published/);
+  });
+
+  test("9.7 the review step lists the steps needing attention, each with a jump", () => {
+    assert.match(WIZARD_CODE, /const stepsNeedingAttention =/);
+    assert.match(WIZARD_CODE, /needsAttention\(stepStatuses\[index\]\)/);
+    assert.match(WIZARD_CODE, /onClick=\{\(\) => goToStep\(entry\.index\)\}/);
+    assert.match(flat(WIZARD), /Fix \{entry\.title\}/);
+  });
+
+  test("9.8 an empty-group audience is not reported as publish-ready", () => {
+    assert.match(WIZARD_CODE, /const audienceResolvesToNoRetailer =/);
+    assert.match(WIZARD_CODE, /memberCount === 0/);
+    assert.match(WIZARD_CODE, /audienceResolvesToNoRetailer,/);
+  });
+});
+
+/* ===========================================================================
+ * 10. The summary badge
+ * ======================================================================== */
+
+describe("10. the summary badge says what it means", () => {
+  test("10.1 it reads as a sentence, not a bare ratio", () => {
+    // "4/7" states a ratio and explains nothing — four of seven WHAT?
+    assert.match(SUMMARY_CODE, /details complete/);
+    assert.ok(
+      !/\{completeCount\}\/\{totalCount\}/.test(SUMMARY_CODE),
+      "the badge is back to the bare X/Y form",
+    );
+  });
+
+  test("10.2 the total derives from the rendered rows, never a passed-in number", () => {
+    // A hard-coded total can drift from the panel it describes.
+    assert.match(SUMMARY_CODE, /export function summaryProgress\(rows: SummaryRow\[\]\)/);
+    assert.match(SUMMARY_CODE, /total: rows\.length/);
+    assert.match(SUMMARY_CODE, /summaryProgress\(rows\)/);
+    // The old props are gone, so no caller can supply a disagreeing count.
+    assert.ok(!/completeCount/.test(SUMMARY_CODE));
+    assert.ok(!/totalCount/.test(SUMMARY_CODE));
+    assert.ok(!/completeCount/.test(WIZARD_CODE));
+  });
+
+  test("10.3 an unconfirmed default is shown but not counted", () => {
+    assert.match(SUMMARY_CODE, /unconfirmed\?: boolean/);
+    assert.match(SUMMARY_CODE, /row\.value !== null && row\.unconfirmed !== true/);
+    assert.match(flat(SUMMARY), /Default, not confirmed yet/);
+    // The wizard marks a row unconfirmed exactly when its step is untouched.
+    assert.match(WIZARD_CODE, /stepStatuses\[ownerStep\] === "NOT_STARTED"/);
+  });
+
+  test("10.4 the optional description is not a summary row at all", () => {
+    const rows = WIZARD_CODE.slice(
+      WIZARD_CODE.indexOf("const summaryRows"),
+      WIZARD_CODE.indexOf("const stepBody"),
+    );
+    assert.ok(
+      !/key: "description"/.test(rows),
+      "the optional description is counted as a missing detail",
+    );
+    // …and the seven that ARE rows are the campaign's required decisions.
+    const keys = [...rows.matchAll(/key: "(\w+)"/g)].map((m) => m[1]);
+    assert.deepEqual(keys, [
+      "name",
+      "audience",
+      "products",
+      "performance",
+      "reward",
+      "schedule",
+      "stacking",
+    ]);
+  });
+
+  test("10.5 the badge carries an accessible label with the full meaning", () => {
+    assert.match(SUMMARY_CODE, /aria-label=\{badgeLabel\}/);
+    assert.match(SUMMARY_CODE, /still to set/);
+    assert.match(SUMMARY_CODE, /not confirmed yet/);
   });
 });

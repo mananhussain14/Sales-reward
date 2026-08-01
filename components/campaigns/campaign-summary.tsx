@@ -26,7 +26,42 @@ export type SummaryRow = {
   value: string | null;
   /** A shorter clarifying line — e.g. how product eligibility resolves. */
   detail?: string | null;
+  /**
+   * True when the value shown is a DEFAULT the operator has not reached or confirmed yet.
+   *
+   * `audienceMode` and `productScope` both start on a legal value, so the summary can
+   * always print something for them. Printing it as though it were a decision — and
+   * counting it towards progress — is what let the old badge claim four details were
+   * complete on an untouched form. Such a row is shown, marked, and not counted.
+   */
+  unconfirmed?: boolean;
 };
+
+/**
+ * Progress over the rendered rows.
+ *
+ * DERIVED FROM THE ROWS THEMSELVES, never from a hard-coded total, so a row added to or
+ * removed from the summary cannot leave the badge describing a different number of
+ * things than the panel shows.
+ */
+export function summaryProgress(rows: SummaryRow[]): {
+  complete: number;
+  total: number;
+  missing: number;
+  unconfirmed: number;
+} {
+  const complete = rows.filter(
+    (row) => row.value !== null && row.unconfirmed !== true,
+  ).length;
+  return {
+    complete,
+    total: rows.length,
+    missing: rows.filter((row) => row.value === null).length,
+    unconfirmed: rows.filter(
+      (row) => row.value !== null && row.unconfirmed === true,
+    ).length,
+  };
+}
 
 function Rows({ rows }: { rows: SummaryRow[] }) {
   return (
@@ -44,9 +79,20 @@ function Rows({ rows }: { rows: SummaryRow[] }) {
               </span>
             ) : (
               <>
-                <span className="block text-sm font-medium text-slate-900">
+                <span
+                  className={cn(
+                    "block text-sm font-medium",
+                    row.unconfirmed ? "text-slate-500" : "text-slate-900",
+                  )}
+                >
                   {row.value}
                 </span>
+                {/* An unconfirmed default says so, in words. */}
+                {row.unconfirmed && (
+                  <span className="mt-0.5 block text-xs font-medium text-slate-400">
+                    Default, not confirmed yet
+                  </span>
+                )}
                 {row.detail && (
                   <span className="mt-0.5 block text-xs text-slate-500">
                     {row.detail}
@@ -63,19 +109,37 @@ function Rows({ rows }: { rows: SummaryRow[] }) {
 
 export function CampaignSummaryPanel({
   rows,
-  completeCount,
-  totalCount,
   className,
 }: {
   rows: SummaryRow[];
-  completeCount: number;
-  totalCount: number;
   className?: string;
 }) {
-  const allSet = completeCount === totalCount;
+  // Derived here from the rows actually rendered, so the badge cannot describe a
+  // different number of details than the panel lists.
+  const { complete, total, missing, unconfirmed } = summaryProgress(rows);
+  const allSet = complete === total;
+
+  /**
+   * The badge previously read "4/7", which states a ratio and explains nothing — four of
+   * seven WHAT, and complete in what sense? It now says so in words, and its accessible
+   * name carries the rest: how many are missing outright, and how many are defaults the
+   * operator has not confirmed.
+   */
+  const badgeText = allSet
+    ? "All details complete"
+    : `${complete} of ${total} details complete`;
+
+  const parts = [badgeText];
+  if (missing > 0) parts.push(`${missing} still to set`);
+  if (unconfirmed > 0) {
+    parts.push(
+      `${unconfirmed} ${unconfirmed === 1 ? "default" : "defaults"} not confirmed yet`,
+    );
+  }
+  const badgeLabel = `${parts.join(", ")}.`;
 
   const heading = (
-    <span className="flex items-center gap-2">
+    <span className="flex flex-wrap items-center gap-2">
       <span className="text-sm font-semibold text-slate-900">Campaign summary</span>
       <span
         className={cn(
@@ -84,9 +148,13 @@ export function CampaignSummaryPanel({
             ? "bg-emerald-50 text-emerald-700 ring-emerald-600/20"
             : "bg-slate-100 text-slate-600 ring-slate-500/20",
         )}
+        // The visible text is already a sentence; the label adds what the badge has no
+        // room for, and is announced when progress changes.
+        aria-label={badgeLabel}
+        title={badgeLabel}
       >
         {allSet && <CheckIcon className="h-3 w-3" aria-hidden="true" />}
-        {completeCount}/{totalCount}
+        {badgeText}
       </span>
     </span>
   );
