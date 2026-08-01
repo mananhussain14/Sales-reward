@@ -176,6 +176,15 @@ its module-specific permissions only when that module is built". Phase 1 is that
 
 **Phase 0 creates no verification permission, table or workflow.**
 
+### 5.4 Daylight-saving policy — refuse, or ask the reviewer
+
+Approved, and set out in full in **§7**: a **nonexistent** local time refuses verification and
+requires the reviewer to correct the printed time or the shop's zone; an **ambiguous** one
+requires the reviewer to select the first or second occurrence explicitly, with that selection
+and decision persisted. Neither is ever resolved silently.
+
+**Phase 0 continues to fail closed for both** and implements none of the reviewer workflow.
+
 ---
 
 ## 6. Unresolved shop time zone blocks financial evaluation
@@ -224,18 +233,43 @@ The round-trip check is exact and independent of the size of the shift. The ambi
 are verified against real 2026 transitions in `Europe/London`, `America/New_York` and
 `Australia/Lord_Howe`.
 
-### The follow-up decision Phase 1 must make
+### Confirmed Phase 1 policy — approved
 
-A zone adopting some other shift would go undetected and would resolve to PostgreSQL's unstated
-choice. More importantly, **the refusal itself needs a product answer**: when a reviewer meets a
-receipt printed at an ambiguous or nonexistent local time, the system must either
+The product decision has been made. **Phase 0 continues to fail closed for both cases**; what
+follows is what Phase 1 must build on top of that refusal, and it is recorded here so the
+behaviour is not re-litigated later.
 
-- **(a)** refuse and ask the reviewer to re-read the printed time, or
-- **(b)** resolve to the **earlier** instant by published policy, or
-- **(c)** resolve to the **later** instant by published policy.
+**Nonexistent local time (spring-forward gap).**
 
-Phase 0 deliberately picks none of them and fails closed instead. **Phase 1 must decide before a
-reviewer can encounter one.**
+- **Refuse receipt verification.** There is no instant to record, so there is nothing to
+  verify.
+- Require the reviewer to correct **either the printed transaction time or the shop's time
+  zone** — a gap almost always means one of the two is wrong.
+- **Never** silently shift the time forward or backward.
+
+**Ambiguous local time (autumn fall-back).**
+
+- Require the reviewer to **explicitly select the first or the second occurrence**. The system
+  does not choose.
+- **Persist both the selection and the reviewer's decision** as part of the verification record,
+  so a historical payment can be explained afterwards.
+- **Never** silently pick the earlier or the later occurrence.
+
+Note that this is deliberately *not* a "resolve by published policy" rule in either direction:
+an automatic choice would be invisible in the record, and an hour can move a sale across a
+campaign boundary. A reviewer decision is auditable; a default is not.
+
+Phase 1 will therefore need a third precision value alongside `MINUTE` and `DATE_ONLY` — or an
+equivalent field recording which occurrence was chosen — plus somewhere to store the reviewer's
+decision. **Phase 0 adds neither**, and `resolve_sale_instant` keeps raising `22007` and `22023`
+so no caller can proceed without one.
+
+### Remaining limitation
+
+A zone adopting a daylight-saving shift other than 30 minutes, 1 hour or 2 hours would go
+undetected by the ambiguity probe and would resolve to PostgreSQL's unstated choice. No such zone
+exists in current or historical IANA data; if one ever appears, the probe's interval list is the
+single place to widen.
 
 ---
 
@@ -343,5 +377,5 @@ role**.
 
 Review and merge Phase 0 before beginning the **Claim Reviewer and verified-sale** milestone
 (Phase 1), which adds the independent reviewer, the canonical verified sale and its items, and
-product matching — and which must answer the DST policy question in §7 and add the shop time-zone
-setter described in §6.
+product matching — and which must implement the approved daylight-saving policy recorded in §7
+and add the shop time-zone setter described in §6.
