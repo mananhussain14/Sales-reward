@@ -340,6 +340,184 @@ export function rewardSummary(rule: {
   return null;
 }
 
+/* ---------------------------------------------------------------------------
+ * Plain-language labels for the configuration screens
+ *
+ * The short labels above are what a BADGE or a table cell shows. The ones below are what
+ * a person CHOOSING between two options needs: a full phrase that states the effect
+ * rather than naming the setting. Both describe the same enum, so they live together and
+ * cannot drift apart.
+ * ------------------------------------------------------------------------- */
+
+const PRODUCT_SCOPE_PLAIN: Record<ProductScope, string> = {
+  ALL_ELIGIBLE_PRODUCTS: "Products eligible at the time of each verified sale",
+  SELECTED_PRODUCTS: "Only the products selected for this campaign version",
+};
+
+export function productScopePlainLabel(scope: ProductScope): string {
+  return PRODUCT_SCOPE_PLAIN[scope];
+}
+
+const PERFORMANCE_PLAIN: Record<PerformanceScope, string> = {
+  INDIVIDUAL_STAFF: "Individual Sales Staff",
+  RETAILER_TEAM: "Retailer team",
+};
+
+export function performancePlainLabel(scope: PerformanceScope): string {
+  return PERFORMANCE_PLAIN[scope];
+}
+
+/**
+ * The point a team campaign is most often misread on: a shared target is shared WITHIN
+ * one Retailer, never across the campaign's whole audience. Stated as its own sentence so
+ * the configuration screen can show it next to the choice rather than burying it.
+ */
+export const RETAILER_TEAM_INDEPENDENCE =
+  "Each Retailer is evaluated on its own. Sales from different Retailers are never added together into one combined target.";
+
+const RULE_TYPE_LABELS: Record<RuleType, string> = {
+  PER_UNIT_COINS: "Coins per unit",
+  TARGET_BONUS: "Target bonus",
+};
+
+export function ruleTypeLabel(rule: RuleType): string {
+  return RULE_TYPE_LABELS[rule];
+}
+
+const RULE_TYPE_EXPLANATIONS: Record<RuleType, string> = {
+  PER_UNIT_COINS: "A fixed number of coins for every eligible unit sold.",
+  TARGET_BONUS: "A one-off bonus once a unit target is reached.",
+};
+
+export function ruleTypeExplanation(rule: RuleType): string {
+  return RULE_TYPE_EXPLANATIONS[rule];
+}
+
+/**
+ * The honest statement that nothing in this milestone computes a result.
+ *
+ * One constant, used by every surface that shows a reward, so no screen can imply the
+ * calculation exists while another says it does not.
+ */
+export const CALCULATION_ENGINE_NOTICE =
+  "Campaign results and coin calculation will appear when the calculation engine is connected.";
+
+/* ---------------------------------------------------------------------------
+ * Reward preview
+ * ------------------------------------------------------------------------- */
+
+/**
+ * A full sentence describing what the configured rule OFFERS, for the reward step.
+ *
+ * Distinct from rewardSummary(), which is a fragment for a table cell. This is the
+ * sentence an operator reads back to check they configured what they meant, and it is
+ * worded for the chosen performance scope — "each Sales Staff member" against an
+ * individual campaign, "this Retailer" against a team one.
+ *
+ * STILL NOT A CALCULATION. It formats the configured numbers and nothing else: no rate is
+ * multiplied by a quantity and no total is accumulated. Returns null while the rule is
+ * incomplete, so the caller shows guidance instead of a half-sentence.
+ */
+export function rewardPreviewSentence(rule: {
+  ruleType: RuleType | null;
+  performanceScope: PerformanceScope | null;
+  coinsPerUnit: number | null;
+  thresholdUnits: number | null;
+  rewardCoins: number | null;
+  maxRewardCoins: number | null;
+}): string | null {
+  const team = rule.performanceScope === "RETAILER_TEAM";
+
+  if (rule.ruleType === "PER_UNIT_COINS") {
+    if (rule.coinsPerUnit === null || rule.coinsPerUnit <= 0) return null;
+    const earner = team
+      ? "Every eligible sale in this Retailer earns"
+      : "Each Sales Staff member earns";
+    const base = `${earner} ${formatCoins(rule.coinsPerUnit)} per eligible unit`;
+    return rule.maxRewardCoins === null || rule.maxRewardCoins <= 0
+      ? `${base}.`
+      : `${base}, up to ${formatCoins(rule.maxRewardCoins)}.`;
+  }
+
+  if (rule.ruleType === "TARGET_BONUS") {
+    if (
+      rule.thresholdUnits === null ||
+      rule.thresholdUnits <= 0 ||
+      rule.rewardCoins === null ||
+      rule.rewardCoins <= 0
+    ) {
+      return null;
+    }
+    const base = team
+      ? `When this Retailer reaches ${formatUnits(rule.thresholdUnits)}, contributing Sales Staff share the configured ${formatCoins(rule.rewardCoins)} reward according to the campaign rules`
+      : `When a Sales Staff member reaches ${formatUnits(rule.thresholdUnits)}, they earn ${formatCoins(rule.rewardCoins)}`;
+    return rule.maxRewardCoins === null || rule.maxRewardCoins <= 0
+      ? `${base}.`
+      : `${base}, up to ${formatCoins(rule.maxRewardCoins)} for the campaign.`;
+  }
+
+  return null;
+}
+
+/* ---------------------------------------------------------------------------
+ * Publication eligibility outcome
+ *
+ * WHAT THE DATABASE ACTUALLY DOES, worded once.
+ *
+ * public.publish_vendor_campaign freezes one row per (eligible Retailer, assigned
+ * product) pair and refuses the whole publication ONLY when that set is empty. So a
+ * campaign where SOME Retailers are missing SOME products publishes successfully, and the
+ * Retailers that matched nothing are still in the audience with no eligible product at
+ * all — which is the fact an operator actually needs, and the one the previous wording
+ * left out.
+ * ------------------------------------------------------------------------- */
+
+export type PublicationEligibility = "CLEAR" | "PARTIAL" | "BLOCKED";
+
+/**
+ * Classifies a publication preview.
+ *
+ * `BLOCKED` when no targeted Retailer has a single selected product assigned — the
+ * database refuses that publication outright. `PARTIAL` when at least one Retailer
+ * resolves to nothing while at least one other does resolve. `CLEAR` otherwise.
+ *
+ * An empty preview is CLEAR, not BLOCKED: a campaign with no rows has a different problem
+ * (no eligible Retailer at all) which the publish RPC reports on its own.
+ */
+export function classifyPublicationEligibility(
+  rows: { eligibleProductCount: number; missingProductCount: number }[],
+  productScope: ProductScope | null,
+): PublicationEligibility {
+  // Only a SELECTED_PRODUCTS campaign freezes pairs, so only it can be blocked this way.
+  if (productScope !== "SELECTED_PRODUCTS" || rows.length === 0) return "CLEAR";
+
+  const totalEligible = rows.reduce((sum, row) => sum + row.eligibleProductCount, 0);
+  if (totalEligible === 0) return "BLOCKED";
+
+  return rows.some((row) => row.missingProductCount > 0) ? "PARTIAL" : "CLEAR";
+}
+
+const PUBLICATION_ELIGIBILITY_COPY: Record<
+  PublicationEligibility,
+  { title: string; body: string } | null
+> = {
+  CLEAR: null,
+  PARTIAL: {
+    title: "Some Retailers will get fewer products than you selected",
+    body: "This campaign can still be published. Each Retailer only ever counts the selected products actually assigned to it, and a Retailer with none of them will be part of the campaign without a single eligible product — so nothing there can earn coins.",
+  },
+  BLOCKED: {
+    title: "This campaign cannot be published yet",
+    body: "None of the selected products is assigned to any of the targeted Retailers, so there is nothing for the campaign to reward. Assign the products to these Retailers, choose different products, or change the audience.",
+  },
+};
+
+export function publicationEligibilityCopy(
+  eligibility: PublicationEligibility,
+): { title: string; body: string } | null {
+  return PUBLICATION_ELIGIBILITY_COPY[eligibility];
+}
+
 /** "1 coin" / "5 coins". Grouped with a locale-independent separator for stability. */
 export function formatCoins(coins: number): string {
   return `${groupDigits(coins)} ${coins === 1 ? "coin" : "coins"}`;

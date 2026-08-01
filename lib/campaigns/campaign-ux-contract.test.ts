@@ -1,0 +1,1076 @@
+/**
+ * SOURCE-LEVEL CONTRACT for the campaign UX redesign.
+ *
+ * Run with:  npm test
+ *
+ * ============================================================================
+ * WHAT THIS FILE IS FOR
+ * ============================================================================
+ * campaign-web-safety.test.ts pins the SAFETY properties — no write on a read-only page,
+ * no disclosure field, no lost double-submit guard. This file pins the properties the
+ * redesign was commissioned to fix, so a later change cannot quietly undo them:
+ *
+ *   * Retailer-group creation is ONE flow, and the two-RPC window is handled truthfully.
+ *   * The wizard's progress control cannot wrap, and a live summary exists at every width.
+ *   * The product/Retailer conflict states the real consequence and offers a way out.
+ *   * ONE lifecycle vocabulary. The words "in force" do not reappear beside a state badge.
+ *   * The campaign row has a deliberate hierarchy and a visible click affordance.
+ *   * Destructive actions do not sit beside the primary one.
+ *   * Status is never carried by colour alone.
+ *
+ * These are source assertions for the reason given at the top of campaign-web-safety:
+ * this repository has no DOM runner, and every UI guarantee in the product is asserted
+ * this way. They catch a REGRESSION IN KIND, not a visual defect — the screenshots in
+ * manual testing remain the check for how it actually looks.
+ */
+import { test, describe } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync, existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+
+const ROOT = fileURLToPath(new URL("../../", import.meta.url));
+const VENDOR_DIR = join(ROOT, "app/(admin)/campaigns");
+const RETAILER_DIR = join(ROOT, "app/(retailer)/retailer/campaigns");
+const COMPONENTS = join(ROOT, "components/campaigns");
+
+const read = (path: string) => readFileSync(path, "utf8");
+/** Strips comments so a rule is never confused with prose describing it. */
+const code = (source: string) =>
+  source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+/** Collapses whitespace, so a rule is not testing the formatter's line breaks. */
+const flat = (source: string) => source.replace(/\s+/g, " ");
+
+const WIZARD = read(join(VENDOR_DIR, "campaign-wizard.tsx"));
+const WIZARD_CODE = code(WIZARD);
+const LIST = read(join(VENDOR_DIR, "campaign-list.tsx"));
+const LIST_CODE = code(LIST);
+const DETAIL = read(join(VENDOR_DIR, "[campaignId]/page.tsx"));
+const DETAIL_CODE = code(DETAIL);
+const GROUP_FORMS = read(join(VENDOR_DIR, "groups/group-forms.tsx"));
+const GROUP_FORMS_CODE = code(GROUP_FORMS);
+const GROUPS_PAGE = read(join(VENDOR_DIR, "groups/page.tsx"));
+const GROUPS_PAGE_CODE = code(GROUPS_PAGE);
+const ACTIONS = read(join(VENDOR_DIR, "actions.ts"));
+const ACTIONS_CODE = code(ACTIONS);
+const RETAILER_PAGE = read(join(RETAILER_DIR, "page.tsx"));
+const RETAILER_PAGE_CODE = code(RETAILER_PAGE);
+
+const STEPPER = read(join(COMPONENTS, "wizard-stepper.tsx"));
+const STEPPER_CODE = code(STEPPER);
+const SUMMARY = read(join(COMPONENTS, "campaign-summary.tsx"));
+const SUMMARY_CODE = code(SUMMARY);
+const PICKER = read(join(COMPONENTS, "entity-picker.tsx"));
+const PICKER_CODE = code(PICKER);
+const CHOICE = read(join(COMPONENTS, "choice-cards.tsx"));
+const CHOICE_CODE = code(CHOICE);
+const ELIGIBILITY = read(join(COMPONENTS, "eligibility-panel.tsx"));
+const ELIGIBILITY_CODE = code(ELIGIBILITY);
+const FACTS = read(join(COMPONENTS, "campaign-facts.tsx"));
+
+/* ===========================================================================
+ * 1. Retailer-group creation is ONE flow
+ * ======================================================================== */
+
+describe("1. Retailer group creation completes the whole task", () => {
+  test("1.1 the create form takes the name, the description AND the Retailers", () => {
+    const create = GROUP_FORMS_CODE.slice(
+      GROUP_FORMS_CODE.indexOf("export function CreateGroupForm"),
+      GROUP_FORMS_CODE.indexOf("export function EditGroupForm"),
+    );
+    assert.match(create, /name="name"/);
+    assert.match(create, /name="description"/);
+    // The selector the old flow forced onto a second page.
+    assert.match(create, /<EntityPicker/);
+    assert.match(create, /name="vendorRetailerIds"/);
+  });
+
+  test("1.2 the page passes the Retailer directory into the create form", () => {
+    assert.match(GROUPS_PAGE_CODE, /getVendorRetailers\(\)/);
+    assert.match(GROUPS_PAGE_CODE, /<CreateGroupForm[\s\S]{0,200}retailers=\{/);
+    // A directory that failed to READ is never treated as an empty list.
+    assert.match(GROUPS_PAGE_CODE, /retailers !== null/);
+    assert.match(GROUPS_PAGE_CODE, /optionsReady=\{retailerRows !== null\}/);
+  });
+
+  test("1.3 the action attaches the Retailers, then lands on the group", () => {
+    const action = ACTIONS_CODE.slice(
+      ACTIONS_CODE.indexOf("export async function createRetailerGroupAction"),
+      ACTIONS_CODE.indexOf("export async function updateRetailerGroupAction"),
+    );
+    assert.match(action, /createRetailerGroup\(/);
+    assert.match(action, /setRetailerGroupMembers\(/);
+    // The requirement: land on the group detail page rather than a list.
+    assert.match(action, /redirect\(`\$\{GROUPS_PATH\}\/\$\{groupId\}\?created=1`\)/);
+  });
+
+  test("1.4 a membership failure after creation is reported truthfully, not as a failure", () => {
+    const action = ACTIONS_CODE.slice(
+      ACTIONS_CODE.indexOf("export async function createRetailerGroupAction"),
+      ACTIONS_CODE.indexOf("export async function updateRetailerGroupAction"),
+    );
+    // It keeps the id — which is what lets the UI link straight to the editor AND what
+    // stops a retry creating a second group.
+    assert.match(action, /createdGroupId: groupId/);
+    assert.match(action, /partialWarning:/);
+    assert.match(flat(action), /was created, but its Retailers/);
+    // NOTHING IS RETRIED AUTOMATICALLY.
+    assert.ok(
+      !/for \(|while \(|retry|attempt\s*\+\+/i.test(action),
+      "the create action contains a retry loop",
+    );
+  });
+
+  test("1.5 no retry can produce a second group", () => {
+    const action = ACTIONS_CODE.slice(
+      ACTIONS_CODE.indexOf("export async function createRetailerGroupAction"),
+      ACTIONS_CODE.indexOf("export async function updateRetailerGroupAction"),
+    );
+    // Server-side half: an already-created state short-circuits.
+    assert.match(action, /prevState\.createdGroupId !== null/);
+    assert.match(action, /return prevState;/);
+    // Client-side half: the submit disappears.
+    const create = GROUP_FORMS_CODE.slice(
+      GROUP_FORMS_CODE.indexOf("export function CreateGroupForm"),
+      GROUP_FORMS_CODE.indexOf("export function EditGroupForm"),
+    );
+    assert.match(create, /const created = state\.createdGroupId !== null/);
+    assert.match(create, /\{!created && \(/);
+  });
+
+  test("1.6 an empty group is possible but must be chosen deliberately", () => {
+    const create = GROUP_FORMS_CODE.slice(
+      GROUP_FORMS_CODE.indexOf("export function CreateGroupForm"),
+      GROUP_FORMS_CODE.indexOf("export function EditGroupForm"),
+    );
+    assert.match(create, /allowEmpty/);
+    assert.match(create, /blockedOnEmpty/);
+    // …and the guard must not deadlock a Vendor who simply has no Retailers yet.
+    assert.match(create, /const canChoose = optionsReady && retailers\.length > 0/);
+    assert.match(create, /canChoose && noneChosen && !allowEmpty/);
+  });
+
+  test("1.7 the primary language is Retailers, not members", () => {
+    // "Membership" survives only where it names the replace-the-whole-set contract.
+    const visible = [...GROUP_FORMS.matchAll(/>\s*([A-Z][^<>{}]{3,60})\s*</g)].map(
+      (m) => m[1],
+    );
+    for (const label of visible) {
+      assert.ok(
+        !/\bmembers?\b/i.test(label),
+        `a visible label still says "member": ${label.trim()}`,
+      );
+    }
+    assert.match(GROUP_FORMS, /Save Retailers/);
+  });
+});
+
+/* ===========================================================================
+ * 2. The wizard progress control
+ * ======================================================================== */
+
+describe("2. the wizard's progress control cannot wrap", () => {
+  test("2.1 the step list is not a wrapping row of pills", () => {
+    // The exact defect the redesign was commissioned for: `flex flex-wrap` over six
+    // labelled buttons, which ran to two or three ragged rows at laptop width.
+    assert.ok(
+      !/flex flex-wrap[^"]*"\s*\n?\s*aria-label=\{`Step/.test(WIZARD_CODE),
+      "the wizard renders a wrapping step bar again",
+    );
+    assert.ok(
+      !/flex-wrap/.test(STEPPER_CODE),
+      "the stepper reintroduced flex-wrap, which is what allowed the ragged rows",
+    );
+  });
+
+  test("2.2 it renders a vertical rail wide and a compact header narrow", () => {
+    assert.match(STEPPER_CODE, /lg:hidden/);
+    assert.match(STEPPER_CODE, /hidden lg:block/);
+    assert.match(STEPPER_CODE, /Step \{activeIndex \+ 1\} of \{total\}/);
+  });
+
+  test("2.3 the wizard lays the rail, the step and the summary out as columns", () => {
+    assert.match(WIZARD_CODE, /lg:grid-cols-\[13rem_minmax\(0,1fr\)\]/);
+    assert.match(WIZARD_CODE, /xl:grid-cols-\[13rem_minmax\(0,1fr\)_17rem\]/);
+    // The content column must be allowed to shrink, or a long product name forces the
+    // whole page to scroll sideways.
+    assert.match(WIZARD_CODE, /min-w-0/);
+  });
+
+  test("2.4 a live summary exists, and collapses rather than disappearing", () => {
+    assert.match(WIZARD_CODE, /<CampaignSummaryPanel/);
+    // `<details>` below xl, a sticky aside at xl. Both, not one or the other.
+    assert.match(SUMMARY_CODE, /<details/);
+    assert.match(SUMMARY_CODE, /xl:hidden/);
+    assert.match(SUMMARY_CODE, /sticky top-6 hidden[^"]*xl:block/);
+  });
+
+  test("2.5 the summary covers every decision the requirement lists", () => {
+    const rows = WIZARD_CODE.slice(
+      WIZARD_CODE.indexOf("const summaryRows"),
+      WIZARD_CODE.indexOf("const summaryComplete"),
+    );
+    for (const key of [
+      "name",
+      "audience",
+      "products",
+      "performance",
+      "reward",
+      "schedule",
+      "stacking",
+    ]) {
+      assert.match(rows, new RegExp(`key: "${key}"`), `the summary omits ${key}`);
+    }
+  });
+
+  test("2.6 an unset summary row says so instead of rendering a bare dash", () => {
+    // A dash reads as "none"; the honest state is "not chosen yet".
+    assert.match(SUMMARY_CODE, /Not set/);
+    assert.match(SUMMARY_CODE, /<AlertTriangleIcon/);
+  });
+
+  test("2.7 the review step offers an Edit link per section", () => {
+    const review = WIZARD_CODE.slice(WIZARD_CODE.indexOf('step.key !== "review"'));
+    const sections = [...review.matchAll(/<ReviewSection/g)].length;
+    assert.ok(sections >= 6, `only ${sections} review sections`);
+    // `goToStep` rather than a bare setState: every navigation must also RECORD the
+    // visit, which is what stops an unvisited step reporting itself Complete.
+    const edits = [...review.matchAll(/onEdit=\{\(\) => goToStep\((\d)\)\}/g)].map(
+      (m) => Number(m[1]),
+    );
+    // Every step that owns a decision is reachable from the review.
+    for (const index of [0, 1, 2, 3, 4]) {
+      assert.ok(edits.includes(index), `no review section returns to step ${index + 1}`);
+    }
+  });
+
+  test("2.8 an incomplete review section is called out rather than dashed", () => {
+    const review = WIZARD_CODE.slice(WIZARD_CODE.indexOf('step.key !== "review"'));
+    assert.match(review, /incomplete=\{/);
+    assert.match(review, /incompleteMessage=/);
+    assert.match(SUMMARY_CODE, /incomplete \? "border-amber-300/);
+  });
+
+  test("2.9 saving is distinguished from publishing in words", () => {
+    const prose = flat(WIZARD);
+    assert.match(prose, /Saving does not publish/);
+    assert.match(prose, /Save draft/);
+    assert.ok(
+      !/Review and publish/.test(prose),
+      "the wizard again promises a publish it does not perform",
+    );
+  });
+});
+
+/* ===========================================================================
+ * 3. Product eligibility and the conflict experience
+ * ======================================================================== */
+
+describe("3. the conflict experience says what will actually happen", () => {
+  test("3.1 the panel classifies rather than restating one sentence", () => {
+    assert.match(ELIGIBILITY_CODE, /classifyPublicationEligibility\(/);
+    assert.match(ELIGIBILITY_CODE, /publicationEligibilityCopy\(/);
+  });
+
+  test("3.2 it names the affected Retailer and the exact counts", () => {
+    assert.match(ELIGIBILITY_CODE, /row\.retailerName/);
+    assert.match(ELIGIBILITY_CODE, /row\.eligibleProductCount/);
+    assert.match(ELIGIBILITY_CODE, /selectedProductCount/);
+    assert.match(flat(ELIGIBILITY), /of \{selectedProductCount\} selected products assigned/);
+  });
+
+  test("3.3 a Retailer that matched nothing is called out as earning nothing", () => {
+    assert.match(flat(ELIGIBILITY), /nothing to earn on/);
+  });
+
+  test("3.4 it offers a correction path, not just a warning", () => {
+    assert.match(ELIGIBILITY_CODE, /Review products/);
+    assert.match(ELIGIBILITY_CODE, /Change audience/);
+    // Wired to the steps that fix each one.
+    assert.match(WIZARD_CODE, /onReviewProducts=\{\(\) => goToStep\(2\)\}/);
+    assert.match(WIZARD_CODE, /onChangeAudience=\{\(\) => goToStep\(1\)\}/);
+  });
+
+  test("3.5 a blocked publication is announced; a reduced one is not", () => {
+    // Blocked is a refusal the operator must act on. Partial is advisory, and announcing
+    // it on every keystroke of a wizard step would be noise.
+    assert.match(ELIGIBILITY_CODE, /role=\{blocked \? "alert" : undefined\}/);
+  });
+
+  test("3.6 the panel never claims which products are missing where", () => {
+    // preview_vendor_campaign_publication returns COUNTS, not the per-Retailer product
+    // breakdown. Naming products would be a second implementation of the resolution rule.
+    assert.ok(
+      !/productName|productCode/.test(ELIGIBILITY_CODE),
+      "the conflict panel names products it cannot know",
+    );
+  });
+
+  test("3.7 both product scopes are offered in plain language", () => {
+    assert.match(WIZARD_CODE, /productScopePlainLabel\(/);
+    assert.match(WIZARD_CODE, /productResolutionExplanation\(/);
+  });
+});
+
+/* ===========================================================================
+ * 4. ONE lifecycle vocabulary
+ * ======================================================================== */
+
+describe("4. status language is single and consistent", () => {
+  test('4.1 the phrase "in force" is gone from every campaign surface', () => {
+    // It described the VERSION POINTER while the badge beside it described the CAMPAIGN'S
+    // EFFECTIVE-TIME STATE, so "VERSION 1 · IN FORCE" and "Scheduled" appeared together
+    // and read as a contradiction.
+    // Asserted on the CODE, with comments stripped. The detail page's header comment
+    // quotes the phrase to explain why it was removed, and a test that could not tell an
+    // explanation apart from a rendering would fail on its own documentation.
+    for (const [name, source] of [
+      ["detail", DETAIL_CODE],
+      ["list", LIST_CODE],
+      ["wizard", WIZARD_CODE],
+      ["retailer page", RETAILER_PAGE_CODE],
+    ] as const) {
+      assert.ok(
+        !/in force/i.test(source),
+        `"in force" is back on the ${name} surface`,
+      );
+    }
+  });
+
+  test("4.2 the detail page shows exactly one state badge", () => {
+    const badges = [...DETAIL_CODE.matchAll(/<CampaignStateBadge/g)].length;
+    assert.equal(badges, 1, `the detail page renders ${badges} state badges`);
+  });
+
+  test("4.3 version and publication are labelled as secondary metadata", () => {
+    assert.match(DETAIL_CODE, /const versionLine =/);
+    assert.match(flat(DETAIL), /Version \$\{campaign\.publishedVersionNumber \?\? "—"\} · published/);
+    assert.match(flat(DETAIL), /draft, not yet published/);
+  });
+
+  test("4.4 every lifecycle word comes from the shared badge map", () => {
+    // Six states, one map, so the list, the detail page and the Retailer portal cannot
+    // disagree about what a campaign is doing.
+    const badge = read(join(ROOT, "components/campaigns/campaign-state-badge.tsx"));
+    for (const state of [
+      "DRAFT",
+      "SCHEDULED",
+      "ACTIVE",
+      "PAUSED",
+      "ENDED",
+      "CANCELLED",
+    ]) {
+      assert.match(badge, new RegExp(`${state}: \\{ label:`));
+    }
+  });
+
+  test("4.5 state is never carried by colour alone", () => {
+    const badge = read(join(ROOT, "components/campaigns/campaign-state-badge.tsx"));
+    // Every entry has a text label; two carry an icon as well.
+    const labels = [...badge.matchAll(/label: "([^"]+)"/g)].map((m) => m[1]);
+    assert.equal(labels.length, 6);
+    for (const label of labels) assert.ok(label.trim().length > 0);
+  });
+});
+
+/* ===========================================================================
+ * 5. The campaign list
+ * ======================================================================== */
+
+describe("5. the campaign row is scannable and obviously clickable", () => {
+  test("5.1 the whole row is one link with a stated affordance", () => {
+    assert.match(LIST_CODE, /<Link[\s\S]{0,200}cardClasses\(\s*"interactive"/);
+    assert.match(flat(LIST), /View details/);
+    assert.match(LIST_CODE, /<ChevronRightIcon/);
+  });
+
+  test("5.2 it shows every fact the requirement lists", () => {
+    for (const [what, pattern] of [
+      ["name", /campaign\.name/],
+      ["status", /<CampaignStateBadge/],
+      ["performance type", /performancePlainLabel\(/],
+      ["audience", /audienceSummary\(/],
+      ["product mode", /productSummary\(/],
+      ["reward", /rewardSummary\(/],
+      ["dates", /formatPeriod\(/],
+      ["timezone", /campaign\.timezoneName/],
+      ["version", /campaign\.versionNumber/],
+    ] as const) {
+      assert.match(LIST_CODE, pattern, `the row omits ${what}`);
+    }
+  });
+
+  test("5.3 the facts are not all equally prominent", () => {
+    // The previous row printed six identical definition-list cells. The reward now sits
+    // in its own emphasized chip and the coverage facts are explicitly quiet.
+    assert.match(LIST_CODE, /function MetaFact/);
+    assert.match(LIST_CODE, /text-xs text-slate-600/);
+    assert.match(LIST_CODE, /bg-indigo-50[^"]*text-sm font-semibold text-indigo-700/);
+  });
+
+  test("5.4 both filter groups are present, with counts", () => {
+    for (const label of [
+      "All",
+      "Draft",
+      "Scheduled",
+      "Active",
+      "Paused",
+      "Ended",
+      "Cancelled",
+    ]) {
+      assert.match(LIST_CODE, new RegExp(`label: "${label}"`), `missing filter ${label}`);
+    }
+    for (const label of ["All types", "Individual", "Retailer team"]) {
+      assert.match(LIST_CODE, new RegExp(`label: "${label}"`));
+    }
+    assert.match(LIST_CODE, /role="radiogroup"/);
+    assert.match(LIST_CODE, /aria-live="polite"/);
+  });
+
+  test("5.5 a missing reward is stated, never invented", () => {
+    assert.match(LIST_CODE, /reward \?\? "No reward set"/);
+  });
+});
+
+/* ===========================================================================
+ * 6. Actions: one primary, destructive separated
+ * ======================================================================== */
+
+describe("6. actions do not compete", () => {
+  test("6.1 cancel is not in the header action cluster", () => {
+    const header = DETAIL_CODE.slice(
+      DETAIL_CODE.indexOf("<header"),
+      DETAIL_CODE.indexOf("</header>"),
+    );
+    assert.ok(
+      !/kind="CANCEL"/.test(header),
+      "the destructive action is back beside the primary one",
+    );
+    // And the header does still carry the constructive ones.
+    assert.match(header, /kind="PUBLISH"/);
+    assert.match(header, /Edit draft/);
+  });
+
+  test("6.2 cancel lives in its own labelled area", () => {
+    assert.match(DETAIL_CODE, /canCancel && \(\s*<section/);
+    assert.match(flat(DETAIL), /Cancel this campaign/);
+    assert.match(flat(DETAIL), /cannot be undone/);
+    assert.match(DETAIL_CODE, /border-red-200/);
+  });
+
+  test("6.3 every lifecycle mutation still goes through the confirming dialog", () => {
+    const dialog = code(
+      read(join(VENDOR_DIR, "[campaignId]/campaign-lifecycle-dialog.tsx")),
+    );
+    assert.match(dialog, /role="dialog"/);
+    assert.match(dialog, /aria-modal="true"/);
+    // The safety properties the redesign must not have disturbed.
+    assert.match(dialog, /if \(event\.key === "Escape" && !pending\) setOpen\(false\)/);
+    assert.match(dialog, /if \(pending\) return;/);
+    assert.match(dialog, /\{!state\.committed && \(/);
+  });
+
+  test("6.4 the detail page uses collapsible panels rather than tall flat cards", () => {
+    assert.match(DETAIL_CODE, /<DetailPanel/);
+    const panels = [...DETAIL_CODE.matchAll(/<DetailPanel/g)].length;
+    assert.ok(panels >= 5, `only ${panels} detail panels`);
+    // A native <details>, so the page needs no JavaScript to be read.
+    assert.match(code(FACTS), /<details/);
+  });
+});
+
+/* ===========================================================================
+ * 7. The Retailer Owner surface keeps its guarantees under the new design
+ * ======================================================================== */
+
+describe("7. the Retailer Owner surface", () => {
+  test("7.1 it remains read-only", () => {
+    assert.ok(!/"use client"/.test(RETAILER_PAGE));
+    assert.ok(!/<form/.test(RETAILER_PAGE_CODE));
+    assert.ok(!/Action\b/.test(RETAILER_PAGE_CODE.replace(/AssignedCampaign/g, "")));
+    assert.ok(!/CampaignLifecycleDialog/.test(RETAILER_PAGE_CODE));
+  });
+
+  test("7.2 no Vendor-private field can be rendered", () => {
+    for (const field of [
+      "exclusivityKey",
+      "priority",
+      "sourceGroupName",
+      "eligibleRetailerCount",
+      "versionNumber",
+      "audienceMode",
+    ]) {
+      assert.ok(
+        !new RegExp(`campaign\\.${field}\\b`).test(RETAILER_PAGE_CODE),
+        `the Retailer page renders ${field}`,
+      );
+    }
+  });
+
+  test("7.3 it uses the shared team sentence rather than restating it", () => {
+    assert.match(RETAILER_PAGE_CODE, /performanceExplanation\(/);
+    assert.ok(!/All eligible Sales Staff sales/.test(RETAILER_PAGE_CODE));
+  });
+
+  test("7.4 it never fabricates progress", () => {
+    assert.match(RETAILER_PAGE_CODE, /<CalculationEngineNotice/);
+    const bindings = [...RETAILER_PAGE_CODE.matchAll(/\{([^{}]*)\}/g)].map((m) => m[1]);
+    for (const binding of bindings) {
+      assert.ok(
+        !/\b(earned|balance|progress|unitsSold|coinsEarned)\b/i.test(binding),
+        `a rendered expression claims a result: ${binding.trim()}`,
+      );
+    }
+  });
+
+  test("7.5 the offer is stated as a sentence, with a safe fallback", () => {
+    assert.match(RETAILER_PAGE_CODE, /rewardPreviewSentence\(/);
+    assert.match(RETAILER_PAGE_CODE, /rewardSentence \?\? reward \?\? "—"/);
+  });
+});
+
+/* ===========================================================================
+ * 8. Loading, feedback and accessibility
+ * ======================================================================== */
+
+describe("8. loading, feedback and accessibility", () => {
+  test("8.1 every campaign route still has a loading state", () => {
+    for (const route of [
+      "loading.tsx",
+      "new/loading.tsx",
+      "groups/loading.tsx",
+      "groups/[groupId]/loading.tsx",
+      "[campaignId]/loading.tsx",
+      "[campaignId]/edit/loading.tsx",
+    ]) {
+      assert.ok(existsSync(join(VENDOR_DIR, route)), `missing ${route}`);
+    }
+    assert.ok(existsSync(join(RETAILER_DIR, "loading.tsx")));
+  });
+
+  test("8.2 the wizard and group skeletons mirror the real layout", () => {
+    // A skeleton with a different shape makes the page visibly jump on hydration.
+    const wizardSkeleton = read(join(VENDOR_DIR, "new/loading.tsx"));
+    assert.match(wizardSkeleton, /lg:grid-cols-\[13rem_minmax\(0,1fr\)\]/);
+    const groupSkeleton = read(join(VENDOR_DIR, "groups/loading.tsx"));
+    assert.match(groupSkeleton, /sm:grid-cols-2/);
+  });
+
+  test("8.3 pending states are labelled, not just spinners", () => {
+    assert.match(WIZARD_CODE, /loadingLabel="Saving…"/);
+    assert.match(GROUP_FORMS_CODE, /loadingLabel="Creating…"/);
+    assert.match(GROUP_FORMS_CODE, /loadingLabel="Saving…"/);
+  });
+
+  test("8.4 a disabled Continue explains itself", () => {
+    // A greyed button with no reason is the failure this replaces.
+    assert.match(WIZARD_CODE, /Complete this step to continue/);
+    assert.match(WIZARD_CODE, /role="status"/);
+  });
+
+  test("8.5 interactive surfaces keep a visible focus ring", () => {
+    for (const [name, source] of [
+      ["stepper", STEPPER_CODE],
+      ["picker", PICKER_CODE],
+      ["choice cards", CHOICE_CODE],
+      ["list", LIST_CODE],
+      ["eligibility panel", ELIGIBILITY_CODE],
+      ["summary", SUMMARY_CODE],
+    ] as const) {
+      // Two mechanisms, both valid. A control that is focusable itself takes
+      // `focus-visible:ring-2`; a choice card hides its radio visually and lifts the ring
+      // onto the label with `has-[:focus-visible]:ring-2`, so the whole card shows focus.
+      assert.ok(
+        /focus-visible:ring-2/.test(source) ||
+          /has-\[:focus-visible\]:ring-2/.test(source),
+        `${name} lost its visible focus indicator`,
+      );
+    }
+  });
+
+  test("8.6 every control the redesign added is reachable and named", () => {
+    // Search inputs carry a real label even though it is visually hidden.
+    assert.match(PICKER_CODE, /<label htmlFor=\{searchId\} className="sr-only">/);
+    // The option list is a fieldset with a legend, so the group is announced.
+    assert.match(PICKER_CODE, /<legend className="sr-only">\{label\}<\/legend>/);
+    // Each stepper segment names its step for a screen reader.
+    assert.match(STEPPER_CODE, /className="sr-only"/);
+  });
+
+  test("8.7 no page-level horizontal overflow is invited", () => {
+    // Wide content scrolls inside its own container rather than the page.
+    for (const [name, source] of [
+      ["detail", DETAIL_CODE],
+    ] as const) {
+      const tables = [...source.matchAll(/<table/g)].length;
+      const wrappers = [...source.matchAll(/overflow-x-auto/g)].length;
+      assert.ok(
+        wrappers >= tables,
+        `${name} has ${tables} tables but only ${wrappers} scroll containers`,
+      );
+    }
+  });
+
+  test("8.8 the exclusivity key is never silently kept when Stackable is chosen", () => {
+    // The database nulls it for a stackable campaign. The form keeps the typed value so
+    // toggling back does not lose it — but it must SAY so, and offer to discard it.
+    assert.match(flat(WIZARD), /A stackable campaign has no exclusivity key/);
+    assert.match(flat(WIZARD), /not saved/);
+    assert.match(WIZARD_CODE, /update\("exclusivityKey", ""\)/);
+  });
+});
+
+/* ===========================================================================
+ * 9. Wizard progress states
+ *
+ * The browser review found the rail claiming "Complete" for steps the operator had
+ * never opened, and for "Review and save" on a blank campaign, while the summary panel
+ * beside it correctly reported the same values missing. The state model itself is unit
+ * tested in campaign-step-state.test.ts; these assert that the WIRING cannot regress.
+ * ======================================================================== */
+
+describe("9. the wizard's progress states are wired to the shared model", () => {
+  const STEP_STATE = read(join(ROOT, "lib/campaigns/campaign-step-state.ts"));
+
+  test("9.1 the wizard derives status from the shared model, not from validity alone", () => {
+    assert.match(WIZARD_CODE, /campaignStepStatuses\(\{/);
+    assert.match(WIZARD_CODE, /const stepStatuses = campaignStepStatuses/);
+    // The old wiring passed a bare validity predicate into the rail. If that returns,
+    // an unvisited step with a legal default reports Complete again.
+    assert.ok(
+      !/isComplete=\{\(index\) => isStepComplete\(/.test(WIZARD_CODE),
+      "the stepper is being fed raw validity again",
+    );
+  });
+
+  test("9.2 visiting is tracked separately from validity", () => {
+    assert.match(WIZARD_CODE, /const \[visited, setVisited\]/);
+    assert.match(WIZARD_CODE, /function goToStep\(/);
+    // Every navigation records the visit. The setter is called EXACTLY ONCE in the whole
+    // component — inside goToStep — so there is no path that moves the operator to a step
+    // without marking it visited. A second call site would mean a step could be reached
+    // and still report "Not started".
+    const rawJumps = [...WIZARD_CODE.matchAll(/setStepIndex\(/g)].length;
+    assert.equal(
+      rawJumps,
+      1,
+      "setStepIndex is called outside goToStep, so a visit can go unrecorded",
+    );
+    const goToStep = WIZARD_CODE.slice(
+      WIZARD_CODE.indexOf("function goToStep("),
+      WIZARD_CODE.indexOf("const step = WIZARD_STEPS[stepIndex]"),
+    );
+    assert.match(goToStep, /setStepIndex\(next\)/);
+    assert.match(WIZARD_CODE, /setVisited\(\(previous\) =>/);
+  });
+
+  test("9.3 a saved draft starts fully visited, a new one starts on step 1 only", () => {
+    assert.match(WIZARD_CODE, /mode === "edit"/);
+    assert.match(WIZARD_CODE, /new Set\(WIZARD_STEPS\.map\(\(_, index\) => index\)\)/);
+    assert.match(WIZARD_CODE, /new Set\(\[0\]\)/);
+  });
+
+  test("9.4 both stepper presentations read the SAME statuses array", () => {
+    // This is what makes "mobile and desktop use the same logic" structural rather than
+    // a promise: neither branch derives anything.
+    assert.match(STEPPER_CODE, /statuses: readonly StepStatus\[\]/);
+    const mobile = STEPPER_CODE.slice(
+      STEPPER_CODE.indexOf("lg:hidden"),
+      STEPPER_CODE.indexOf("hidden lg:block"),
+    );
+    const desktop = STEPPER_CODE.slice(STEPPER_CODE.indexOf("hidden lg:block"));
+    for (const [name, branch] of [
+      ["mobile", mobile],
+      ["desktop", desktop],
+    ] as const) {
+      assert.match(
+        branch,
+        /statuses\[index\]|statuses\[activeIndex\]/,
+        `the ${name} stepper does not read the shared statuses`,
+      );
+      assert.ok(
+        !/isStepComplete|validateCampaignForm/.test(branch),
+        `the ${name} stepper computes its own validity`,
+      );
+    }
+  });
+
+  test("9.5 status is rendered as a word in both presentations", () => {
+    const mobile = STEPPER_CODE.slice(
+      STEPPER_CODE.indexOf("lg:hidden"),
+      STEPPER_CODE.indexOf("hidden lg:block"),
+    );
+    const desktop = STEPPER_CODE.slice(STEPPER_CODE.indexOf("hidden lg:block"));
+    assert.match(mobile, /stepStatusLabel\(/);
+    assert.match(desktop, /stepStatusLabel\(/);
+    // And the needs-attention state differs in SHAPE, not only tone.
+    assert.match(STEPPER_CODE, /<AlertTriangleIcon/);
+    assert.match(STEPPER_CODE, /<CheckIcon/);
+  });
+
+  test("9.6 the review step has its own vocabulary and never claims a publish", () => {
+    assert.match(STEP_STATE, /NOT_READY: "Not ready"/);
+    assert.match(STEP_STATE, /READY_TO_SAVE: "Ready to save"/);
+    assert.match(WIZARD_CODE, /reviewStatus === "READY_TO_SAVE"/);
+    assert.match(WIZARD_CODE, /reviewStatus === "COMPLETE"/);
+    const prose = flat(WIZARD);
+    assert.match(prose, /Not ready to save yet/);
+    assert.match(prose, /it is not published/);
+  });
+
+  test("9.7 the review step lists the steps needing attention, each with a jump", () => {
+    assert.match(WIZARD_CODE, /const stepsNeedingAttention =/);
+    assert.match(WIZARD_CODE, /needsAttention\(stepStatuses\[index\]\)/);
+    assert.match(WIZARD_CODE, /onClick=\{\(\) => goToStep\(entry\.index\)\}/);
+    assert.match(flat(WIZARD), /Fix \{entry\.title\}/);
+  });
+
+  test("9.8 an empty-group audience is not reported as publish-ready", () => {
+    assert.match(WIZARD_CODE, /const audienceResolvesToNoRetailer =/);
+    assert.match(WIZARD_CODE, /memberCount === 0/);
+    assert.match(WIZARD_CODE, /audienceResolvesToNoRetailer,/);
+  });
+});
+
+/* ===========================================================================
+ * 10. The summary badge
+ * ======================================================================== */
+
+describe("10. the summary badge says what it means", () => {
+  test("10.1 it reads as a sentence, not a bare ratio", () => {
+    // "4/7" states a ratio and explains nothing — four of seven WHAT?
+    assert.match(SUMMARY_CODE, /details complete/);
+    assert.ok(
+      !/\{completeCount\}\/\{totalCount\}/.test(SUMMARY_CODE),
+      "the badge is back to the bare X/Y form",
+    );
+  });
+
+  test("10.2 the total derives from the rendered rows, never a passed-in number", () => {
+    // A hard-coded total can drift from the panel it describes.
+    assert.match(SUMMARY_CODE, /export function summaryProgress\(rows: SummaryRow\[\]\)/);
+    assert.match(SUMMARY_CODE, /total: rows\.length/);
+    assert.match(SUMMARY_CODE, /summaryProgress\(rows\)/);
+    // The old props are gone, so no caller can supply a disagreeing count.
+    assert.ok(!/completeCount/.test(SUMMARY_CODE));
+    assert.ok(!/totalCount/.test(SUMMARY_CODE));
+    assert.ok(!/completeCount/.test(WIZARD_CODE));
+  });
+
+  test("10.3 an unconfirmed default is shown but not counted", () => {
+    assert.match(SUMMARY_CODE, /unconfirmed\?: boolean/);
+    assert.match(SUMMARY_CODE, /row\.value !== null && row\.unconfirmed !== true/);
+    assert.match(flat(SUMMARY), /Default, not confirmed yet/);
+    // The wizard marks a row unconfirmed exactly when its step is untouched.
+    assert.match(WIZARD_CODE, /stepStatuses\[ownerStep\] === "NOT_STARTED"/);
+  });
+
+  test("10.4 the optional description is not a summary row at all", () => {
+    const rows = WIZARD_CODE.slice(
+      WIZARD_CODE.indexOf("const summaryRows"),
+      WIZARD_CODE.indexOf("const stepBody"),
+    );
+    assert.ok(
+      !/key: "description"/.test(rows),
+      "the optional description is counted as a missing detail",
+    );
+    // …and the seven that ARE rows are the campaign's required decisions.
+    const keys = [...rows.matchAll(/key: "(\w+)"/g)].map((m) => m[1]);
+    assert.deepEqual(keys, [
+      "name",
+      "audience",
+      "products",
+      "performance",
+      "reward",
+      "schedule",
+      "stacking",
+    ]);
+  });
+
+  test("10.5 the badge carries an accessible label with the full meaning", () => {
+    assert.match(SUMMARY_CODE, /aria-label=\{badgeLabel\}/);
+    assert.match(SUMMARY_CODE, /still to set/);
+    assert.match(SUMMARY_CODE, /not confirmed yet/);
+  });
+});
+
+/* ===========================================================================
+ * 11. The Retailer Owner can open a campaign
+ *
+ * Browser testing found the Retailer campaign cards unopenable — no link, no affordance,
+ * and no Console error, because the detail route had never been built even though its
+ * read contract existed. And an ACTIVE campaign was presenting a confident reward offer
+ * beside a quiet "0 products", advertising coins the Retailer cannot earn.
+ * ======================================================================== */
+
+const RETAILER_DETAIL_DIR = join(RETAILER_DIR, "[campaignId]");
+const RETAILER_DETAIL = read(join(RETAILER_DETAIL_DIR, "page.tsx"));
+const RETAILER_DETAIL_CODE = code(RETAILER_DETAIL);
+const NO_PRODUCTS = read(join(COMPONENTS, "no-eligible-products-notice.tsx"));
+const NO_PRODUCTS_CODE = code(NO_PRODUCTS);
+
+describe("11. the Retailer campaign card opens a detail page", () => {
+  test("11.1 the card is a real Link, not a handler on a div", () => {
+    assert.match(RETAILER_PAGE_CODE, /import Link from "next\/link"/);
+    assert.match(
+      RETAILER_PAGE_CODE,
+      /<Link\s+href=\{`\/retailer\/campaigns\/\$\{campaign\.campaignId\}`\}/,
+    );
+    // The failure mode this replaces, and the one that must never come back.
+    assert.ok(
+      !/onClick=/.test(RETAILER_PAGE_CODE),
+      "the read-only Retailer card grew a click handler",
+    );
+    assert.ok(
+      !/role="button"/.test(RETAILER_PAGE_CODE),
+      "a non-semantic element is impersonating a control",
+    );
+  });
+
+  test("11.2 the campaign title sits inside that link", () => {
+    const card = RETAILER_PAGE_CODE.slice(
+      RETAILER_PAGE_CODE.indexOf("function CampaignCard"),
+      RETAILER_PAGE_CODE.indexOf("export default async function"),
+    );
+    const linkStart = card.indexOf("<Link");
+    const linkEnd = card.indexOf("</Link>");
+    assert.ok(linkStart !== -1 && linkEnd > linkStart, "the card has no link");
+    const inside = card.slice(linkStart, linkEnd);
+    assert.match(inside, /\{campaign\.campaignName\}/);
+    assert.match(inside, /<h3/);
+  });
+
+  test("11.3 a visible View details affordance exists", () => {
+    assert.match(flat(RETAILER_PAGE), /View details/);
+    assert.match(RETAILER_PAGE_CODE, /<ChevronRightIcon/);
+  });
+
+  test("11.4 focus is visible and the link has a concise accessible name", () => {
+    assert.match(RETAILER_PAGE_CODE, /focus-visible:ring-2/);
+    // Without this, a screen reader announces the whole card — offer and all — as the
+    // link's name.
+    assert.match(
+      RETAILER_PAGE_CODE,
+      /aria-label=\{`View details for \$\{campaign\.campaignName\}`\}/,
+    );
+  });
+
+  test("11.5 exactly one interactive element per card", () => {
+    const card = RETAILER_PAGE_CODE.slice(
+      RETAILER_PAGE_CODE.indexOf("function CampaignCard"),
+      RETAILER_PAGE_CODE.indexOf("export default async function"),
+    );
+    assert.equal([...card.matchAll(/<Link/g)].length, 1, "nested or duplicated links");
+    assert.equal([...card.matchAll(/<button/g)].length, 0, "a button inside the link");
+  });
+});
+
+describe("12. the Retailer detail page is read-only", () => {
+  test("12.1 the route exists with a loading state", () => {
+    assert.ok(existsSync(join(RETAILER_DETAIL_DIR, "page.tsx")));
+    assert.ok(existsSync(join(RETAILER_DETAIL_DIR, "loading.tsx")));
+  });
+
+  test("12.2 it is a Server Component with no form and no Server Action", () => {
+    assert.ok(!/"use client"/.test(RETAILER_DETAIL));
+    assert.ok(!/<form/.test(RETAILER_DETAIL_CODE));
+    assert.ok(!/from "@\/app\/\(admin\)/.test(RETAILER_DETAIL_CODE), "imports a Vendor module");
+    assert.ok(!/campaigns\/actions/.test(RETAILER_DETAIL_CODE));
+  });
+
+  test("12.3 no Vendor management control is reachable", () => {
+    for (const control of [
+      "CampaignLifecycleDialog",
+      "publishCampaign",
+      "setCampaignLifecycle",
+      "createCampaignVersion",
+      "updateCampaignDraft",
+    ]) {
+      assert.ok(
+        !new RegExp(control).test(RETAILER_DETAIL_CODE),
+        `the Retailer detail page can reach ${control}`,
+      );
+    }
+    // And none of the words appears as an action either.
+    for (const word of ["Edit draft", "Publish", "Pause", "Resume", "Cancel campaign"]) {
+      assert.ok(
+        !new RegExp(`>\\s*${word}`).test(RETAILER_DETAIL),
+        `the Retailer detail page offers "${word}"`,
+      );
+    }
+  });
+
+  test("12.4 it reads ONLY the assigned-visibility module", () => {
+    const imports = [...RETAILER_DETAIL_CODE.matchAll(/from "(@\/lib\/[^"]+)"/g)].map(
+      (m) => m[1],
+    );
+    for (const source of imports) {
+      assert.ok(
+        !/vendor-campaigns|retailer-groups/.test(source),
+        `it imports the Vendor module ${source}`,
+      );
+    }
+    assert.ok(imports.includes("@/lib/campaigns/retailer-campaigns"));
+    // No direct table access anywhere.
+    assert.ok(!/\.from\(/.test(RETAILER_DETAIL_CODE));
+  });
+
+  test("12.5 no Vendor-private field can be rendered", () => {
+    for (const field of [
+      "exclusivityKey",
+      "priority",
+      "sourceGroupName",
+      "eligibleRetailerCount",
+      "versionNumber",
+      "versionId",
+      "audienceMode",
+      "selectedRetailerCount",
+      "selectedGroupCount",
+    ]) {
+      assert.ok(
+        !new RegExp(`campaign\\.${field}\\b`).test(RETAILER_DETAIL_CODE),
+        `the Retailer detail page renders ${field}`,
+      );
+    }
+    // Nor the words, in RENDERED prose. Asserted on comment-stripped source: the file's
+    // header explains WHY the exclusivity key is withheld, and a check that could not
+    // tell an explanation from a rendering would fail on its own documentation.
+    const prose = flat(RETAILER_DETAIL_CODE);
+    for (const word of ["exclusivity key", "Retailer group", "other Retailers"]) {
+      assert.ok(!new RegExp(word, "i").test(prose), `prose mentions "${word}"`);
+    }
+  });
+
+  test("12.6 no internal identifier is rendered as visible text", () => {
+    // Ids live in React keys and the route param only.
+    assert.ok(!/>\{[a-zA-Z.]*[Ii]d\}</.test(RETAILER_DETAIL_CODE));
+    assert.ok(!/aria-label=\{[^}]*Id\}/.test(RETAILER_DETAIL_CODE));
+    assert.ok(!/title=\{[^}]*Id\}/.test(RETAILER_DETAIL_CODE));
+  });
+
+  test("12.7 an unknown or foreign campaign is the same answer", () => {
+    // The id in the URL is an ADDRESS. The RPC re-derives the Retailer from auth.uid().
+    assert.match(RETAILER_DETAIL_CODE, /status === "not-found"/);
+    assert.match(RETAILER_DETAIL_CODE, /notFound\(\)/);
+    assert.match(RETAILER_DETAIL_CODE, /redirect\("\/retailer-access-denied"\)/);
+    assert.match(RETAILER_DETAIL_CODE, /redirect\("\/login"\)/);
+  });
+
+  test("12.8 it shows the products, the period, the reward and a back link", () => {
+    assert.match(RETAILER_DETAIL_CODE, /getMyRetailerCampaignProducts\(/);
+    assert.match(RETAILER_DETAIL_CODE, /<BackLink href="\/retailer\/campaigns">/);
+    assert.match(RETAILER_DETAIL_CODE, /rewardPreviewSentence\(/);
+    assert.match(RETAILER_DETAIL_CODE, /performanceExplanation\(/);
+    assert.match(RETAILER_DETAIL_CODE, /productResolutionExplanation\(/);
+    assert.match(RETAILER_DETAIL_CODE, /stackingExplanation\(/);
+    assert.match(RETAILER_DETAIL_CODE, /<CalculationEngineNotice/);
+  });
+
+  test("12.9 it never fabricates progress", () => {
+    const bindings = [...RETAILER_DETAIL_CODE.matchAll(/\{([^{}]*)\}/g)].map((m) => m[1]);
+    for (const binding of bindings) {
+      assert.ok(
+        !/\b(earned|balance|progress|unitsSold|coinsEarned|totalSales)\b/i.test(binding),
+        `a rendered expression claims a result: ${binding.trim()}`,
+      );
+    }
+    assert.match(
+      flat(RETAILER_DETAIL_CODE),
+      /nothing here\s+is a sales total or a coin balance/,
+    );
+  });
+
+  test("12.10 wide content scrolls inside its own container", () => {
+    const tables = [...RETAILER_DETAIL_CODE.matchAll(/<table/g)].length;
+    const wrappers = [...RETAILER_DETAIL_CODE.matchAll(/overflow-x-auto/g)].length;
+    assert.ok(
+      wrappers >= tables,
+      `${tables} tables but only ${wrappers} scroll containers`,
+    );
+  });
+});
+
+describe("13. the zero-eligible-products warning", () => {
+  test("13.1 the approved sentence is defined once and shared", () => {
+    assert.match(
+      NO_PRODUCTS,
+      /No eligible products are currently assigned to your Retailer for this campaign\. Sales cannot earn coins until an eligible product is available\./,
+    );
+    assert.match(NO_PRODUCTS_CODE, /export const NO_ELIGIBLE_PRODUCTS_MESSAGE/);
+  });
+
+  test("13.2 it applies only to a running or upcoming campaign with zero products", () => {
+    assert.match(
+      NO_PRODUCTS_CODE,
+      /derivedState !== "ACTIVE" && derivedState !== "SCHEDULED"/,
+    );
+    assert.match(NO_PRODUCTS_CODE, /eligibleProductCount === 0/);
+  });
+
+  test("13.3 it appears on BOTH the list card and the detail page", () => {
+    for (const [name, source] of [
+      ["list", RETAILER_PAGE_CODE],
+      ["detail", RETAILER_DETAIL_CODE],
+    ] as const) {
+      assert.match(source, /hasNoEligibleProducts\(/, `${name} does not compute it`);
+      assert.match(source, /<NoEligibleProductsNotice/, `${name} does not render it`);
+    }
+  });
+
+  test("13.4 it sits ABOVE the offer, so the offer is never read alone", () => {
+    for (const [name, source] of [
+      ["list", RETAILER_PAGE_CODE],
+      ["detail", RETAILER_DETAIL_CODE],
+    ] as const) {
+      const warning = source.indexOf("<NoEligibleProductsNotice");
+      const offer = source.indexOf("What this offers");
+      assert.ok(warning !== -1 && offer !== -1);
+      assert.ok(warning < offer, `${name} shows the offer before the warning`);
+    }
+  });
+
+  test("13.5 it is not communicated by colour alone", () => {
+    assert.match(NO_PRODUCTS_CODE, /<AlertTriangleIcon/);
+    assert.match(NO_PRODUCTS_CODE, /role="status"/);
+    assert.match(flat(NO_PRODUCTS), /Nothing to earn on/);
+  });
+
+  test("13.6 it never blames the campaign or the reader", () => {
+    // Comment-stripped: the component's header states the things it must NOT say, and
+    // those explanations are not what a Retailer reads.
+    const prose = flat(NO_PRODUCTS_CODE);
+    for (const forbidden of [
+      /broken/i,
+      /error/i,
+      /misconfigur/i,
+      /you (should|must|need to) (assign|add|configure)/i,
+    ]) {
+      assert.ok(!forbidden.test(prose), `the warning blames someone: ${forbidden}`);
+    }
+    // It names who actually controls product assignment.
+    assert.match(prose, /your Vendor/i);
+    // …and the rendered sentence itself is the approved one.
+    assert.match(prose, /Sales cannot earn coins until an eligible product is available/);
+  });
+
+  test("13.7 the real count is preserved, including zero", () => {
+    // The card previously printed "All eligible products" for a live-temporal campaign,
+    // which hid a live answer of none. It now always prints the number.
+    assert.match(RETAILER_PAGE_CODE, /\{campaign\.eligibleProductCount\}\{" "\}/);
+    assert.match(RETAILER_DETAIL_CODE, /\$\{campaign\.eligibleProductCount\}/);
+    // And a positive count renders no warning, because the guard is a strict equality.
+    assert.ok(
+      !/eligibleProductCount <=? 0/.test(NO_PRODUCTS_CODE),
+      "the zero test is not a strict equality",
+    );
+  });
+
+  test("13.8 the campaign is never hidden because it has no products", () => {
+    // Suppressing it would leave an unexplained gap against a list the Vendor can see.
+    assert.ok(
+      !/nothingEligible \?\s*null/.test(RETAILER_PAGE_CODE),
+      "a campaign with no eligible products is being hidden",
+    );
+    assert.ok(!/filter\([^)]*eligibleProductCount/.test(RETAILER_PAGE_CODE));
+  });
+});

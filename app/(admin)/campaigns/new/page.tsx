@@ -37,13 +37,13 @@ export default async function NewCampaignPage() {
   const options = await getWizardOptions();
 
   return (
-    <div className="mx-auto w-full max-w-4xl">
+    <div className="mx-auto w-full max-w-6xl">
       <BackLink href="/campaigns">Campaigns</BackLink>
 
       <PageHeader
         className="mt-3"
         title="New campaign"
-        description="Six steps. Nothing is visible to a Retailer until you publish, and no coins are calculated in this milestone."
+        description="Six steps, saved as a draft at the end. Nothing is visible to a Retailer until you publish it from the campaign's own page."
       />
 
       <CampaignWizard

@@ -56,12 +56,30 @@ export const INITIAL_CAMPAIGN_ACTION_STATE: CampaignActionState = {
   committed: false,
 };
 
-/** The Retailer-group create/rename form. */
+/**
+ * The Retailer-group create/rename form.
+ *
+ * `createdGroupId` and `partialWarning` exist for ONE situation, and it is the reason
+ * group creation is worth stating carefully.
+ *
+ * Creating a group with its Retailers in a single flow is two RPCs —
+ * create_vendor_retailer_group, then set_vendor_retailer_group_members — and there is no
+ * transaction spanning them, because neither RPC accepts the other's work as an argument.
+ * So the group can exist while its membership did not save. That outcome must never be
+ * reported as a plain failure: a failure notice invites a retry, and retrying would
+ * create a SECOND group with the same intent. It is reported as what it is — the group
+ * exists, its Retailers did not save, here is the link to add them — and the create form
+ * stops offering to create anything again.
+ */
 export type GroupFormState = {
-  fieldErrors: { name?: string; description?: string };
+  fieldErrors: { name?: string; description?: string; vendorRetailerIds?: string };
   formError: string | null;
   successMessage: string | null;
   values: { name: string; description: string };
+  /** Set once the group row exists, whether or not its membership saved. */
+  createdGroupId: string | null;
+  /** Present only when the group was created but its Retailers were not attached. */
+  partialWarning: string | null;
 };
 
 export const INITIAL_GROUP_FORM_STATE: GroupFormState = {
@@ -69,6 +87,8 @@ export const INITIAL_GROUP_FORM_STATE: GroupFormState = {
   formError: null,
   successMessage: null,
   values: { name: "", description: "" },
+  createdGroupId: null,
+  partialWarning: null,
 };
 
 /** The group membership editor. */

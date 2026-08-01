@@ -57,6 +57,15 @@ import {
   rewardSummary,
   stackingExplanation,
   stackingLabel,
+  classifyPublicationEligibility,
+  performancePlainLabel,
+  productScopePlainLabel,
+  publicationEligibilityCopy,
+  rewardPreviewSentence,
+  ruleTypeExplanation,
+  ruleTypeLabel,
+  CALCULATION_ENGINE_NOTICE,
+  RETAILER_TEAM_INDEPENDENCE,
 } from "./campaign-vocabulary.ts";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
@@ -488,5 +497,234 @@ describe("number formatting is stable across runtimes", () => {
   test("29. a non-finite value degrades to 0 rather than rendering NaN", () => {
     assert.equal(formatCoins(Number.NaN), "0 coins");
     assert.equal(formatCoins(Number.POSITIVE_INFINITY), "0 coins");
+  });
+});
+
+/* ===========================================================================
+ * The UX-redesign additions
+ *
+ * These back the copy the campaign screens now show. Two of them describe how the
+ * DATABASE behaves, so they are the place that behaviour is pinned in TypeScript.
+ * ======================================================================== */
+
+describe("30. plain-language labels", () => {
+  test("30.1 each product scope states its effect, not its name", () => {
+    assert.equal(
+      productScopePlainLabel("ALL_ELIGIBLE_PRODUCTS"),
+      "Products eligible at the time of each verified sale",
+    );
+    assert.equal(
+      productScopePlainLabel("SELECTED_PRODUCTS"),
+      "Only the products selected for this campaign version",
+    );
+  });
+
+  test("30.2 no plain label leaks an enum name", () => {
+    for (const label of [
+      productScopePlainLabel("ALL_ELIGIBLE_PRODUCTS"),
+      productScopePlainLabel("SELECTED_PRODUCTS"),
+      performancePlainLabel("INDIVIDUAL_STAFF"),
+      performancePlainLabel("RETAILER_TEAM"),
+      ruleTypeLabel("PER_UNIT_COINS"),
+      ruleTypeLabel("TARGET_BONUS"),
+      ruleTypeExplanation("PER_UNIT_COINS"),
+      ruleTypeExplanation("TARGET_BONUS"),
+      RETAILER_TEAM_INDEPENDENCE,
+      CALCULATION_ENGINE_NOTICE,
+    ]) {
+      assert.ok(
+        !/[A-Z]{3,}_[A-Z]/.test(label),
+        `a user-facing label contains an enum: ${label}`,
+      );
+    }
+  });
+
+  test("30.3 the team wording says Retailers are evaluated separately", () => {
+    // The single most common misreading of a team campaign is that one target is shared
+    // across the whole audience. The sentence exists to refuse that reading.
+    assert.match(RETAILER_TEAM_INDEPENDENCE, /Each Retailer is evaluated on its own/);
+    assert.match(RETAILER_TEAM_INDEPENDENCE, /never added together/);
+  });
+});
+
+describe("31. the reward preview sentence", () => {
+  const base = {
+    ruleType: null as null | "PER_UNIT_COINS" | "TARGET_BONUS",
+    performanceScope: null as null | "INDIVIDUAL_STAFF" | "RETAILER_TEAM",
+    coinsPerUnit: null as number | null,
+    thresholdUnits: null as number | null,
+    rewardCoins: null as number | null,
+    maxRewardCoins: null as number | null,
+  };
+
+  test("31.1 a per-unit rule reads as the requirement's example", () => {
+    assert.equal(
+      rewardPreviewSentence({
+        ...base,
+        ruleType: "PER_UNIT_COINS",
+        performanceScope: "INDIVIDUAL_STAFF",
+        coinsPerUnit: 5,
+        maxRewardCoins: 100,
+      }),
+      "Each Sales Staff member earns 5 coins per eligible unit, up to 100 coins.",
+    );
+  });
+
+  test("31.2 a target bonus on a team campaign reads as the requirement's example", () => {
+    assert.equal(
+      rewardPreviewSentence({
+        ...base,
+        ruleType: "TARGET_BONUS",
+        performanceScope: "RETAILER_TEAM",
+        thresholdUnits: 25,
+        rewardCoins: 2500,
+      }),
+      "When this Retailer reaches 25 units, contributing Sales Staff share the configured 2,500 coins reward according to the campaign rules.",
+    );
+  });
+
+  test("31.3 the sentence changes with the performance scope", () => {
+    const individual = rewardPreviewSentence({
+      ...base,
+      ruleType: "PER_UNIT_COINS",
+      performanceScope: "INDIVIDUAL_STAFF",
+      coinsPerUnit: 5,
+    });
+    const team = rewardPreviewSentence({
+      ...base,
+      ruleType: "PER_UNIT_COINS",
+      performanceScope: "RETAILER_TEAM",
+      coinsPerUnit: 5,
+    });
+    assert.notEqual(individual, team);
+    assert.match(String(team), /this Retailer/);
+  });
+
+  test("31.4 an incomplete rule returns null rather than half a sentence", () => {
+    assert.equal(rewardPreviewSentence({ ...base }), null);
+    assert.equal(
+      rewardPreviewSentence({ ...base, ruleType: "PER_UNIT_COINS", coinsPerUnit: null }),
+      null,
+    );
+    assert.equal(
+      rewardPreviewSentence({ ...base, ruleType: "PER_UNIT_COINS", coinsPerUnit: 0 }),
+      null,
+    );
+    assert.equal(
+      rewardPreviewSentence({
+        ...base,
+        ruleType: "TARGET_BONUS",
+        thresholdUnits: 25,
+        rewardCoins: null,
+      }),
+      null,
+    );
+  });
+
+  test("31.5 it never computes a total or claims anything was earned", () => {
+    const sentence = String(
+      rewardPreviewSentence({
+        ...base,
+        ruleType: "PER_UNIT_COINS",
+        performanceScope: "INDIVIDUAL_STAFF",
+        coinsPerUnit: 7,
+        maxRewardCoins: 100,
+      }),
+    );
+    // 7 and 100 appear because they were configured. No product of them does.
+    assert.ok(!/700/.test(sentence));
+    assert.ok(!/\b(earned so far|to date|balance|progress)\b/i.test(sentence));
+  });
+});
+
+describe("32. publication eligibility, as the database actually behaves", () => {
+  /**
+   * These encode a rule verified against the hosted development database before the copy
+   * was written:
+   *
+   *   public.publish_vendor_campaign freezes one row per (eligible Retailer, ACTIVE
+   *   assignment) pair and refuses the publication ONLY when that whole set is empty.
+   *
+   * So a campaign where SOME Retailers match nothing still publishes — with those
+   * Retailers included and unable to earn — and only a campaign where NOTHING matches is
+   * blocked. The previous UI stated the first half and was silent about the second.
+   */
+  const row = (eligible: number, missing: number) => ({
+    eligibleProductCount: eligible,
+    missingProductCount: missing,
+  });
+
+  test("32.1 no missing product anywhere is CLEAR", () => {
+    assert.equal(
+      classifyPublicationEligibility([row(3, 0), row(3, 0)], "SELECTED_PRODUCTS"),
+      "CLEAR",
+    );
+  });
+
+  test("32.2 some Retailers short, at least one matching, is PARTIAL", () => {
+    assert.equal(
+      classifyPublicationEligibility([row(1, 2), row(3, 0)], "SELECTED_PRODUCTS"),
+      "PARTIAL",
+    );
+    // Including the case the wording leads with: a Retailer with nothing at all, while
+    // another Retailer does resolve. The database publishes this.
+    assert.equal(
+      classifyPublicationEligibility([row(0, 3), row(3, 0)], "SELECTED_PRODUCTS"),
+      "PARTIAL",
+    );
+  });
+
+  test("32.3 nothing matching anywhere is BLOCKED", () => {
+    assert.equal(
+      classifyPublicationEligibility([row(0, 3), row(0, 3)], "SELECTED_PRODUCTS"),
+      "BLOCKED",
+    );
+  });
+
+  test("32.4 a live-temporal campaign is never blocked this way", () => {
+    // It freezes no pairs at all, so there is no empty pair-set to refuse.
+    assert.equal(
+      classifyPublicationEligibility([row(0, 3)], "ALL_ELIGIBLE_PRODUCTS"),
+      "CLEAR",
+    );
+    assert.equal(classifyPublicationEligibility([row(0, 3)], null), "CLEAR");
+  });
+
+  test("32.5 an empty preview is CLEAR, not BLOCKED", () => {
+    // A campaign with no rows has a DIFFERENT problem — no eligible Retailer — which the
+    // publish RPC reports on its own. Claiming a product conflict would misdirect.
+    assert.equal(classifyPublicationEligibility([], "SELECTED_PRODUCTS"), "CLEAR");
+  });
+
+  test("32.6 the copy distinguishes reduced from refused, and says the consequence", () => {
+    assert.equal(publicationEligibilityCopy("CLEAR"), null);
+
+    const partial = publicationEligibilityCopy("PARTIAL");
+    assert.ok(partial !== null);
+    assert.match(partial.body, /can still be published/);
+    // The fact the previous wording omitted entirely.
+    assert.match(partial.body, /without a single eligible product/);
+
+    const blocked = publicationEligibilityCopy("BLOCKED");
+    assert.ok(blocked !== null);
+    assert.match(blocked.title, /cannot be published/);
+    // And it names the ways out rather than only stating the refusal.
+    assert.match(blocked.body, /Assign the products/);
+    assert.match(blocked.body, /change the audience/);
+  });
+
+  test("32.7 neither message leaks a database term", () => {
+    for (const eligibility of ["PARTIAL", "BLOCKED"] as const) {
+      const copy = publicationEligibilityCopy(eligibility);
+      assert.ok(copy !== null);
+      for (const text of [copy.title, copy.body]) {
+        assert.ok(
+          !/SQLSTATE|55000|object_not_in_prerequisite|campaign_eligible|vendor_product_retailer/i.test(
+            text,
+          ),
+          `copy leaks an internal term: ${text}`,
+        );
+      }
+    }
   });
 });

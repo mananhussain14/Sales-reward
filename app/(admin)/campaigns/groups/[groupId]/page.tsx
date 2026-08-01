@@ -35,8 +35,10 @@ export const metadata: Metadata = {
  */
 export default async function RetailerGroupDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ groupId: string }>;
+  searchParams: Promise<{ created?: string }>;
 }) {
   const access = await getVendorSuperAdminAccess();
 
@@ -48,6 +50,10 @@ export default async function RetailerGroupDetailPage({
   }
 
   const { groupId } = await params;
+  // Set by the create flow's redirect. A presentational flag only: it confirms an action
+  // the server already completed and grants nothing, so a hand-typed `?created=1` shows a
+  // banner and changes no state.
+  const justCreated = (await searchParams).created === "1";
 
   const [groupResult, membersResult, retailerResult] = await Promise.all([
     getRetailerGroup(groupId),
@@ -106,13 +112,27 @@ export default async function RetailerGroupDetailPage({
         description={group.description ?? undefined}
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            {group.status === "ARCHIVED" && <Badge tone="slate">Archived</Badge>}
+            {group.status === "ARCHIVED" ? (
+              <Badge tone="slate">Archived</Badge>
+            ) : (
+              <Badge tone="emerald">Active</Badge>
+            )}
             <span className="text-sm text-slate-500">
               {group.memberCount} {group.memberCount === 1 ? "Retailer" : "Retailers"}
             </span>
           </div>
         }
       />
+
+      {justCreated && (
+        <Alert tone="success" className="mt-6">
+          {group.memberCount === 0
+            ? "Retailer group created. Add its Retailers below whenever you are ready."
+            : `Retailer group created with ${group.memberCount} ${
+                group.memberCount === 1 ? "Retailer" : "Retailers"
+              }. You can change them at any time.`}
+        </Alert>
+      )}
 
       {group.campaignRefCount > 0 && (
         <Alert tone="info" className="mt-6" title="This group is used by a campaign">
@@ -136,11 +156,16 @@ export default async function RetailerGroupDetailPage({
       <SectionCard
         className="mt-6"
         title="Retailers in this group"
-        description="Choose every Retailer this group should contain. Saving replaces the whole membership."
+        description="Choose every Retailer this group should contain. Saving replaces the whole set at once."
       >
         {membersResult.status !== "ok" && (
-          <Alert tone="warning" role="alert" className="mb-4" title="Membership could not be loaded">
-            The group details above are unaffected. Refresh before editing membership.
+          <Alert
+            tone="warning"
+            role="alert"
+            className="mb-4"
+            title="This group's Retailers could not be loaded"
+          >
+            The group details above are unaffected. Refresh before changing them.
           </Alert>
         )}
 

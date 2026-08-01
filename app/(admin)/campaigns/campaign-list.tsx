@@ -7,11 +7,17 @@ import { Badge } from "@/components/ui/badge";
 import { cardClasses } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { cn } from "@/components/ui/cn";
-import { CampaignsIcon } from "@/components/ui/icons";
+import {
+  CalendarIcon,
+  CampaignsIcon,
+  ChevronRightIcon,
+  ProductsIcon,
+  RetailersIcon,
+} from "@/components/ui/icons";
 import type { VendorCampaignSummary } from "@/lib/campaigns/campaign-normalization";
 import {
   audienceLabel,
-  performanceLabel,
+  performancePlainLabel,
   productResolutionLabel,
   productScopeLabel,
   rewardSummary,
@@ -32,6 +38,21 @@ import {
  * NO PROGRESS AND NO TOTALS. Every number on a row is configuration — how many Retailers
  * a published version resolved to, how many products were selected, what the reward
  * offers. Nothing here is units sold or coins earned; there is no such field to render.
+ *
+ * ============================================================================
+ * WHAT THE REDESIGN CHANGED, AND WHY
+ * ============================================================================
+ * The previous row printed six equally weighted definition-list cells, so a campaign's
+ * NAME carried the same visual weight as its time zone and nothing could be scanned. The
+ * row now has a deliberate order of importance:
+ *
+ *   1. name and state          — the two things a scanning eye looks for
+ *   2. reward and measurement  — what the campaign actually offers
+ *   3. audience and products   — who and what it covers
+ *   4. dates and metadata      — supporting, and visually quietest
+ *
+ * The whole row is one link with a visible affordance, rather than a card that happened
+ * to be clickable.
  */
 
 const STATE_FILTERS: { key: CampaignState | "ALL"; label: string }[] = [
@@ -62,7 +83,7 @@ function formatPeriod(
   endsAt: string | null,
   timeZone: string | null,
 ): string {
-  if (startsAt === null) return "—";
+  if (startsAt === null) return "No schedule yet";
 
   const zone = timeZone ?? "UTC";
   const format = (iso: string) => {
@@ -87,7 +108,7 @@ function formatPeriod(
 
 /** "All Retailers", "4 Retailers", "2 groups" — never the Retailers' names. */
 function audienceSummary(campaign: VendorCampaignSummary): string {
-  if (campaign.audienceMode === null) return "—";
+  if (campaign.audienceMode === null) return "Not set";
   if (campaign.audienceMode === "ALL_RETAILERS") return audienceLabel("ALL_RETAILERS");
   if (campaign.audienceMode === "SELECTED_RETAILERS") {
     const count = campaign.selectedRetailerCount;
@@ -95,6 +116,33 @@ function audienceSummary(campaign: VendorCampaignSummary): string {
   }
   const count = campaign.selectedGroupCount;
   return `${count} ${count === 1 ? "group" : "groups"}`;
+}
+
+function productSummary(campaign: VendorCampaignSummary): string {
+  if (campaign.productScope === null) return "Not set";
+  if (campaign.productScope === "ALL_ELIGIBLE_PRODUCTS") {
+    return productScopeLabel("ALL_ELIGIBLE_PRODUCTS");
+  }
+  const count = campaign.selectedProductCount;
+  return `${count} selected ${count === 1 ? "product" : "products"}`;
+}
+
+/** A quiet supporting fact: an icon, then a short value. */
+function MetaFact({
+  icon,
+  children,
+}: {
+  icon: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <span className="inline-flex min-w-0 items-center gap-1.5 text-xs text-slate-600">
+      <span className="shrink-0 text-slate-400" aria-hidden="true">
+        {icon}
+      </span>
+      <span className="truncate">{children}</span>
+    </span>
+  );
 }
 
 export function CampaignList({ campaigns }: { campaigns: VendorCampaignSummary[] }) {
@@ -119,11 +167,13 @@ export function CampaignList({ campaigns }: { campaigns: VendorCampaignSummary[]
     return map;
   }, [campaigns]);
 
+  const filtered = state !== "ALL" || scope !== "ALL";
+
   return (
     <>
       {/* Filters. Radio semantics, so a screen reader announces the group and the
-          selected member rather than seven unrelated buttons. */}
-      <div className="mt-8 flex flex-col gap-3">
+          selected member rather than ten unrelated buttons. */}
+      <div className="mt-6 space-y-2.5">
         <div
           role="radiogroup"
           aria-label="Filter by campaign status"
@@ -141,15 +191,23 @@ export function CampaignList({ campaigns }: { campaigns: VendorCampaignSummary[]
                 aria-checked={selected}
                 onClick={() => setState(filter.key)}
                 className={cn(
-                  "inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium ring-1 ring-inset transition-colors",
+                  "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium ring-1 ring-inset transition-colors",
                   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2",
                   selected
                     ? "bg-indigo-600 text-white ring-indigo-600"
                     : "bg-white text-slate-600 ring-slate-300 hover:bg-slate-50 hover:text-slate-900",
+                  // A state with nothing in it is dimmed but still reachable, so the
+                  // absence is visible rather than the filter simply doing nothing.
+                  !selected && count === 0 && "opacity-55",
                 )}
               >
                 {filter.label}
-                <span className={selected ? "text-indigo-100" : "text-slate-400"}>
+                <span
+                  className={cn(
+                    "tabular-nums",
+                    selected ? "text-indigo-100" : "text-slate-400",
+                  )}
+                >
                   {count}
                 </span>
               </button>
@@ -172,7 +230,7 @@ export function CampaignList({ campaigns }: { campaigns: VendorCampaignSummary[]
                 aria-checked={selected}
                 onClick={() => setScope(filter.key)}
                 className={cn(
-                  "rounded-full px-3 py-1.5 text-xs font-medium ring-1 ring-inset transition-colors",
+                  "rounded-lg px-2.5 py-1 text-xs font-medium ring-1 ring-inset transition-colors",
                   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2",
                   selected
                     ? "bg-slate-900 text-white ring-slate-900"
@@ -188,7 +246,7 @@ export function CampaignList({ campaigns }: { campaigns: VendorCampaignSummary[]
 
       {/* The live region announces the result of a filter change to a screen reader,
           which would otherwise get no feedback at all from a purely visual update. */}
-      <p className="mt-4 text-sm text-slate-500" aria-live="polite">
+      <p className="mt-3 text-sm text-slate-500" aria-live="polite">
         {visible.length === campaigns.length
           ? `${campaigns.length} ${campaigns.length === 1 ? "campaign" : "campaigns"}`
           : `${visible.length} of ${campaigns.length} campaigns`}
@@ -196,129 +254,120 @@ export function CampaignList({ campaigns }: { campaigns: VendorCampaignSummary[]
 
       {visible.length === 0 ? (
         <EmptyState
-          className="mt-4"
+          className="mt-3"
           icon={<CampaignsIcon className="h-6 w-6" />}
           title="No campaigns match these filters"
-          description="Clear a filter to see the rest of your campaigns."
+          description={
+            filtered
+              ? "Clear a filter to see the rest of your campaigns."
+              : "Create a campaign to get started."
+          }
         />
       ) : (
-        <ul className="mt-4 flex flex-col gap-3">
+        <ul className="mt-3 flex flex-col gap-2.5">
           {visible.map((campaign) => {
             const reward = rewardSummary(campaign.reward);
             return (
               <li key={campaign.campaignId}>
-                {/* The WHOLE card is the link, so the target is large, obvious and
-                    keyboard-reachable as one stop rather than several. */}
+                {/* The WHOLE row is the link — one large target, one keyboard stop. */}
                 <Link
                   href={`/campaigns/${campaign.campaignId}`}
                   className={cardClasses(
                     "interactive",
-                    "block p-5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2",
+                    "group block p-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 sm:p-5",
                   )}
                 >
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="min-w-0">
+                  <div className="flex items-start gap-4">
+                    <div className="min-w-0 flex-1">
+                      {/* --- 1. Name and state --- */}
                       <div className="flex flex-wrap items-center gap-2">
                         <h3 className="text-base font-semibold text-slate-900">
                           {campaign.name}
                         </h3>
                         <CampaignStateBadge state={campaign.derivedState} />
-                        {campaign.hasDraft && (
-                          <Badge tone="indigo">Draft changes</Badge>
-                        )}
+                        {campaign.hasDraft &&
+                          campaign.derivedState !== "DRAFT" && (
+                            <Badge tone="indigo">Draft changes</Badge>
+                          )}
                       </div>
+
                       {campaign.description && (
-                        <p className="mt-1 max-w-2xl text-sm text-slate-500">
+                        <p className="mt-1 line-clamp-1 max-w-2xl text-sm text-slate-500">
                           {campaign.description}
                         </p>
                       )}
-                    </div>
-                    {campaign.versionNumber !== null && (
-                      <span className="shrink-0 text-xs font-medium text-slate-400">
-                        Version {campaign.versionNumber}
-                      </span>
-                    )}
-                  </div>
 
-                  <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 text-sm sm:grid-cols-3 lg:grid-cols-5">
-                    <div>
-                      <dt className="text-xs uppercase tracking-wide text-slate-400">
-                        Audience
-                      </dt>
-                      <dd className="mt-0.5 text-slate-700">
-                        {audienceSummary(campaign)}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="text-xs uppercase tracking-wide text-slate-400">
-                        Measured
-                      </dt>
-                      <dd className="mt-0.5 text-slate-700">
-                        {campaign.performanceScope === null
-                          ? "—"
-                          : performanceLabel(campaign.performanceScope)}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="text-xs uppercase tracking-wide text-slate-400">
-                        Products
-                      </dt>
-                      <dd className="mt-0.5 text-slate-700">
-                        {campaign.productScope === null
-                          ? "—"
-                          : campaign.productScope === "ALL_ELIGIBLE_PRODUCTS"
-                            ? productScopeLabel("ALL_ELIGIBLE_PRODUCTS")
-                            : `${campaign.selectedProductCount} selected`}
-                        {campaign.productEligibilityResolution !== null && (
-                          <span className="mt-0.5 block text-xs text-slate-400">
-                            {productResolutionLabel(campaign.productEligibilityResolution)}
-                          </span>
+                      {/* --- 2. Reward and measurement: the loudest facts after the
+                              name, because they are what the campaign IS. --- */}
+                      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+                        <span className="inline-flex items-center rounded-lg bg-indigo-50 px-2.5 py-1 text-sm font-semibold text-indigo-700 ring-1 ring-inset ring-indigo-600/15">
+                          {/* A dash, never a guess: an invented reward is a promise
+                              nobody made. */}
+                          {reward ?? "No reward set"}
+                        </span>
+                        <span className="text-xs font-medium text-slate-600">
+                          {campaign.performanceScope === null
+                            ? "Not set"
+                            : performancePlainLabel(campaign.performanceScope)}
+                        </span>
+                        {campaign.stackingMode !== null && (
+                          <Badge
+                            tone={
+                              campaign.stackingMode === "EXCLUSIVE" ? "amber" : "slate"
+                            }
+                          >
+                            {stackingLabel(campaign.stackingMode)}
+                          </Badge>
                         )}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="text-xs uppercase tracking-wide text-slate-400">
-                        Reward
-                      </dt>
-                      {/* A missing rule renders a dash. It never renders a guess: an
-                          invented reward is a promise nobody made. */}
-                      <dd className="mt-0.5 text-slate-700">{reward ?? "—"}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-xs uppercase tracking-wide text-slate-400">
-                        Period
-                      </dt>
-                      <dd className="mt-0.5 text-slate-700">
-                        {formatPeriod(
-                          campaign.startsAt,
-                          campaign.endsAt,
-                          campaign.timezoneName,
-                        )}
-                      </dd>
-                    </div>
-                  </dl>
+                      </div>
 
-                  <div className="mt-4 flex flex-wrap items-center gap-2">
-                    {campaign.stackingMode !== null && (
-                      <Badge
-                        tone={campaign.stackingMode === "EXCLUSIVE" ? "amber" : "slate"}
-                      >
-                        {stackingLabel(campaign.stackingMode)}
-                      </Badge>
-                    )}
-                    {campaign.derivedState !== "DRAFT" && (
-                      <span className="text-xs text-slate-400">
-                        {campaign.eligibleRetailerCount}{" "}
-                        {campaign.eligibleRetailerCount === 1
-                          ? "eligible Retailer"
-                          : "eligible Retailers"}
+                      {/* --- 3 and 4. Coverage, then dates. Quiet by design. --- */}
+                      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5">
+                        <MetaFact icon={<RetailersIcon className="h-3.5 w-3.5" />}>
+                          {audienceSummary(campaign)}
+                        </MetaFact>
+                        <MetaFact icon={<ProductsIcon className="h-3.5 w-3.5" />}>
+                          {productSummary(campaign)}
+                          {campaign.productEligibilityResolution !== null && (
+                            <span className="text-slate-400">
+                              {" · "}
+                              {productResolutionLabel(
+                                campaign.productEligibilityResolution,
+                              )}
+                            </span>
+                          )}
+                        </MetaFact>
+                        <MetaFact icon={<CalendarIcon className="h-3.5 w-3.5" />}>
+                          {formatPeriod(
+                            campaign.startsAt,
+                            campaign.endsAt,
+                            campaign.timezoneName,
+                          )}
+                          {campaign.timezoneName && (
+                            <span className="text-slate-400">
+                              {" · "}
+                              {campaign.timezoneName}
+                            </span>
+                          )}
+                        </MetaFact>
+                      </div>
+                    </div>
+
+                    {/* The affordance, stated rather than implied by a hover shadow. */}
+                    <span className="flex shrink-0 flex-col items-end gap-2 pt-0.5">
+                      {campaign.versionNumber !== null && (
+                        <span className="text-xs text-slate-400">
+                          Version {campaign.versionNumber}
+                        </span>
+                      )}
+                      <span className="inline-flex items-center gap-0.5 text-xs font-semibold text-indigo-600">
+                        <span className="hidden sm:inline">View details</span>
+                        <ChevronRightIcon
+                          className="h-4 w-4 transition-transform group-hover:translate-x-0.5"
+                          aria-hidden="true"
+                        />
                       </span>
-                    )}
-                    {campaign.timezoneName && (
-                      <span className="text-xs text-slate-400">
-                        {campaign.timezoneName}
-                      </span>
-                    )}
+                    </span>
                   </div>
                 </Link>
               </li>

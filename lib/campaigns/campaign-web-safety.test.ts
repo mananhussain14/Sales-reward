@@ -64,6 +64,37 @@ const RETAILER_PAGE_CODE = code(RETAILER_PAGE);
 const ADMIN_NAV = read(join(ROOT, "components/admin/nav-items.tsx"));
 const RETAILER_NAV = read(join(ROOT, "components/retailer-portal/retailer-nav-items.tsx"));
 
+/**
+ * The shared campaign components the UX redesign extracted.
+ *
+ * Several guarantees below — "the search hides rather than unmounts", "choices are real
+ * radios", "the count is announced" — used to be asserted against campaign-wizard.tsx
+ * because that file contained the markup. It no longer does: one picker and one choice
+ * card are now used by the wizard AND by Retailer-group creation and editing, which is
+ * what stops the four surfaces drifting apart.
+ *
+ * The guarantees are unchanged and are still asserted; they are simply asserted where the
+ * markup now lives. `WIZARD_SURFACE` is the concatenation, so a rule that must hold for
+ * "the wizard as a user experiences it" can be checked in one place regardless of which
+ * file happens to hold that line today.
+ */
+const CAMPAIGN_COMPONENTS_DIR = join(ROOT, "components/campaigns");
+const PICKER = read(join(CAMPAIGN_COMPONENTS_DIR, "entity-picker.tsx"));
+const CHOICE_CARDS = read(join(CAMPAIGN_COMPONENTS_DIR, "choice-cards.tsx"));
+const STEPPER = read(join(CAMPAIGN_COMPONENTS_DIR, "wizard-stepper.tsx"));
+const SUMMARY = read(join(CAMPAIGN_COMPONENTS_DIR, "campaign-summary.tsx"));
+const ELIGIBILITY = read(join(CAMPAIGN_COMPONENTS_DIR, "eligibility-panel.tsx"));
+const SHARED_FIELD = read(join(ROOT, "components/ui/field.tsx"));
+
+const PICKER_CODE = code(PICKER);
+const CHOICE_CARDS_CODE = code(CHOICE_CARDS);
+const STEPPER_CODE = code(STEPPER);
+
+const WIZARD_SURFACE = [WIZARD, PICKER, CHOICE_CARDS, STEPPER, SUMMARY, ELIGIBILITY].join(
+  "\n",
+);
+const WIZARD_SURFACE_CODE = code(WIZARD_SURFACE);
+
 /* ===========================================================================
  * 1. Routes and navigation
  * ======================================================================== */
@@ -194,12 +225,16 @@ describe("2. the Retailer Owner page cannot mutate anything", () => {
         `a rendered expression claims a result: ${binding.trim()}`,
       );
     }
-    // And the honest half of the same claim is present for the reader. Whitespace is
-    // normalized because the copy is line-wrapped in JSX — matching the raw source would
-    // test the formatter rather than the wording.
-    assert.match(
-      RETAILER_PAGE.replace(/\s+/g, " "),
-      /calculation engine is connected/,
+    // And the honest half of the same claim is present for the reader. The sentence now
+    // lives in ONE constant — CALCULATION_ENGINE_NOTICE — rendered through the shared
+    // <CalculationEngineNotice />, so that every surface says it identically. Accepting
+    // either the component or the literal keeps the guarantee ("the reader is told") while
+    // allowing the wording to be centralized, which is what stops two pages drifting.
+    const prose = RETAILER_PAGE.replace(/\s+/g, " ");
+    assert.ok(
+      /calculation engine is connected/.test(prose) ||
+        /<CalculationEngineNotice/.test(prose),
+      "the page never tells the reader that no result is calculated yet",
     );
   });
 
@@ -209,14 +244,41 @@ describe("2. the Retailer Owner page cannot mutate anything", () => {
     assert.match(RETAILER_PAGE_CODE, /status === "denied"/);
   });
 
-  test("2.8 it shows the four required sections", () => {
-    for (const title of [
-      "Active campaigns",
-      "Upcoming campaigns",
-      "Paused campaigns",
-      "Ended and cancelled campaigns",
+  test("2.8 it groups every lifecycle state into a section, and covers all six", () => {
+    // Asserted on the STATES each section collects, not on its heading. The headings are
+    // ordinary product copy and were reworded in the UX redesign ("Running now" rather
+    // than "Active campaigns"); the guarantee that matters is that no state falls through
+    // and becomes invisible to the Retailer it applies to.
+    const sections = RETAILER_PAGE_CODE.slice(
+      RETAILER_PAGE_CODE.indexOf("const SECTIONS"),
+      RETAILER_PAGE_CODE.indexOf("function formatDate"),
+    );
+
+    for (const state of [
+      "ACTIVE",
+      "SCHEDULED",
+      "PAUSED",
+      "ENDED",
+      "CANCELLED",
     ]) {
-      assert.ok(RETAILER_PAGE.includes(title), `missing section: ${title}`);
+      assert.ok(
+        new RegExp(`"${state}"`).test(sections),
+        `no section collects ${state}, so those campaigns would be invisible`,
+      );
+    }
+
+    // DRAFT is the one state deliberately absent: the RPC never returns an unpublished
+    // campaign to a Retailer, so a section for it would always be empty.
+    assert.ok(
+      !/"DRAFT"/.test(sections),
+      "a Retailer section collects DRAFT, which the RPC never returns",
+    );
+
+    // Four sections, each with a heading and a description, so none is an unlabelled list.
+    const headings = [...sections.matchAll(/title: "([^"]+)"/g)].map((m) => m[1]);
+    assert.equal(headings.length, 4, "expected exactly four Retailer sections");
+    for (const heading of headings) {
+      assert.ok(heading.trim().length > 0, "a section has an empty heading");
     }
   });
 
@@ -413,19 +475,42 @@ describe("3. every Server Action re-checks access and maps errors safely", () =>
  * ======================================================================== */
 
 describe("4. the creation wizard", () => {
-  test("4.1 it has the six required steps, in order", () => {
+  test("4.1 it has the six required steps, in order, each with an explanation", () => {
     const input = read(join(ROOT, "lib/campaigns/campaign-input.ts"));
-    const steps = [...input.matchAll(/\{ key: "(\w+)", title: "([^"]+)" \}/g)].map(
-      (m) => m[2],
+    const block = input.slice(
+      input.indexOf("export const WIZARD_STEPS"),
+      input.indexOf("export type WizardStepKey"),
     );
-    assert.deepEqual(steps, [
-      "Campaign details",
-      "Retailer audience",
-      "Product eligibility",
-      "Performance and reward",
-      "Schedule and stacking",
-      "Review and publish",
-    ]);
+    const steps = [...block.matchAll(/key: "(\w+)",\s*\n?\s*title: "([^"]+)"/g)].map(
+      (m) => ({ key: m[1], title: m[2] }),
+    );
+
+    assert.deepEqual(
+      steps.map((step) => step.key),
+      ["details", "audience", "products", "reward", "schedule", "review"],
+    );
+    assert.deepEqual(
+      steps.map((step) => step.title),
+      [
+        "Campaign details",
+        "Retailer audience",
+        "Product eligibility",
+        "Performance and reward",
+        "Schedule and stacking",
+        // "Review and SAVE". The final step has never published anything — it writes a
+        // draft — and a step titled "publish" promised what the button beneath it did not
+        // do. The capability is asserted separately by 4.2.
+        "Review and save",
+      ],
+    );
+
+    // Every step carries a one-sentence explanation, which is what the stepper shows
+    // beside the title at every width.
+    const summaries = [...block.matchAll(/summary: "([^"]+)"/g)].map((m) => m[1]);
+    assert.equal(summaries.length, 6, "every step needs a one-sentence explanation");
+    for (const summary of summaries) {
+      assert.ok(summary.trim().length > 10, `a step explanation is too thin: ${summary}`);
+    }
   });
 
   test("4.2 it NEVER publishes — saving a draft is its only mutation", () => {
@@ -450,7 +535,10 @@ describe("4. the creation wizard", () => {
     // No auto-save, and no second submit after a committed create.
     assert.ok(!/useEffect\([^)]*formAction/.test(WIZARD_CODE));
     assert.match(WIZARD_CODE, /const committed = state\.savedCampaignId !== null/);
-    assert.match(WIZARD_CODE, /committed \?[\s\S]{0,400}Review and publish/);
+    // Once the write has committed the submit is replaced by a LINK to the saved
+    // campaign, so an ordinary retry cannot create a second one.
+    assert.match(WIZARD_CODE, /committed \?[\s\S]{0,600}Open campaign/);
+    assert.match(WIZARD_CODE, /href=\{`\/campaigns\/\$\{state\.savedCampaignId\}`\}/);
   });
 
   test("4.5 every step's fields stay MOUNTED, so no value is lost between steps", () => {
@@ -472,30 +560,55 @@ describe("4. the creation wizard", () => {
   test("4.6 the multi-select hides non-matching options rather than unmounting them", () => {
     // Same reasoning: a search that unmounted unmatched checkboxes would drop a
     // selection the operator made before typing.
-    assert.match(WIZARD_CODE, /hidden && "hidden"/);
-    assert.ok(!/matches\.has\(option\.id\) \?\s*\(/.test(WIZARD_CODE));
+    // The markup now lives in the shared picker, which the wizard AND both group forms
+    // use — so this one assertion covers four surfaces instead of one.
+    assert.match(PICKER_CODE, /hidden && "hidden"/);
+    assert.ok(!/matches\.has\(option\.id\) \?\s*\(/.test(PICKER_CODE));
+    assert.ok(
+      !/\{matches\.has\([^)]*\) && </.test(PICKER_CODE),
+      "an option is conditionally rendered, which would drop it from the FormData",
+    );
   });
 
   test("4.7 selection counts are announced to assistive technology", () => {
-    assert.match(WIZARD_CODE, /aria-live="polite"[\s\S]{0,80}selected/);
+    assert.match(PICKER_CODE, /aria-live="polite"[\s\S]{0,400}selected/);
   });
 
   test("4.8 the step rail exposes step semantics", () => {
-    assert.match(WIZARD_CODE, /aria-current=\{current \? "step" : undefined\}/);
-    assert.match(WIZARD_CODE, /aria-label=\{`Step \$\{stepIndex \+ 1\} of/);
+    // Both presentations of the rail — the wide vertical one and the narrow
+    // "Step X of 6" header — mark the current step and name the position.
+    assert.match(STEPPER_CODE, /aria-current=\{active \? "step" : undefined\}/);
+    assert.match(STEPPER_CODE, /aria-label=\{`Step \$\{activeIndex \+ 1\} of \$\{total\}/);
+    assert.match(STEPPER_CODE, /Step \{activeIndex \+ 1\} of \{total\}/);
+    // Completion is stated in WORDS, never by colour alone. The words themselves now
+    // come from the shared step-state module, so the rail and the mobile header cannot
+    // label the same step differently — which is checked by asserting the stepper renders
+    // the shared label rather than a literal of its own.
+    assert.match(STEPPER_CODE, /stepStatusLabel\(/);
+    const stepState = read(join(ROOT, "lib/campaigns/campaign-step-state.ts"));
+    assert.match(stepState, /COMPLETE: "Complete"/);
+    assert.match(stepState, /NEEDS_ATTENTION: "Needs attention"/);
   });
 
   test("4.9 every field has a label, and errors are announced", () => {
-    assert.match(WIZARD_CODE, /<label htmlFor=\{htmlFor\}/);
-    assert.match(WIZARD_CODE, /role="alert"/);
+    // The wizard now uses the shared <Field>, which is where the label/control/error
+    // association is defined once for the whole product.
+    assert.match(SHARED_FIELD, /<label\s+htmlFor=\{htmlFor\}/);
+    assert.match(WIZARD_CODE, /<Field\b/);
+    assert.match(WIZARD_SURFACE_CODE, /role="alert"/);
     assert.match(WIZARD_CODE, /aria-invalid=/);
   });
 
   test("4.10 choices use radio and checkbox semantics, not click handlers on divs", () => {
-    assert.match(WIZARD_CODE, /type="radio"/);
-    assert.match(WIZARD_CODE, /type="checkbox"/);
-    assert.match(WIZARD_CODE, /<fieldset/);
-    assert.match(WIZARD_CODE, /<legend/);
+    assert.match(CHOICE_CARDS_CODE, /type="radio"/);
+    assert.match(PICKER_CODE, /type="checkbox"/);
+    assert.match(CHOICE_CARDS_CODE, /<fieldset/);
+    assert.match(CHOICE_CARDS_CODE, /<legend/);
+    assert.match(PICKER_CODE, /<fieldset/);
+    assert.match(PICKER_CODE, /<legend/);
+    // A card is the radio's own <label>, so the whole surface is the control rather than
+    // a div with an onClick.
+    assert.match(CHOICE_CARDS_CODE, /<label[\s\S]{0,900}type="radio"/);
   });
 
   test("4.11 Next is gated on the current step, Save on the WHOLE form", () => {
@@ -512,16 +625,34 @@ describe("4. the creation wizard", () => {
     // Whitespace-normalized: this copy is line-wrapped in JSX, so matching the raw source
     // would test the formatter rather than the wording.
     const prose = WIZARD.replace(/\s+/g, " ");
-    assert.match(prose, /not assigned/);
-    assert.match(prose, /Nothing is visible to a Retailer until you publish it from the campaign page/);
-    assert.match(prose, /calculation engine is connected/);
+    // The conflict detail is rendered by the shared eligibility panel, which states the
+    // count exactly and — unlike the copy it replaced — distinguishes a publication that
+    // is merely reduced from one the database will refuse outright.
+    assert.match(WIZARD_CODE, /<EligibilityPanel/);
+    const panel = ELIGIBILITY.replace(/\s+/g, " ");
+    assert.match(panel, /selected products assigned/);
+    assert.match(panel, /nothing to earn on/);
+
+    // Saving is not publishing, and the review step says so.
+    assert.match(prose, /Saving does not publish/);
+    assert.match(
+      prose,
+      /Nothing is visible to a Retailer until you publish it from the campaign/,
+    );
+    assert.ok(
+      /calculation engine is connected/.test(prose) ||
+        /<CalculationEngineNotice/.test(prose),
+      "the review step never says results are not calculated yet",
+    );
   });
 
   test("4.13b the product step states the two eligibility behaviours", () => {
     // Sourced from the shared vocabulary, not restated, so the Vendor and the Retailer
     // cannot be told different things about the same campaign.
-    assert.match(WIZARD_CODE, /productResolutionExplanation\("LIVE_TEMPORAL"\)/);
-    assert.match(WIZARD_CODE, /productResolutionExplanation\("SNAPSHOT"\)/);
+    assert.match(WIZARD_CODE, /productResolutionExplanation\(/);
+    assert.match(WIZARD_CODE, /"SELECTED_PRODUCTS" \? "SNAPSHOT" : "LIVE_TEMPORAL"/);
+    // And the plain-language label for each scope, which is what the choice card shows.
+    assert.match(WIZARD_CODE, /productScopePlainLabel\(/);
   });
 
   test("4.13c coin inputs carry the same bound the database enforces", () => {
@@ -664,15 +795,29 @@ describe("6. the Vendor pages", () => {
   });
 
   test("6.8 the detail page offers a lifecycle control only when it is valid", () => {
-    const source = code(DETAIL);
+    // Whitespace-normalized: these declarations are line-wrapped by the formatter, and
+    // matching the raw source would test the formatter rather than the guard.
+    const source = code(DETAIL).replace(/\s+/g, " ");
     assert.match(source, /const canPublish = campaign\.draftVersionId !== null/);
     assert.match(source, /const canPause = campaign\.campaignStatus === "PUBLISHED"/);
     assert.match(source, /const canResume = campaign\.campaignStatus === "PAUSED"/);
     assert.match(source, /const canVersion =/);
+    // Cancellation is offered only from a live state, and never beside the primary
+    // action: it lives in its own area at the foot of the page.
+    assert.match(source, /const canCancel =/);
+    assert.match(source, /canCancel && \( <section/);
   });
 
   test("6.9 the detail page never fabricates a reward when the rule is missing", () => {
-    assert.match(code(DETAIL), /reward \?\? "—"/);
+    // The dash became "Not set", which reads correctly in a labelled tile where a bare
+    // "—" is ambiguous. What must hold is that the fallback is a STATEMENT OF ABSENCE and
+    // never a fabricated figure.
+    const source = code(DETAIL);
+    assert.match(source, /reward \?\? "(—|Not set)"/);
+    assert.ok(
+      !/reward \?\? [`"'][^"'`]*\d/.test(source),
+      "the reward fallback contains a number, which would invent an offer",
+    );
   });
 
   test("6.9b the Vendor detail distinguishes frozen from dynamic product eligibility", () => {
@@ -681,10 +826,14 @@ describe("6. the Vendor pages", () => {
     assert.match(source, /productResolutionExplanation\(/);
     // The snapshot panel must not describe a LIVE_TEMPORAL campaign's products as frozen.
     const prose = DETAIL.replace(/\s+/g, " ");
-    assert.match(prose, /Products are NOT frozen/);
+    assert.match(prose, /Products are not:/);
     assert.match(prose, /eligible at the time of each verified sale/i);
-    // And it must not print a snapshot count of zero as if it meant "no products".
-    assert.match(source, /LIVE_TEMPORAL"\s*\?\s*"Eligible at time of sale"/);
+    // And it must not print a snapshot count of zero as if it meant "no products": a
+    // live-temporal row says so in words, and a genuine zero is called out rather than
+    // rendered as a bare digit an operator would read as a rounding artefact.
+    assert.match(source, /productEligibilityResolution === "LIVE_TEMPORAL" \?/);
+    assert.match(prose, /Eligible at time of sale/);
+    assert.match(prose, /0 — nothing to earn on/);
   });
 
   test("6.10 the group screens explain that an edit does not change a published campaign", () => {

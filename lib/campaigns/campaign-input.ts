@@ -118,12 +118,40 @@ export type CampaignFieldErrors = Partial<Record<keyof CampaignFormValues, strin
  * validator all agree on what a step IS, rather than three lists drifting apart.
  */
 export const WIZARD_STEPS = [
-  { key: "details", title: "Campaign details" },
-  { key: "audience", title: "Retailer audience" },
-  { key: "products", title: "Product eligibility" },
-  { key: "reward", title: "Performance and reward" },
-  { key: "schedule", title: "Schedule and stacking" },
-  { key: "review", title: "Review and publish" },
+  {
+    key: "details",
+    title: "Campaign details",
+    summary: "Name this campaign and explain the offer.",
+  },
+  {
+    key: "audience",
+    title: "Retailer audience",
+    summary: "Choose which of your connected Retailers this applies to.",
+  },
+  {
+    key: "products",
+    title: "Product eligibility",
+    summary: "Decide which products a sale must be for to count.",
+  },
+  {
+    key: "reward",
+    title: "Performance and reward",
+    summary: "Set how performance is measured and what it earns.",
+  },
+  {
+    key: "schedule",
+    title: "Schedule and stacking",
+    summary: "Set when it runs and how it combines with other campaigns.",
+  },
+  {
+    // "Review and SAVE", not "review and publish". This wizard has never published
+    // anything — it writes a draft, and publication is a separate, separately confirmed
+    // act on the campaign's own page. A step titled "publish" promised something the
+    // button beneath it did not do.
+    key: "review",
+    title: "Review and save",
+    summary: "Check everything, then save this as a draft.",
+  },
 ] as const;
 
 export type WizardStepKey = (typeof WIZARD_STEPS)[number]["key"];
