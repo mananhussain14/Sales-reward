@@ -235,13 +235,30 @@ describe("Vendor Product assignment writes — this milestone adds no migration"
         );
       }
 
+      // MATCHED ON THE STATEMENT'S TARGET, NOT ON A MENTION ANYWHERE IN IT.
+      //
+      // These patterns used to allow anything between the verb and the table name, which
+      // made `insert into <other table> ... join vendor_product_retailer_assignments`
+      // indistinguishable from a write TO the assignment table. A later milestone that
+      // merely READS assignments — resolving campaign eligibility, for instance — would
+      // fail this guard for doing exactly what it is supposed to do, while a genuine
+      // write would fail it for the right reason, and the message could not tell them
+      // apart.
+      //
+      // Anchoring the table name to the position a write target actually occupies keeps
+      // every real change caught: `insert into [public.]vendor_product_retailer_assignments`,
+      // `update [public.]vendor_product_retailer_assignments`, `delete from ...`, and any
+      // DDL naming it. A join against it in some other statement's FROM clause no longer is.
+      const TARGET = String.raw`(?:public\.)?vendor_product_retailer_assignments\b`;
+
       assert.ok(
-        !/\b(create|drop|alter|truncate)\b[^;]*\bvendor_product_retailer_assignments\b/i.test(
-          code,
-        ) &&
-          !/\b(insert\s+into|update|delete\s+from)\b[^;]*\bvendor_product_retailer_assignments\b/i.test(
-            code,
-          ),
+        !new RegExp(
+          String.raw`\b(create|drop|alter|truncate)\b[\w\s]*?\b${TARGET}`,
+          "i",
+        ).test(code) &&
+          !new RegExp(String.raw`\binsert\s+into\s+${TARGET}`, "i").test(code) &&
+          !new RegExp(String.raw`\bupdate\s+${TARGET}`, "i").test(code) &&
+          !new RegExp(String.raw`\bdelete\s+from\s+${TARGET}`, "i").test(code),
         `${file} changes the assignment table or its rows; re-check this contract`,
       );
     }

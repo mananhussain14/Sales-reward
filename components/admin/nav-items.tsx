@@ -11,14 +11,16 @@ export type NavItem = {
 
 /**
  * Vendor Admin primary navigation.
- * "Dashboard", "Retailers", "Products", "Users", "Roles", and "Audit Logs" are
- * active; every other module is intentionally disabled so it does not open a 404
- * page.
+ * "Dashboard", "Retailers", "Products", "Campaigns", "Users", "Roles", and "Audit
+ * Logs" are active; every other module is intentionally disabled so it does not
+ * open a 404 page.
  *
- * Products was already listed here as a disabled placeholder and is simply enabled
- * rather than replaced, so no competing entry is introduced. Whether the page then
- * admits the caller is decided on the server and again in SQL — the nav is
- * presentation, never protection.
+ * Products and Campaigns were each already listed here as a disabled placeholder
+ * and are simply enabled rather than replaced, so no competing entry is
+ * introduced. Whether the page then admits the caller is decided on the server and
+ * again in SQL — the nav is presentation, never protection. A Vendor Super Admin
+ * whose role lacked CAMPAIGNS_MANAGE would see the link and be refused by
+ * list_vendor_campaigns() all the same.
  */
 export const NAV_ITEMS: NavItem[] = [
   {
@@ -64,7 +66,7 @@ export const NAV_ITEMS: NavItem[] = [
   {
     label: "Campaigns",
     href: "/campaigns",
-    disabled: true,
+    disabled: false,
     icon: (
       <path d="M10.34 15.84c-.688-.06-1.386-.09-2.09-.09H7.5a4.5 4.5 0 110-9h.75c.704 0 1.402-.03 2.09-.09m0 9.18c.253.962.584 1.892.985 2.783.247.55.06 1.21-.463 1.511l-.657.38c-.551.318-1.24.117-1.526-.421a20.75 20.75 0 01-1.44-3.685m4.101-.585a20.85 20.85 0 018.834 2.535M10.34 6.66a20.85 20.85 0 008.834-2.535M18.75 4.971c.487.147.982.28 1.486.396a24.5 24.5 0 010 9.266c-.504.115-.999.249-1.486.396m0-10.058a20.83 20.83 0 01.42 5.03c0 1.716-.146 3.395-.42 5.028" />
     ),

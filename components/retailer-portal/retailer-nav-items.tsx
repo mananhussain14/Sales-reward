@@ -68,12 +68,22 @@ const PRODUCTS_ITEM: RetailerNavItem = {
   ),
 };
 
+const CAMPAIGNS_ITEM: RetailerNavItem = {
+  label: "Campaigns",
+  href: "/retailer/campaigns",
+  icon: (
+    <path d="M10.34 15.84c-.688-.06-1.386-.09-2.09-.09H7.5a4.5 4.5 0 110-9h.75c.704 0 1.402-.03 2.09-.09m0 9.18c.253.962.584 1.892.985 2.783.247.55.06 1.21-.463 1.511l-.657.38c-.551.318-1.24.117-1.526-.421a20.75 20.75 0 01-1.44-3.685m4.101-.585a20.85 20.85 0 018.834 2.535M10.34 6.66a20.85 20.85 0 008.834-2.535M18.75 4.971c.487.147.982.28 1.486.396a24.5 24.5 0 010 9.266c-.504.115-.999.249-1.486.396m0-10.058a20.83 20.83 0 01.42 5.03c0 1.716-.146 3.395-.42 5.028" />
+  ),
+};
+
 /**
  * The navigation for a given portal access kind.
  *
  *   owner      the whole portal, minus Receipts. Products is the READ-ONLY assigned
  *              list; managing the catalog is a Vendor capability on a different
- *              surface entirely. Submitting a receipt is a Sales Staff
+ *              surface entirely. Campaigns is likewise READ-ONLY — CAMPAIGNS_VIEW_ASSIGNED
+ *              is mapped to RETAILER_OWNER alone and grants no write of any kind.
+ *              Submitting a receipt is a Sales Staff
  *              act: RECEIPT_SUBMIT is mapped to SALES_STAFF alone, so an Owner would
  *              be refused by every receipt RPC. Showing them the entry would advertise
  *              a capability the database will not give them — which is exactly the
@@ -82,11 +92,20 @@ const PRODUCTS_ITEM: RetailerNavItem = {
  *   reader     Staff and Products. Overview and Shops are backed by RPCs whose resolver
  *              requires the RETAILER_OWNER role, so a Manager would be redirected by
  *              those pages; and Receipts is refused for the same reason as for an
- *              Owner. Linking any of them would advertise dead ends.
+ *              Owner. Campaigns is absent for the same kind of reason: a Manager holds no
+ *              CAMPAIGNS_VIEW_ASSIGNED mapping, so list_my_retailer_campaigns() refuses
+ *              them. That visibility is DEFERRED for this milestone rather than
+ *              accidentally omitted — no installed permission was a safe reuse, and a
+ *              Manager gains it later by acquiring a role_permissions row.
+ *              Linking any of them would advertise dead ends.
  *   submitter  Receipts only. A Sales Staff member holds neither RETAILER_PORTAL_READ
  *              through the owner role nor RETAILER_STAFF_READ, and no
  *              RETAILER_PRODUCTS_READ mapping either — so Overview, Shops, Staff and
  *              Products are all refused to them by SQL, and none is offered here.
+ *              Sales Staff DO hold STAFF_CAMPAIGNS_VIEW, but that is a different,
+ *              narrower contract with no Web surface in this milestone: it exists for the
+ *              Flutter client, and linking a page that does not exist would be worse than
+ *              linking one that refuses them.
  *
  * Which items appear is presentation, never protection: each page re-resolves its own
  * access on the server, and every RPC behind every read and write decides again in SQL.
@@ -100,5 +119,5 @@ export function retailerNavItems(
   if (kind === "reader") {
     return [STAFF_ITEM, PRODUCTS_ITEM];
   }
-  return [OVERVIEW_ITEM, SHOPS_ITEM, STAFF_ITEM, PRODUCTS_ITEM];
+  return [OVERVIEW_ITEM, SHOPS_ITEM, STAFF_ITEM, PRODUCTS_ITEM, CAMPAIGNS_ITEM];
 }
