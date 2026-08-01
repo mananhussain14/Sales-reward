@@ -1,22 +1,32 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getRetailerPortalAccess } from "@/lib/staff/retailer-staff-access";
 import { getMyRetailerCampaigns } from "@/lib/campaigns/retailer-campaigns";
 import { CampaignStateBadge } from "@/components/campaigns/campaign-state-badge";
 import { CalculationEngineNotice } from "@/components/campaigns/campaign-facts";
+import {
+  NoEligibleProductsNotice,
+  hasNoEligibleProducts,
+} from "@/components/campaigns/no-eligible-products-notice";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { cardClasses } from "@/components/ui/card";
+import { cn } from "@/components/ui/cn";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader, SectionHeader } from "@/components/ui/page-header";
-import { CalendarIcon, CampaignsIcon, ProductsIcon } from "@/components/ui/icons";
+import {
+  CalendarIcon,
+  CampaignsIcon,
+  ChevronRightIcon,
+  ProductsIcon,
+} from "@/components/ui/icons";
 import type { AssignedCampaign } from "@/lib/campaigns/campaign-normalization";
 import {
   performanceExplanation,
   performancePlainLabel,
   productResolutionExplanation,
   productResolutionLabel,
-  productScopeLabel,
   rewardPreviewSentence,
   rewardSummary,
   stackingExplanation,
@@ -133,95 +143,150 @@ function CampaignCard({ campaign }: { campaign: AssignedCampaign }) {
       : formatDate(campaign.endsAt, campaign.timezoneName)
   }`;
 
+  const nothingEligible = hasNoEligibleProducts(
+    campaign.derivedState,
+    campaign.eligibleProductCount,
+  );
+
   return (
-    <li className={cardClasses("standard", "p-5")}>
-      {/* --- Identity: what it is, who it is from, what state it is in --- */}
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <CampaignStateBadge state={campaign.derivedState} />
-            {/* The Vendor's name IS returned to an Owner and is theirs to see. */}
-            {campaign.vendorName && (
-              <span className="text-xs text-slate-500">from {campaign.vendorName}</span>
+    <li>
+      {/*
+        THE WHOLE CARD IS ONE REAL LINK.
+
+        A `<Link>`, not a click handler on a div: it is keyboard-reachable, focusable,
+        announced as a link, and openable in a new tab — none of which a div with onClick
+        gives. The campaign title lives inside it, so the title IS a link.
+
+        ONE interactive element, not several. The card is read-only, so there is nothing
+        else on it that could be a control, and nesting a second link inside this one
+        would be invalid HTML and an extra tab stop for no gain.
+
+        The `aria-label` gives the link a short accessible NAME — otherwise a screen
+        reader would announce the entire card, offer and all, as the link's name. The card
+        content itself remains in the accessibility tree and readable as normal.
+      */}
+      <Link
+        href={`/retailer/campaigns/${campaign.campaignId}`}
+        aria-label={`View details for ${campaign.campaignName}`}
+        className={cardClasses(
+          "interactive",
+          "group block p-5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2",
+        )}
+      >
+        {/* --- Identity: what it is, who it is from, what state it is in --- */}
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <CampaignStateBadge state={campaign.derivedState} />
+              {/* The Vendor's name IS returned to an Owner and is theirs to see. */}
+              {campaign.vendorName && (
+                <span className="text-xs text-slate-500">from {campaign.vendorName}</span>
+              )}
+            </div>
+            <h3 className="mt-1.5 text-base font-semibold text-slate-900">
+              {campaign.campaignName}
+            </h3>
+            {campaign.description && (
+              <p className="mt-1 max-w-2xl text-sm leading-relaxed text-slate-600">
+                {campaign.description}
+              </p>
             )}
           </div>
-          <h3 className="mt-1.5 text-base font-semibold text-slate-900">
-            {campaign.campaignName}
-          </h3>
-          {campaign.description && (
-            <p className="mt-1 max-w-2xl text-sm leading-relaxed text-slate-600">
-              {campaign.description}
-            </p>
-          )}
+          <Badge tone={campaign.stackingMode === "EXCLUSIVE" ? "amber" : "slate"}>
+            {stackingLabel(campaign.stackingMode)}
+          </Badge>
         </div>
-        <Badge tone={campaign.stackingMode === "EXCLUSIVE" ? "amber" : "slate"}>
-          {stackingLabel(campaign.stackingMode)}
-        </Badge>
-      </div>
 
-      {/* --- The offer, given the most weight on the card --- */}
-      <div className="mt-4 rounded-xl border border-indigo-200 bg-indigo-50/60 p-3.5">
-        <p className="text-xs font-semibold uppercase tracking-wide text-indigo-700">
-          What this offers
-        </p>
-        <p className="mt-1 text-sm font-semibold leading-relaxed text-indigo-950">
-          {/* A dash, never a guess: an invented reward is a promise nobody made. */}
-          {rewardSentence ?? reward ?? "—"}
-        </p>
-        <p className="mt-1.5 text-xs leading-relaxed text-indigo-900/80">
-          {performanceExplanation(campaign.performanceScope)}
-        </p>
-      </div>
+        {/* The warning sits ABOVE the offer, so the offer is never read on its own. A
+            campaign advertising coins the Retailer cannot currently earn is exactly the
+            misreading this prevents. */}
+        {nothingEligible && (
+          <NoEligibleProductsNotice
+            className="mt-4"
+            derivedState={campaign.derivedState}
+            productScope={campaign.productScope}
+          />
+        )}
 
-      {/* --- Supporting facts --- */}
-      <dl className="mt-4 grid grid-cols-1 gap-x-6 gap-y-3 text-sm sm:grid-cols-3">
-        <div>
-          <dt className="text-xs font-medium text-slate-500">Measured</dt>
-          <dd className="mt-0.5 text-slate-800">
-            {performancePlainLabel(campaign.performanceScope)}
-          </dd>
+        {/* --- The offer, given the most weight on the card --- */}
+        <div className="mt-4 rounded-xl border border-indigo-200 bg-indigo-50/60 p-3.5">
+          <p className="text-xs font-semibold uppercase tracking-wide text-indigo-700">
+            What this offers
+          </p>
+          <p className="mt-1 text-sm font-semibold leading-relaxed text-indigo-950">
+            {/* A dash, never a guess: an invented reward is a promise nobody made. */}
+            {rewardSentence ?? reward ?? "—"}
+          </p>
+          <p className="mt-1.5 text-xs leading-relaxed text-indigo-900/80">
+            {performanceExplanation(campaign.performanceScope)}
+          </p>
         </div>
-        <div>
-          <dt className="flex items-center gap-1.5 text-xs font-medium text-slate-500">
-            <ProductsIcon className="h-3.5 w-3.5 text-slate-400" aria-hidden="true" />
-            Products
-          </dt>
-          <dd className="mt-0.5 text-slate-800">
-            {campaign.productScope === "ALL_ELIGIBLE_PRODUCTS"
-              ? productScopeLabel("ALL_ELIGIBLE_PRODUCTS")
-              : `${campaign.eligibleProductCount} ${
-                  campaign.eligibleProductCount === 1 ? "product" : "products"
-                }`}
-            {/* WHICH products, then HOW they are decided. A Retailer reading "all eligible
-                products" must know the set moves with their assignments; one reading a
-                frozen selection must know it does not. */}
-            <span className="mt-0.5 block text-xs text-slate-500">
-              {productResolutionLabel(campaign.productEligibilityResolution)}
-            </span>
-          </dd>
-        </div>
-        <div>
-          <dt className="flex items-center gap-1.5 text-xs font-medium text-slate-500">
-            <CalendarIcon className="h-3.5 w-3.5 text-slate-400" aria-hidden="true" />
-            Period
-          </dt>
-          <dd className="mt-0.5 text-slate-800">
-            {period}
-            {campaign.timezoneName && (
-              <span className="mt-0.5 block text-xs text-slate-500">
-                {campaign.timezoneName}
+
+        {/* --- Supporting facts --- */}
+        <dl className="mt-4 grid grid-cols-1 gap-x-6 gap-y-3 text-sm sm:grid-cols-3">
+          <div>
+            <dt className="text-xs font-medium text-slate-500">Measured</dt>
+            <dd className="mt-0.5 text-slate-800">
+              {performancePlainLabel(campaign.performanceScope)}
+            </dd>
+          </div>
+          <div>
+            <dt className="flex items-center gap-1.5 text-xs font-medium text-slate-500">
+              <ProductsIcon className="h-3.5 w-3.5 text-slate-400" aria-hidden="true" />
+              Eligible products
+            </dt>
+            <dd
+              className={cn(
+                "mt-0.5",
+                nothingEligible ? "font-semibold text-amber-800" : "text-slate-800",
+              )}
+            >
+              {/* THE REAL COUNT, ALWAYS — including zero, and for both product scopes.
+                  It previously printed "All eligible products" for a live-temporal
+                  campaign, which hid the fact that the live answer for this Retailer was
+                  currently none. */}
+              {campaign.eligibleProductCount}{" "}
+              {campaign.eligibleProductCount === 1 ? "product" : "products"}
+              {/* WHICH products, then HOW they are decided. A Retailer reading "all
+                  eligible products" must know the set moves with their assignments; one
+                  reading a frozen selection must know it does not. */}
+              <span className="mt-0.5 block text-xs font-normal text-slate-500">
+                {productResolutionLabel(campaign.productEligibilityResolution)}
               </span>
-            )}
-          </dd>
-        </div>
-      </dl>
+            </dd>
+          </div>
+          <div>
+            <dt className="flex items-center gap-1.5 text-xs font-medium text-slate-500">
+              <CalendarIcon className="h-3.5 w-3.5 text-slate-400" aria-hidden="true" />
+              Period
+            </dt>
+            <dd className="mt-0.5 text-slate-800">
+              {period}
+              {campaign.timezoneName && (
+                <span className="mt-0.5 block text-xs text-slate-500">
+                  {campaign.timezoneName}
+                </span>
+              )}
+            </dd>
+          </div>
+        </dl>
 
-      {/* The behaviour a Retailer must understand, stated once from the shared
-          vocabulary so every surface says it identically. */}
-      <p className="mt-4 rounded-xl bg-slate-50 px-3.5 py-2.5 text-xs leading-relaxed text-slate-600">
-        {productResolutionExplanation(campaign.productEligibilityResolution)}{" "}
-        {stackingExplanation(campaign.stackingMode)}
-      </p>
+        {/* The behaviour a Retailer must understand, stated once from the shared
+            vocabulary so every surface says it identically. */}
+        <p className="mt-4 rounded-xl bg-slate-50 px-3.5 py-2.5 text-xs leading-relaxed text-slate-600">
+          {productResolutionExplanation(campaign.productEligibilityResolution)}{" "}
+          {stackingExplanation(campaign.stackingMode)}
+        </p>
+
+        {/* The affordance, stated in words rather than implied by a hover shadow. */}
+        <p className="mt-4 flex items-center justify-end gap-0.5 text-sm font-semibold text-indigo-600">
+          View details
+          <ChevronRightIcon
+            className="h-4 w-4 transition-transform group-hover:translate-x-0.5"
+            aria-hidden="true"
+          />
+        </p>
+      </Link>
     </li>
   );
 }

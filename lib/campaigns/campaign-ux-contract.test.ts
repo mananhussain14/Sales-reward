@@ -793,3 +793,284 @@ describe("10. the summary badge says what it means", () => {
     assert.match(SUMMARY_CODE, /not confirmed yet/);
   });
 });
+
+/* ===========================================================================
+ * 11. The Retailer Owner can open a campaign
+ *
+ * Browser testing found the Retailer campaign cards unopenable — no link, no affordance,
+ * and no Console error, because the detail route had never been built even though its
+ * read contract existed. And an ACTIVE campaign was presenting a confident reward offer
+ * beside a quiet "0 products", advertising coins the Retailer cannot earn.
+ * ======================================================================== */
+
+const RETAILER_DETAIL_DIR = join(RETAILER_DIR, "[campaignId]");
+const RETAILER_DETAIL = read(join(RETAILER_DETAIL_DIR, "page.tsx"));
+const RETAILER_DETAIL_CODE = code(RETAILER_DETAIL);
+const NO_PRODUCTS = read(join(COMPONENTS, "no-eligible-products-notice.tsx"));
+const NO_PRODUCTS_CODE = code(NO_PRODUCTS);
+
+describe("11. the Retailer campaign card opens a detail page", () => {
+  test("11.1 the card is a real Link, not a handler on a div", () => {
+    assert.match(RETAILER_PAGE_CODE, /import Link from "next\/link"/);
+    assert.match(
+      RETAILER_PAGE_CODE,
+      /<Link\s+href=\{`\/retailer\/campaigns\/\$\{campaign\.campaignId\}`\}/,
+    );
+    // The failure mode this replaces, and the one that must never come back.
+    assert.ok(
+      !/onClick=/.test(RETAILER_PAGE_CODE),
+      "the read-only Retailer card grew a click handler",
+    );
+    assert.ok(
+      !/role="button"/.test(RETAILER_PAGE_CODE),
+      "a non-semantic element is impersonating a control",
+    );
+  });
+
+  test("11.2 the campaign title sits inside that link", () => {
+    const card = RETAILER_PAGE_CODE.slice(
+      RETAILER_PAGE_CODE.indexOf("function CampaignCard"),
+      RETAILER_PAGE_CODE.indexOf("export default async function"),
+    );
+    const linkStart = card.indexOf("<Link");
+    const linkEnd = card.indexOf("</Link>");
+    assert.ok(linkStart !== -1 && linkEnd > linkStart, "the card has no link");
+    const inside = card.slice(linkStart, linkEnd);
+    assert.match(inside, /\{campaign\.campaignName\}/);
+    assert.match(inside, /<h3/);
+  });
+
+  test("11.3 a visible View details affordance exists", () => {
+    assert.match(flat(RETAILER_PAGE), /View details/);
+    assert.match(RETAILER_PAGE_CODE, /<ChevronRightIcon/);
+  });
+
+  test("11.4 focus is visible and the link has a concise accessible name", () => {
+    assert.match(RETAILER_PAGE_CODE, /focus-visible:ring-2/);
+    // Without this, a screen reader announces the whole card — offer and all — as the
+    // link's name.
+    assert.match(
+      RETAILER_PAGE_CODE,
+      /aria-label=\{`View details for \$\{campaign\.campaignName\}`\}/,
+    );
+  });
+
+  test("11.5 exactly one interactive element per card", () => {
+    const card = RETAILER_PAGE_CODE.slice(
+      RETAILER_PAGE_CODE.indexOf("function CampaignCard"),
+      RETAILER_PAGE_CODE.indexOf("export default async function"),
+    );
+    assert.equal([...card.matchAll(/<Link/g)].length, 1, "nested or duplicated links");
+    assert.equal([...card.matchAll(/<button/g)].length, 0, "a button inside the link");
+  });
+});
+
+describe("12. the Retailer detail page is read-only", () => {
+  test("12.1 the route exists with a loading state", () => {
+    assert.ok(existsSync(join(RETAILER_DETAIL_DIR, "page.tsx")));
+    assert.ok(existsSync(join(RETAILER_DETAIL_DIR, "loading.tsx")));
+  });
+
+  test("12.2 it is a Server Component with no form and no Server Action", () => {
+    assert.ok(!/"use client"/.test(RETAILER_DETAIL));
+    assert.ok(!/<form/.test(RETAILER_DETAIL_CODE));
+    assert.ok(!/from "@\/app\/\(admin\)/.test(RETAILER_DETAIL_CODE), "imports a Vendor module");
+    assert.ok(!/campaigns\/actions/.test(RETAILER_DETAIL_CODE));
+  });
+
+  test("12.3 no Vendor management control is reachable", () => {
+    for (const control of [
+      "CampaignLifecycleDialog",
+      "publishCampaign",
+      "setCampaignLifecycle",
+      "createCampaignVersion",
+      "updateCampaignDraft",
+    ]) {
+      assert.ok(
+        !new RegExp(control).test(RETAILER_DETAIL_CODE),
+        `the Retailer detail page can reach ${control}`,
+      );
+    }
+    // And none of the words appears as an action either.
+    for (const word of ["Edit draft", "Publish", "Pause", "Resume", "Cancel campaign"]) {
+      assert.ok(
+        !new RegExp(`>\\s*${word}`).test(RETAILER_DETAIL),
+        `the Retailer detail page offers "${word}"`,
+      );
+    }
+  });
+
+  test("12.4 it reads ONLY the assigned-visibility module", () => {
+    const imports = [...RETAILER_DETAIL_CODE.matchAll(/from "(@\/lib\/[^"]+)"/g)].map(
+      (m) => m[1],
+    );
+    for (const source of imports) {
+      assert.ok(
+        !/vendor-campaigns|retailer-groups/.test(source),
+        `it imports the Vendor module ${source}`,
+      );
+    }
+    assert.ok(imports.includes("@/lib/campaigns/retailer-campaigns"));
+    // No direct table access anywhere.
+    assert.ok(!/\.from\(/.test(RETAILER_DETAIL_CODE));
+  });
+
+  test("12.5 no Vendor-private field can be rendered", () => {
+    for (const field of [
+      "exclusivityKey",
+      "priority",
+      "sourceGroupName",
+      "eligibleRetailerCount",
+      "versionNumber",
+      "versionId",
+      "audienceMode",
+      "selectedRetailerCount",
+      "selectedGroupCount",
+    ]) {
+      assert.ok(
+        !new RegExp(`campaign\\.${field}\\b`).test(RETAILER_DETAIL_CODE),
+        `the Retailer detail page renders ${field}`,
+      );
+    }
+    // Nor the words, in RENDERED prose. Asserted on comment-stripped source: the file's
+    // header explains WHY the exclusivity key is withheld, and a check that could not
+    // tell an explanation from a rendering would fail on its own documentation.
+    const prose = flat(RETAILER_DETAIL_CODE);
+    for (const word of ["exclusivity key", "Retailer group", "other Retailers"]) {
+      assert.ok(!new RegExp(word, "i").test(prose), `prose mentions "${word}"`);
+    }
+  });
+
+  test("12.6 no internal identifier is rendered as visible text", () => {
+    // Ids live in React keys and the route param only.
+    assert.ok(!/>\{[a-zA-Z.]*[Ii]d\}</.test(RETAILER_DETAIL_CODE));
+    assert.ok(!/aria-label=\{[^}]*Id\}/.test(RETAILER_DETAIL_CODE));
+    assert.ok(!/title=\{[^}]*Id\}/.test(RETAILER_DETAIL_CODE));
+  });
+
+  test("12.7 an unknown or foreign campaign is the same answer", () => {
+    // The id in the URL is an ADDRESS. The RPC re-derives the Retailer from auth.uid().
+    assert.match(RETAILER_DETAIL_CODE, /status === "not-found"/);
+    assert.match(RETAILER_DETAIL_CODE, /notFound\(\)/);
+    assert.match(RETAILER_DETAIL_CODE, /redirect\("\/retailer-access-denied"\)/);
+    assert.match(RETAILER_DETAIL_CODE, /redirect\("\/login"\)/);
+  });
+
+  test("12.8 it shows the products, the period, the reward and a back link", () => {
+    assert.match(RETAILER_DETAIL_CODE, /getMyRetailerCampaignProducts\(/);
+    assert.match(RETAILER_DETAIL_CODE, /<BackLink href="\/retailer\/campaigns">/);
+    assert.match(RETAILER_DETAIL_CODE, /rewardPreviewSentence\(/);
+    assert.match(RETAILER_DETAIL_CODE, /performanceExplanation\(/);
+    assert.match(RETAILER_DETAIL_CODE, /productResolutionExplanation\(/);
+    assert.match(RETAILER_DETAIL_CODE, /stackingExplanation\(/);
+    assert.match(RETAILER_DETAIL_CODE, /<CalculationEngineNotice/);
+  });
+
+  test("12.9 it never fabricates progress", () => {
+    const bindings = [...RETAILER_DETAIL_CODE.matchAll(/\{([^{}]*)\}/g)].map((m) => m[1]);
+    for (const binding of bindings) {
+      assert.ok(
+        !/\b(earned|balance|progress|unitsSold|coinsEarned|totalSales)\b/i.test(binding),
+        `a rendered expression claims a result: ${binding.trim()}`,
+      );
+    }
+    assert.match(
+      flat(RETAILER_DETAIL_CODE),
+      /nothing here\s+is a sales total or a coin balance/,
+    );
+  });
+
+  test("12.10 wide content scrolls inside its own container", () => {
+    const tables = [...RETAILER_DETAIL_CODE.matchAll(/<table/g)].length;
+    const wrappers = [...RETAILER_DETAIL_CODE.matchAll(/overflow-x-auto/g)].length;
+    assert.ok(
+      wrappers >= tables,
+      `${tables} tables but only ${wrappers} scroll containers`,
+    );
+  });
+});
+
+describe("13. the zero-eligible-products warning", () => {
+  test("13.1 the approved sentence is defined once and shared", () => {
+    assert.match(
+      NO_PRODUCTS,
+      /No eligible products are currently assigned to your Retailer for this campaign\. Sales cannot earn coins until an eligible product is available\./,
+    );
+    assert.match(NO_PRODUCTS_CODE, /export const NO_ELIGIBLE_PRODUCTS_MESSAGE/);
+  });
+
+  test("13.2 it applies only to a running or upcoming campaign with zero products", () => {
+    assert.match(
+      NO_PRODUCTS_CODE,
+      /derivedState !== "ACTIVE" && derivedState !== "SCHEDULED"/,
+    );
+    assert.match(NO_PRODUCTS_CODE, /eligibleProductCount === 0/);
+  });
+
+  test("13.3 it appears on BOTH the list card and the detail page", () => {
+    for (const [name, source] of [
+      ["list", RETAILER_PAGE_CODE],
+      ["detail", RETAILER_DETAIL_CODE],
+    ] as const) {
+      assert.match(source, /hasNoEligibleProducts\(/, `${name} does not compute it`);
+      assert.match(source, /<NoEligibleProductsNotice/, `${name} does not render it`);
+    }
+  });
+
+  test("13.4 it sits ABOVE the offer, so the offer is never read alone", () => {
+    for (const [name, source] of [
+      ["list", RETAILER_PAGE_CODE],
+      ["detail", RETAILER_DETAIL_CODE],
+    ] as const) {
+      const warning = source.indexOf("<NoEligibleProductsNotice");
+      const offer = source.indexOf("What this offers");
+      assert.ok(warning !== -1 && offer !== -1);
+      assert.ok(warning < offer, `${name} shows the offer before the warning`);
+    }
+  });
+
+  test("13.5 it is not communicated by colour alone", () => {
+    assert.match(NO_PRODUCTS_CODE, /<AlertTriangleIcon/);
+    assert.match(NO_PRODUCTS_CODE, /role="status"/);
+    assert.match(flat(NO_PRODUCTS), /Nothing to earn on/);
+  });
+
+  test("13.6 it never blames the campaign or the reader", () => {
+    // Comment-stripped: the component's header states the things it must NOT say, and
+    // those explanations are not what a Retailer reads.
+    const prose = flat(NO_PRODUCTS_CODE);
+    for (const forbidden of [
+      /broken/i,
+      /error/i,
+      /misconfigur/i,
+      /you (should|must|need to) (assign|add|configure)/i,
+    ]) {
+      assert.ok(!forbidden.test(prose), `the warning blames someone: ${forbidden}`);
+    }
+    // It names who actually controls product assignment.
+    assert.match(prose, /your Vendor/i);
+    // …and the rendered sentence itself is the approved one.
+    assert.match(prose, /Sales cannot earn coins until an eligible product is available/);
+  });
+
+  test("13.7 the real count is preserved, including zero", () => {
+    // The card previously printed "All eligible products" for a live-temporal campaign,
+    // which hid a live answer of none. It now always prints the number.
+    assert.match(RETAILER_PAGE_CODE, /\{campaign\.eligibleProductCount\}\{" "\}/);
+    assert.match(RETAILER_DETAIL_CODE, /\$\{campaign\.eligibleProductCount\}/);
+    // And a positive count renders no warning, because the guard is a strict equality.
+    assert.ok(
+      !/eligibleProductCount <=? 0/.test(NO_PRODUCTS_CODE),
+      "the zero test is not a strict equality",
+    );
+  });
+
+  test("13.8 the campaign is never hidden because it has no products", () => {
+    // Suppressing it would leave an unexplained gap against a list the Vendor can see.
+    assert.ok(
+      !/nothingEligible \?\s*null/.test(RETAILER_PAGE_CODE),
+      "a campaign with no eligible products is being hidden",
+    );
+    assert.ok(!/filter\([^)]*eligibleProductCount/.test(RETAILER_PAGE_CODE));
+  });
+});
