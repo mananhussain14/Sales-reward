@@ -482,23 +482,44 @@ const GROUP_GENERIC_ERROR =
   "We couldn't complete that. Refresh the page and try again.";
 
 export async function createRetailerGroupAction(
-  _prevState: GroupFormState,
+  prevState: GroupFormState,
   formData: FormData,
 ): Promise<GroupFormState> {
   const values = {
     name: readField(formData, "name"),
     description: readField(formData, "description"),
   };
+  const requested = readIds(formData, "vendorRetailerIds")
+    .map((id) => id.trim().toLowerCase())
+    .filter((id) => id.length > 0);
 
   await requireVendorAdmin();
 
+  // Once the group row exists, this action never creates another. The form has already
+  // stopped offering the control; this is the second guard, for a hand-crafted resubmit.
+  if (prevState.createdGroupId !== null) {
+    return prevState;
+  }
+
   const validation = validateGroupForm(values);
-  if (!validation.ok) {
+  const fieldErrors = { ...validation.ok ? {} : validation.fieldErrors } as
+    GroupFormState["fieldErrors"];
+
+  // Ids are checked here so a malformed one cannot reach the second RPC AFTER the group
+  // has already been created — the whole point of the pre-flight is that the recoverable
+  // failure window stays as small as it can be.
+  if (!requested.every(isUuid)) {
+    fieldErrors.vendorRetailerIds = "Reload the page and choose the Retailers again.";
+  }
+
+  if (Object.keys(fieldErrors).length > 0 || !validation.ok) {
     return {
-      fieldErrors: validation.fieldErrors,
+      fieldErrors,
       formError: null,
       successMessage: null,
       values,
+      createdGroupId: null,
+      partialWarning: null,
     };
   }
 
@@ -508,16 +529,6 @@ export async function createRetailerGroupAction(
       validation.values.description.length > 0 ? validation.values.description : null,
   });
 
-  if (result.status === "ok") {
-    revalidatePath(GROUPS_PATH);
-    return {
-      fieldErrors: {},
-      formError: null,
-      successMessage: `${validation.values.name} created. Add Retailers to it next.`,
-      values: { name: "", description: "" },
-    };
-  }
-
   if (result.status === "duplicate") {
     // Attached to the field the operator must change. Safe: the unique index is scoped
     // per Vendor, so this describes only their own groups.
@@ -526,14 +537,70 @@ export async function createRetailerGroupAction(
       formError: null,
       successMessage: null,
       values,
+      createdGroupId: null,
+      partialWarning: null,
     };
   }
 
+  if (result.status !== "ok") {
+    return {
+      fieldErrors: {},
+      formError: result.status === "invalid" ? INVALID_ERROR : GROUP_GENERIC_ERROR,
+      successMessage: null,
+      values,
+      createdGroupId: null,
+      partialWarning: null,
+    };
+  }
+
+  const groupId = result.groupId;
+  revalidatePath(GROUPS_PATH);
+
+  // The create RPC returns the new id. Without it there is nothing to attach membership
+  // to and nowhere to send the operator, so the group is reported as created and the
+  // Retailers are left for the group's own page.
+  if (groupId === undefined || !isUuid(groupId)) {
+    return {
+      fieldErrors: {},
+      formError: null,
+      successMessage: null,
+      values,
+      createdGroupId: null,
+      partialWarning:
+        requested.length > 0
+          ? `${validation.values.name} was created, but its Retailers could not be attached. Open it from the list below to add them.`
+          : `${validation.values.name} was created. Open it from the list below to add Retailers.`,
+    };
+  }
+
+  // An empty selection is a legitimate advanced choice, and the UI offers it explicitly.
+  // Skipping the second call keeps the no-op out of the audit trail entirely.
+  if (requested.length === 0) {
+    redirect(`${GROUPS_PATH}/${groupId}?created=1`);
+  }
+
+  const membership = await setRetailerGroupMembers(groupId, requested);
+
+  if (membership.status === "ok") {
+    revalidatePath(GROUPS_PATH);
+    revalidatePath(`${GROUPS_PATH}/${groupId}`);
+    // The whole task finished, so the operator lands on the group they just built.
+    redirect(`${GROUPS_PATH}/${groupId}?created=1`);
+  }
+
+  // THE RECOVERABLE OUTCOME. The group exists; its Retailers do not. Reported truthfully,
+  // with the id retained so the form can link straight to the editor — and so no retry of
+  // this action can create a second group. NOTHING IS RETRIED AUTOMATICALLY.
   return {
     fieldErrors: {},
-    formError: result.status === "invalid" ? INVALID_ERROR : GROUP_GENERIC_ERROR,
+    formError: null,
     successMessage: null,
     values,
+    createdGroupId: groupId,
+    partialWarning:
+      membership.status === "not-eligible"
+        ? `${validation.values.name} was created, but its Retailers were not added: only active Retailers can be in a group. Open the group to choose again.`
+        : `${validation.values.name} was created, but its Retailers were not added. Open the group to add them — this did not create a second group.`,
   };
 }
 
@@ -556,6 +623,8 @@ export async function updateRetailerGroupAction(
       formError: GROUP_GENERIC_ERROR,
       successMessage: null,
       values,
+      createdGroupId: null,
+      partialWarning: null,
     };
   }
 
@@ -566,6 +635,8 @@ export async function updateRetailerGroupAction(
       formError: null,
       successMessage: null,
       values,
+      createdGroupId: null,
+      partialWarning: null,
     };
   }
 
@@ -589,6 +660,8 @@ export async function updateRetailerGroupAction(
       successMessage:
         result.changed === false ? "No changes to save." : "Group details saved.",
       values: validation.values,
+      createdGroupId: null,
+      partialWarning: null,
     };
   }
 
@@ -598,6 +671,8 @@ export async function updateRetailerGroupAction(
       formError: null,
       successMessage: null,
       values,
+      createdGroupId: null,
+      partialWarning: null,
     };
   }
 
@@ -606,6 +681,8 @@ export async function updateRetailerGroupAction(
     formError: result.status === "invalid" ? INVALID_ERROR : GROUP_GENERIC_ERROR,
     successMessage: null,
     values,
+    createdGroupId: null,
+    partialWarning: null,
   };
 }
 

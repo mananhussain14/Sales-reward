@@ -3,19 +3,21 @@ import { redirect } from "next/navigation";
 import { getRetailerPortalAccess } from "@/lib/staff/retailer-staff-access";
 import { getMyRetailerCampaigns } from "@/lib/campaigns/retailer-campaigns";
 import { CampaignStateBadge } from "@/components/campaigns/campaign-state-badge";
+import { CalculationEngineNotice } from "@/components/campaigns/campaign-facts";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { cardClasses } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader, SectionHeader } from "@/components/ui/page-header";
-import { CampaignsIcon } from "@/components/ui/icons";
+import { CalendarIcon, CampaignsIcon, ProductsIcon } from "@/components/ui/icons";
 import type { AssignedCampaign } from "@/lib/campaigns/campaign-normalization";
 import {
   performanceExplanation,
-  performanceLabel,
+  performancePlainLabel,
   productResolutionExplanation,
   productResolutionLabel,
   productScopeLabel,
+  rewardPreviewSentence,
   rewardSummary,
   stackingExplanation,
   stackingLabel,
@@ -72,26 +74,26 @@ const SECTIONS: {
 }[] = [
   {
     key: "active",
-    title: "Active campaigns",
-    description: "Running now. Eligible sales made today count towards these.",
+    title: "Running now",
+    description: "Eligible sales made today count towards these.",
     states: ["ACTIVE"],
   },
   {
     key: "upcoming",
-    title: "Upcoming campaigns",
-    description: "Published and starting soon.",
+    title: "Starting soon",
+    description: "Published by your Vendor and not yet started.",
     states: ["SCHEDULED"],
   },
   {
     key: "paused",
-    title: "Paused campaigns",
+    title: "Paused",
     description: "Temporarily suspended by your Vendor. They may resume.",
     states: ["PAUSED"],
   },
   {
     key: "finished",
-    title: "Ended and cancelled campaigns",
-    description: "Kept for your records.",
+    title: "Finished",
+    description: "Ended or cancelled, kept for your records.",
     states: ["ENDED", "CANCELLED"],
   },
 ];
@@ -116,22 +118,38 @@ function formatDate(iso: string | null, timeZone: string | null): string {
 
 function CampaignCard({ campaign }: { campaign: AssignedCampaign }) {
   const reward = rewardSummary(campaign.reward);
+  const rewardSentence = rewardPreviewSentence({
+    ruleType: campaign.reward.ruleType,
+    performanceScope: campaign.performanceScope,
+    coinsPerUnit: campaign.reward.coinsPerUnit,
+    thresholdUnits: campaign.reward.thresholdUnits,
+    rewardCoins: campaign.reward.rewardCoins,
+    maxRewardCoins: campaign.reward.maxRewardCoins,
+  });
+
+  const period = `${formatDate(campaign.startsAt, campaign.timezoneName)} — ${
+    campaign.endsAt === null
+      ? "no end date"
+      : formatDate(campaign.endsAt, campaign.timezoneName)
+  }`;
 
   return (
     <li className={cardClasses("standard", "p-5")}>
+      {/* --- Identity: what it is, who it is from, what state it is in --- */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <h3 className="text-base font-semibold text-slate-900">
-              {campaign.campaignName}
-            </h3>
             <CampaignStateBadge state={campaign.derivedState} />
+            {/* The Vendor's name IS returned to an Owner and is theirs to see. */}
+            {campaign.vendorName && (
+              <span className="text-xs text-slate-500">from {campaign.vendorName}</span>
+            )}
           </div>
-          {campaign.vendorName && (
-            <p className="mt-0.5 text-xs text-slate-500">From {campaign.vendorName}</p>
-          )}
+          <h3 className="mt-1.5 text-base font-semibold text-slate-900">
+            {campaign.campaignName}
+          </h3>
           {campaign.description && (
-            <p className="mt-2 max-w-2xl text-sm text-slate-600">
+            <p className="mt-1 max-w-2xl text-sm leading-relaxed text-slate-600">
               {campaign.description}
             </p>
           )}
@@ -141,21 +159,34 @@ function CampaignCard({ campaign }: { campaign: AssignedCampaign }) {
         </Badge>
       </div>
 
-      <dl className="mt-4 grid grid-cols-1 gap-x-6 gap-y-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
-        <div>
-          <dt className="text-xs uppercase tracking-wide text-slate-400">Reward</dt>
+      {/* --- The offer, given the most weight on the card --- */}
+      <div className="mt-4 rounded-xl border border-indigo-200 bg-indigo-50/60 p-3.5">
+        <p className="text-xs font-semibold uppercase tracking-wide text-indigo-700">
+          What this offers
+        </p>
+        <p className="mt-1 text-sm font-semibold leading-relaxed text-indigo-950">
           {/* A dash, never a guess: an invented reward is a promise nobody made. */}
-          <dd className="mt-0.5 font-medium text-slate-900">{reward ?? "—"}</dd>
-        </div>
+          {rewardSentence ?? reward ?? "—"}
+        </p>
+        <p className="mt-1.5 text-xs leading-relaxed text-indigo-900/80">
+          {performanceExplanation(campaign.performanceScope)}
+        </p>
+      </div>
+
+      {/* --- Supporting facts --- */}
+      <dl className="mt-4 grid grid-cols-1 gap-x-6 gap-y-3 text-sm sm:grid-cols-3">
         <div>
-          <dt className="text-xs uppercase tracking-wide text-slate-400">Measured</dt>
-          <dd className="mt-0.5 text-slate-700">
-            {performanceLabel(campaign.performanceScope)}
+          <dt className="text-xs font-medium text-slate-500">Measured</dt>
+          <dd className="mt-0.5 text-slate-800">
+            {performancePlainLabel(campaign.performanceScope)}
           </dd>
         </div>
         <div>
-          <dt className="text-xs uppercase tracking-wide text-slate-400">Products</dt>
-          <dd className="mt-0.5 text-slate-700">
+          <dt className="flex items-center gap-1.5 text-xs font-medium text-slate-500">
+            <ProductsIcon className="h-3.5 w-3.5 text-slate-400" aria-hidden="true" />
+            Products
+          </dt>
+          <dd className="mt-0.5 text-slate-800">
             {campaign.productScope === "ALL_ELIGIBLE_PRODUCTS"
               ? productScopeLabel("ALL_ELIGIBLE_PRODUCTS")
               : `${campaign.eligibleProductCount} ${
@@ -170,23 +201,26 @@ function CampaignCard({ campaign }: { campaign: AssignedCampaign }) {
           </dd>
         </div>
         <div>
-          <dt className="text-xs uppercase tracking-wide text-slate-400">Period</dt>
-          <dd className="mt-0.5 text-slate-700">
-            {formatDate(campaign.startsAt, campaign.timezoneName)}
-            {campaign.endsAt === null
-              ? " — no end date"
-              : ` — ${formatDate(campaign.endsAt, campaign.timezoneName)}`}
+          <dt className="flex items-center gap-1.5 text-xs font-medium text-slate-500">
+            <CalendarIcon className="h-3.5 w-3.5 text-slate-400" aria-hidden="true" />
+            Period
+          </dt>
+          <dd className="mt-0.5 text-slate-800">
+            {period}
+            {campaign.timezoneName && (
+              <span className="mt-0.5 block text-xs text-slate-500">
+                {campaign.timezoneName}
+              </span>
+            )}
           </dd>
         </div>
       </dl>
 
-      {/* The wording the requirement asks for on a team campaign, stated once in
-          @/lib/campaigns/campaign-vocabulary so every surface says it identically. */}
-      <p className="mt-4 rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-600">
-        {performanceExplanation(campaign.performanceScope)}{" "}
+      {/* The behaviour a Retailer must understand, stated once from the shared
+          vocabulary so every surface says it identically. */}
+      <p className="mt-4 rounded-xl bg-slate-50 px-3.5 py-2.5 text-xs leading-relaxed text-slate-600">
         {productResolutionExplanation(campaign.productEligibilityResolution)}{" "}
         {stackingExplanation(campaign.stackingMode)}
-        {campaign.timezoneName && ` Dates are shown in ${campaign.timezoneName}.`}
       </p>
     </li>
   );
@@ -217,12 +251,22 @@ export default async function RetailerCampaignsPage() {
   }
 
   const campaigns = result.status === "ok" ? result.campaigns : [];
+  const runningNow = campaigns.filter(
+    (campaign) => campaign.derivedState === "ACTIVE",
+  ).length;
 
   return (
-    <div className="mx-auto w-full max-w-5xl">
+    <div className="mx-auto w-full max-w-4xl">
       <PageHeader
         title="Campaigns"
         description="The reward campaigns your Vendor has assigned to your Retailer. This view is read-only."
+        actions={
+          campaigns.length > 0 ? (
+            <span className="text-sm text-slate-500">
+              {runningNow} running now of {campaigns.length}
+            </span>
+          ) : undefined
+        }
       />
 
       {result.status !== "ok" ? (
@@ -241,11 +285,12 @@ export default async function RetailerCampaignsPage() {
         <EmptyState
           className="mt-8"
           icon={<CampaignsIcon className="h-6 w-6" />}
+          tone="indigo"
           title="No campaigns yet"
           description="Campaigns your Vendor publishes to your Retailer will appear here automatically."
         />
       ) : (
-        <div className="mt-8 space-y-10">
+        <div className="mt-8 space-y-8">
           {SECTIONS.map((section) => {
             const rows = campaigns.filter((campaign) =>
               section.states.includes(campaign.derivedState),
@@ -256,6 +301,9 @@ export default async function RetailerCampaignsPage() {
                 <SectionHeader
                   title={section.title}
                   description={section.description}
+                  action={
+                    <span className="text-sm text-slate-500">{rows.length}</span>
+                  }
                 />
                 <ul className="mt-4 flex flex-col gap-3">
                   {rows.map((campaign) => (
@@ -270,14 +318,16 @@ export default async function RetailerCampaignsPage() {
 
       {/* The honest statement the requirement asks for. It is not a disclaimer bolted on:
           nothing in this milestone computes progress, and saying so is the only way a
-          Retailer can read the numbers above correctly. */}
-      <p className="mt-10 rounded-2xl border border-dashed border-slate-300 px-4 py-3 text-sm text-slate-500">
-        Campaign results and coin calculations will appear here when the calculation engine
-        is connected. Nothing on this page is a sales total or a coin balance. For a
-        campaign that covers all eligible products, the product list shows what is eligible
-        today while the campaign is running, and what was eligible when it ended once it
-        has finished.
-      </p>
+          Retailer can read the figures above correctly. */}
+      <div className="mt-10 space-y-2">
+        <CalculationEngineNotice />
+        <p className="rounded-xl bg-slate-50 px-3.5 py-2.5 text-xs leading-relaxed text-slate-600">
+          Nothing on this page is a sales total or a coin balance. For a campaign that
+          covers all eligible products, the product count shows what is eligible today
+          while the campaign is running, and what was eligible when it ended once it has
+          finished.
+        </p>
+      </div>
     </div>
   );
 }

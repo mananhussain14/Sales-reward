@@ -543,7 +543,7 @@ describe("7. this is a forward migration, and the pgTAP suite follows the new co
     return [...new Set([...tracked, ...untracked])].sort();
   }
 
-  test("adding a new migration is permitted, and this branch does add some", () => {
+  test("adding a new migration is permitted, and every addition is well formed", () => {
     // The other half of the same rule, asserted rather than assumed. If a future refactor
     // reintroduced the over-broad command, this test would start failing — which is the
     // point: the two together pin the guard to "modified or deleted", not "different".
@@ -558,16 +558,19 @@ describe("7. this is a forward migration, and the pgTAP suite follows the new co
       );
     }
 
-    // This branch adds the campaign work and the assignment timeline it rests on. Naming
-    // them here means a reviewer can see exactly which additions the guard is tolerating.
-    const names = added.map((path) => path.replace("supabase/migrations/", ""));
-    for (const expected of [
-      "20260814210000_vendor_product_assignment_history.sql",
-      "20260815090000_vendor_campaign_foundation.sql",
-      "20260815210000_vendor_campaign_operations.sql",
-    ]) {
-      assert.ok(names.includes(expected), `expected this branch to add ${expected}`);
-    }
+    // WHY THIS NO LONGER NAMES SPECIFIC FILES. It previously asserted that the branch in
+    // hand added three particular campaign migrations. That was true of the branch it was
+    // written on and false of every branch afterwards — including a Web-only branch that
+    // correctly adds none — so it was a fact about one commit masquerading as an
+    // invariant, and it failed the moment those migrations reached main.
+    //
+    // The durable rule is the pair above and below: an addition must be well formed, and
+    // nothing already on origin/main may be modified or deleted. Adding zero migrations
+    // satisfies both, and must, or no UI-only change could ever pass.
+    assert.ok(
+      Array.isArray(added),
+      "the added-migration set must be computable on any branch",
+    );
   });
 
   test("every migration on origin/main is still present and byte-identical", () => {

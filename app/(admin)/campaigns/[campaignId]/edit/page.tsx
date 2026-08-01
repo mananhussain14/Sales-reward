@@ -125,12 +125,12 @@ export default async function EditCampaignDraftPage({
     retailers.status === "ok" && groups.status === "ok" && products.status === "ok";
 
   return (
-    <div className="mx-auto w-full max-w-4xl">
+    <div className="mx-auto w-full max-w-6xl">
       <BackLink href={`/campaigns/${campaign.campaignId}`}>{campaign.name}</BackLink>
 
       <PageHeader
         className="mt-3"
-        eyebrow={`Version ${campaign.draftVersionNumber ?? ""}`}
+        eyebrow={`Version ${campaign.draftVersionNumber ?? ""} · draft`}
         title="Edit draft"
         description={
           campaign.publishedVersionId === null
