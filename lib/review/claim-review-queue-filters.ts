@@ -263,3 +263,66 @@ export function formatSubmittedAt(iso: string): string {
     `${pad(parsed.getUTCMinutes())} UTC`
   );
 }
+
+/**
+ * The Retailer/shop pairs a caller is actually allowed to filter by.
+ *
+ * Structurally identical to `ClaimReviewFilterOption` but declared here so this
+ * module stays pure — importing the adapter would drag `server-only` and a Supabase
+ * client into a file whose whole value is that it has neither.
+ */
+export type AllowedFilterPair = { retailerId: string; shopId: string };
+
+export type SanitizedFilterSelection = {
+  retailerId: string | null;
+  shopId: string | null;
+  /** True when either value was dropped, so the page can correct the URL. */
+  changed: boolean;
+};
+
+/**
+ * Checks a selected Retailer and shop against the authorized option set.
+ *
+ * WHY THIS EXISTS AT ALL, given the RPC is already tenant-safe: a Retailer id from
+ * another Vendor would simply match nothing, so the queue would render empty while
+ * the picker showed a selection the reviewer never made. That is confusing rather
+ * than dangerous — but the fix is cheap and it also handles the ordinary case, where
+ * a shop stops being eligible because its last pending receipt was decided.
+ *
+ * It is NOT a security boundary and must never be mistaken for one. The database
+ * remains the only authority: this runs on data the database already agreed to
+ * return, and dropping a value here changes what is displayed, never what is
+ * permitted.
+ *
+ * DISCLOSES NOTHING. An unknown id is dropped exactly like a since-ineligible one, so
+ * a caller cannot tell "that Retailer is not yours" from "that Retailer has nothing
+ * pending". Both simply revert to All.
+ *
+ * A shop is also dropped when it does not belong to the selected Retailer, so an
+ * incompatible pair — hand-typed, or left behind by switching Retailer — never
+ * reaches the RPC.
+ */
+export function sanitizeFilterSelection(
+  retailerId: string | null,
+  shopId: string | null,
+  allowed: AllowedFilterPair[],
+): SanitizedFilterSelection {
+  const retailerOk =
+    retailerId === null || allowed.some((o) => o.retailerId === retailerId);
+  const safeRetailer = retailerOk ? retailerId : null;
+
+  const shopOk =
+    shopId === null ||
+    allowed.some(
+      (o) =>
+        o.shopId === shopId &&
+        (safeRetailer === null || o.retailerId === safeRetailer),
+    );
+  const safeShop = shopOk ? shopId : null;
+
+  return {
+    retailerId: safeRetailer,
+    shopId: safeShop,
+    changed: safeRetailer !== retailerId || safeShop !== shopId,
+  };
+}

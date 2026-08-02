@@ -5,6 +5,7 @@ import { getClaimReviewQueue } from "@/lib/review/claim-review-queue";
 import {
   buildClaimReviewQueueHref,
   parseClaimReviewQueueParams,
+  sanitizeFilterSelection,
 } from "@/lib/review/claim-review-queue-filters";
 import { QueueFilters } from "@/app/(review)/review/queue-filters";
 import { ReceiptQueueRow } from "@/app/(review)/review/receipt-queue-row";
@@ -20,8 +21,9 @@ export const metadata: Metadata = {
 /**
  * The Claim Reviewer receipt review QUEUE — Phase 1C-B.
  *
- * A SERVER COMPONENT. Every value comes from two SECURITY DEFINER RPCs called with
- * the reviewer's own token; nothing is fetched in the browser and no client
+ * A SERVER COMPONENT. Every value comes from three SECURITY DEFINER RPCs — the page
+ * of receipts, the pending total, and the Retailer/shop filter options — each called
+ * with the reviewer's own token. Nothing is fetched in the browser and no client
  * component receives a receipt. The entire filter and pagination state lives in the
  * query string, so this page needs no client state at all.
  *
@@ -81,7 +83,44 @@ export default async function ClaimReviewQueuePage({
     );
   }
 
-  const { rows, totalCount, nextCursor } = queue;
+  const { rows, totalCount, nextCursor, filterOptions } = queue;
+
+  // ---------------------------------------------------------------------------
+  // Correct an impossible selection, then re-render at a truthful URL
+  // ---------------------------------------------------------------------------
+  // A Retailer or shop can be selected that is no longer offered — hand-typed, from
+  // another Vendor, or simply because its last pending receipt was decided since the
+  // link was made. Leaving it in place would show an empty queue while the picker
+  // claimed a filter the reviewer never chose.
+  //
+  // This is NOT a security boundary — the database already refuses foreign data, and
+  // an unknown id would have matched nothing anyway. It is honesty about what the URL
+  // says. Nothing here distinguishes "not yours" from "nothing pending": both simply
+  // revert to All, so this cannot be used to probe.
+  //
+  // Only when options were actually READ (`filterOptions !== null`). During an options
+  // outage there is nothing to validate against, and dropping a valid selection would
+  // be worse than leaving it.
+  if (filterOptions !== null && (inputs.retailerId || inputs.shopId)) {
+    const safe = sanitizeFilterSelection(
+      inputs.retailerId,
+      inputs.shopId,
+      filterOptions,
+    );
+    if (safe.changed) {
+      // The cursor is dropped with it: a page boundary from the old filter set means
+      // nothing under the new one. No loop is possible — the corrected values are, by
+      // construction, ones this same check accepts.
+      redirect(
+        buildClaimReviewQueueHref({
+          retailerId: safe.retailerId,
+          shopId: safe.shopId,
+          submittedFromDate: inputs.submittedFromDate,
+          submittedToDate: inputs.submittedToDate,
+        }),
+      );
+    }
+  }
 
   return (
     <QueueShell
@@ -97,7 +136,11 @@ export default async function ClaimReviewQueuePage({
         </Alert>
       ) : null}
 
-      <QueueFilters inputs={inputs} hasActiveFilters={hasActiveFilters} />
+      <QueueFilters
+        inputs={inputs}
+        options={filterOptions}
+        hasActiveFilters={hasActiveFilters}
+      />
 
       {rows === null ? (
         // The read FAILED. Deliberately not an empty state: telling a reviewer their

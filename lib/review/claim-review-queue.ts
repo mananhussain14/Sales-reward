@@ -12,17 +12,22 @@ import { createClient } from "@/lib/supabase/server";
  * ============================================================================
  * WHAT THIS READS, AND HOW
  * ============================================================================
- * Exactly two RPCs, both shipped by migration 20260819090000:
+ * Exactly three RPCs:
  *
- *   public.list_claim_review_queue(...)   the page of eligible receipts
- *   public.count_claim_review_queue(...)  the total behind that page
+ *   public.list_claim_review_queue(...)         the page of eligible receipts
+ *   public.count_claim_review_queue(...)        the total behind that page
+ *   public.list_claim_review_filter_options()   the Retailer/shop picker choices
+ *
+ * The first two shipped in migration 20260819090000, the third in 20260819210000 —
+ * added because the queue function types its Retailer and shop filters as `uuid` but
+ * returns only display names, so a picker had no values to offer.
  *
  * It NEVER queries public.receipt_submissions, public.receipt_review_decisions or
  * any other table directly. It could not: all of them have RLS enabled with zero
  * policies, so `authenticated` can read none of them. Every rule about who may see
  * which receipt lives in SQL, and this module only asks.
  *
- * NEITHER RPC TAKES A VENDOR. The database resolves the reviewer's Vendor from
+ * NONE OF THE THREE TAKES A VENDOR. The database resolves the reviewer's Vendor from
  * auth.uid() through the Phase 1B resolver, so there is no organization id for this
  * module to hold, pass, or accidentally let a query string supply. That is the whole
  * tenant boundary, and it is not restated here — restating it in TypeScript would
@@ -93,6 +98,28 @@ export type ClaimReviewQueueFilters = {
   submittedTo: string | null;
 };
 
+/**
+ * One Retailer/shop pair the reviewer may filter by.
+ *
+ * THE ONLY PLACE tenant identifiers cross into the browser, and they are here for
+ * one reason: `list_claim_review_queue` types its Retailer and shop parameters as
+ * `uuid`, so a picker cannot work without the values it requires. They are used as
+ * form values and compared against the query string — never rendered.
+ *
+ * What that discloses is nothing the reviewer cannot already read: these name
+ * Retailers and shops whose receipts are sitting in their own queue. And the queue
+ * re-derives the Vendor from auth.uid() on every call, so a forged or foreign id
+ * matches zero rows rather than widening anything.
+ */
+export type ClaimReviewFilterOption = {
+  retailerId: string;
+  retailerName: string;
+  shopId: string;
+  shopName: string;
+  shopCode: string | null;
+  shopStatus: string;
+};
+
 export type ClaimReviewQueueResult =
   | {
       status: "authorized";
@@ -107,6 +134,14 @@ export type ClaimReviewQueueResult =
       totalCount: number | null;
       /** Present only when a further page exists. */
       nextCursor: ClaimReviewQueueCursor | null;
+      /**
+       * `[]` means the reviewer genuinely has no Retailer or shop to choose from —
+       * which is the honest answer when nothing is pending.
+       * `null` means the options could not be read. The pickers are then DISABLED
+       * with retry copy rather than rendered empty, because an empty picker and a
+       * broken picker look identical and only one of them is true.
+       */
+      filterOptions: ClaimReviewFilterOption[] | null;
     }
   | { status: "unauthenticated" }
   | { status: "unauthorized" }
@@ -134,6 +169,16 @@ type QueueRpcRow = {
   file_size_bytes: number | string | null;
   original_file_name: string | null;
   has_duplicate_hash: boolean | null;
+};
+
+/** One row of `list_claim_review_filter_options`, declared explicitly. */
+type FilterOptionRpcRow = {
+  retailer_organization_id: string;
+  retailer_name: string | null;
+  retailer_shop_id: string;
+  shop_name: string | null;
+  shop_code: string | null;
+  shop_status: string | null;
 };
 
 /** A trimmed non-empty string, or the supplied fallback. Never returns null. */
@@ -200,6 +245,30 @@ function toQueueRow(row: QueueRpcRow): ClaimReviewQueueRow | null {
   };
 }
 
+/**
+ * Maps one filter-option row, field by field. Never a spread, for the same reason
+ * `toQueueRow` is not one: a column added later must be admitted consciously.
+ *
+ * Returns null when either id is unusable — an option that cannot be submitted as a
+ * filter value is worse than no option, because selecting it would silently do
+ * nothing.
+ */
+function toFilterOption(row: FilterOptionRpcRow): ClaimReviewFilterOption | null {
+  const retailerId = optionalText(row.retailer_organization_id);
+  const shopId = optionalText(row.retailer_shop_id);
+  if (retailerId === null || shopId === null) {
+    return null;
+  }
+  return {
+    retailerId,
+    retailerName: text(row.retailer_name, "Unknown retailer"),
+    shopId,
+    shopName: text(row.shop_name, "Unknown shop"),
+    shopCode: optionalText(row.shop_code),
+    shopStatus: text(row.shop_status, "UNKNOWN"),
+  };
+}
+
 async function resolveClaimReviewQueue(
   filters: ClaimReviewQueueFilters,
   cursor: ClaimReviewQueueCursor | null,
@@ -229,7 +298,7 @@ async function resolveClaimReviewQueue(
   //
   // Promise.resolve() because the PostgREST builder is a thenable rather than a real
   // Promise, matching the shape used throughout this codebase.
-  const [listResult, countResult] = await Promise.all([
+  const [listResult, countResult, optionsResult] = await Promise.all([
     Promise.resolve(
       supabase.rpc("list_claim_review_queue", {
         p_limit: CLAIM_REVIEW_PAGE_SIZE + 1,
@@ -249,6 +318,12 @@ async function resolveClaimReviewQueue(
         p_submitted_to: filters.submittedTo,
       }),
     ).catch(() => null),
+    // Options take NO arguments at all — not even the filters. They describe what the
+    // reviewer may choose from, which must not itself narrow as choices are made, or
+    // selecting a shop would erase every other shop from the picker.
+    Promise.resolve(supabase.rpc("list_claim_review_filter_options")).catch(
+      () => null,
+    ),
   ]);
 
   // A throw or a reported error on the LIST is fatal for this render. It is
@@ -260,7 +335,13 @@ async function resolveClaimReviewQueue(
   // zero rows — so a reported error genuinely means the call did not complete.
   if (listResult === null || listResult.error) {
     console.error("claim-review-queue: queue read failed");
-    return { status: "authorized", rows: null, totalCount: null, nextCursor: null };
+    return {
+      status: "authorized",
+      rows: null,
+      totalCount: null,
+      nextCursor: null,
+      filterOptions: null,
+    };
   }
 
   const rpcRows = (listResult.data ?? []) as QueueRpcRow[];
@@ -303,7 +384,51 @@ async function resolveClaimReviewQueue(
         }
       : null;
 
-  return { status: "authorized", rows, totalCount, nextCursor };
+  // Options degrade independently of both other reads: a working queue with unusable
+  // pickers is still a usable page, and `null` is what tells the UI to disable them
+  // with retry copy instead of rendering an empty, silently-broken control.
+  let filterOptions: ClaimReviewFilterOption[] | null = null;
+  if (optionsResult !== null && !optionsResult.error) {
+    filterOptions = ((optionsResult.data ?? []) as FilterOptionRpcRow[])
+      .map(toFilterOption)
+      .filter((o): o is ClaimReviewFilterOption => o !== null);
+  } else {
+    console.error("claim-review-queue: filter options read failed");
+  }
+
+  return { status: "authorized", rows, totalCount, nextCursor, filterOptions };
+}
+
+/**
+ * The distinct Retailers in an option set, in the order the database returned them.
+ *
+ * Deduplicated by id: a Retailer with four shops contributes four option rows but one
+ * Retailer choice. Pure, so the page and its tests share one definition.
+ */
+export function distinctRetailers(
+  options: ClaimReviewFilterOption[],
+): { id: string; name: string }[] {
+  const seen = new Map<string, string>();
+  for (const o of options) {
+    if (!seen.has(o.retailerId)) seen.set(o.retailerId, o.retailerName);
+  }
+  return [...seen].map(([id, name]) => ({ id, name }));
+}
+
+/**
+ * The shop options visible for a given Retailer selection.
+ *
+ * With no Retailer chosen, every shop the reviewer may filter by. With one chosen,
+ * only that Retailer's — so the two pickers cannot be combined into a pair that
+ * matches nothing.
+ */
+export function shopsForRetailer(
+  options: ClaimReviewFilterOption[],
+  retailerId: string | null,
+): ClaimReviewFilterOption[] {
+  return retailerId === null
+    ? options
+    : options.filter((o) => o.retailerId === retailerId);
 }
 
 /**

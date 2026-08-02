@@ -6,17 +6,20 @@ only.** Opening a receipt, streaming its image and recording a decision are Phas
 
 ## What it depends on
 
-Migration `20260819090000` (hosted parity 60/60) and exactly two of its functions:
+Migration `20260819090000` (deployed, parity 60/60) plus the follow-up migration
+`20260819210000` (pending). Three functions in total:
 
-| Function | Used for |
-|---|---|
-| `list_claim_review_queue(...)` | the page of receipts |
-| `count_claim_review_queue(...)` | the pending total |
+| Function | Migration | Used for |
+|---|---|---|
+| `list_claim_review_queue(...)` | 20260819090000 | the page of receipts |
+| `count_claim_review_queue(...)` | 20260819090000 | the pending total |
+| `list_claim_review_filter_options()` | **20260819210000** | the Retailer/shop picker choices |
 
 Nothing else. `get_claim_review_detail`, `decide_claim_receipt` and
 `get_claim_review_object_reference` are **not called** in this milestone.
 
-The reviewer's `RECEIPT_REVIEW_READ` permission is what makes both return rows.
+The reviewer's `RECEIPT_REVIEW_READ` permission is what makes all three return rows.
+The follow-up adds **no** new permission and **no** new role mapping.
 
 ## Image-only, and the page says so
 
@@ -69,19 +72,58 @@ The filter form is a plain `method="get"` HTML form. All state lives in the quer
 string, so every filtered view is linkable and back-button friendly with no client
 JavaScript. Changing a filter deliberately drops the cursor and returns to page one.
 
-### Why there is no Retailer or shop picker yet
+### Retailer and shop pickers, and the function that made them possible
 
 `list_claim_review_queue` types its Retailer and shop parameters as `uuid`, but its
 **return type carries only display names** — there is no `retailer_id` or `shop_id`
-column. So picker options cannot be derived from the queue rows, and no
-reviewer-authorized function lists the permitted Retailers and shops. Building one
-would need either a database change (out of scope here) or a Vendor Admin RPC the
-reviewer must not hold.
+column. So picker options could not be derived from queue rows, and no
+reviewer-authorized function listed the permitted Retailers and shops. The first cut
+of this milestone therefore shipped the date filters only.
 
-Rather than ship a control that cannot work, both id filters remain reachable **by
-URL** — the parser validates them and the RPC keeps them tenant-safe — and the
-pickers wait for a small follow-up that adds the two ids to the queue function's
-output or a dedicated filter-options function.
+The approved follow-up adds **one** function, `list_claim_review_filter_options()`,
+rather than widening every queue row. Putting the two ids on every receipt would have
+sent tenant identifiers to the browser once per row for a need that arises once per
+render, and would have blurred two different questions: the queue answers *what should
+I review next*; this answers *what may I narrow by*.
+
+**Safe ids only.** It returns `retailer_organization_id` and `retailer_shop_id`
+because those are exactly the values the queue's filters require, plus the name, code
+and status needed to label a choice. No receipt id, profile id, membership id, bucket,
+path, hash, email or phone.
+
+**Reviewer- and Vendor-scoped.** It takes no arguments at all, requires
+`RECEIPT_REVIEW_READ`, and resolves the Vendor from `auth.uid()` through the same
+Phase 1B resolver the queue uses. An unauthorized caller gets zero rows, not an error.
+
+**Derived from currently pending receipts only.** It repeats the queue's eligibility
+predicates exactly — `SUBMITTED`, `submitted_at` present, an ACTIVE `vendor_retailers`
+link, a real stored object, no decision row. A Retailer with nothing pending never
+appears, and deciding a shop's last receipt removes it from the picker, because a
+filter that can only return nothing is not a useful choice. A deactivated shop *does*
+still appear while its receipt is pending (decision D7), labelled with its state.
+
+The two functions repeat their predicates rather than sharing a helper: a shared SQL
+function would have to take the Vendor as an argument, creating an executable surface
+that bypasses the permission check. The duplication is pinned instead by a test that
+compares the option set against the queue's own output, so drift fails loudly.
+
+**Dependent behaviour.** Choosing a Retailer narrows the shop list to that Retailer,
+server-side. A shop that does not belong to the selected Retailer is dropped before
+either value reaches the RPC.
+
+**Foreign or stale ids are ignored safely.** If a selected Retailer or shop is not in
+the authorized option set — hand-typed, from another Vendor, or simply decided since
+the link was made — the page drops it and redirects to a corrected URL, keeping the
+dates and dropping the cursor. Nothing distinguishes "not yours" from "nothing
+pending": both revert to *All*, so the behaviour cannot be used to probe. This is
+presentation honesty, not a security boundary — the database already refuses foreign
+data, and an unknown id would have matched nothing regardless.
+
+**No Vendor identity is exposed or accepted** anywhere in the chain.
+
+**If the options fail to load**, the two pickers are *disabled* with retry copy while
+the date filters keep working. They are never rendered empty: an empty picker and a
+broken one look identical, and only one of them is true.
 
 ## What reaches the browser
 
@@ -90,18 +132,22 @@ submitter membership status, submitted time, MIME type (humanized), file size
 (humanized), original filename, and a duplicate badge when the same bytes appear more
 than once.
 
-Never: storage bucket, object path, `file_sha256`, email, phone, or any profile,
-membership or organization id. The RPC does not return them, and the adapter maps
-each row **field by field** rather than spreading it, so a column added later cannot
-reach a page by accident.
+Never: storage bucket, object path, `file_sha256`, email, phone, or any profile or
+membership id. The queue RPC does not return them, and the adapter maps each row
+**field by field** rather than spreading it, so a column added later cannot reach a
+page by accident.
 
-The one identifier that does cross is the receipt submission id, needed for the
-Phase 1C-C deep link.
+Three identifiers do cross, each for a stated reason and none of them personal:
+
+- the **receipt submission id**, on each row, for the Phase 1C-C deep link;
+- **`retailer_organization_id`** and **`retailer_shop_id`**, in the filter options
+  only, because the queue's filters are typed `uuid` and a picker cannot work without
+  them. They are form values, never rendered, and never appear on a receipt row.
 
 ## Loading, empty and error states
 
-**Loading** — a skeleton matching the real geometry (header, filter panel, three
-cards). Every placeholder is a neutral block: no fabricated count, name or badge,
+**Loading** — a skeleton matching the real geometry (header, a four-control filter
+panel, three cards). Every placeholder is a neutral block: no fabricated count, name or badge,
 because a plausible-looking skeleton value is briefly indistinguishable from real
 receipt data.
 
@@ -119,9 +165,9 @@ page, a transient fault gets a retry message.
 
 ## Tenant isolation
 
-Neither RPC accepts a Vendor, and neither does this page. The Vendor is derived in SQL
-from `auth.uid()` through the Phase 1B resolver. There is no `vendor` query parameter
-and no code that could produce one.
+None of the three RPCs accepts a Vendor, and neither does this page. The Vendor is
+derived in SQL from `auth.uid()` through the Phase 1B resolver. There is no `vendor`
+query parameter and no code that could produce one.
 
 A hand-supplied foreign Retailer or shop id is not rejected — it is passed through and
 matches nothing, because the candidate set is already constrained to this reviewer's

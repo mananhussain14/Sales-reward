@@ -30,6 +30,7 @@ import {
   formatMimeType,
   formatSubmittedAt,
   parseClaimReviewQueueParams,
+  sanitizeFilterSelection,
   QUEUE_PARAM,
 } from "./claim-review-queue-filters.ts";
 
@@ -105,7 +106,7 @@ describe("1. routing and navigation", () => {
   });
 });
 
-describe("2. the adapter uses only the two approved read RPCs", () => {
+describe("2. the adapter uses only the three approved read RPCs", () => {
   const code = codeOf(ADAPTER);
 
   test("2.1 calls list_claim_review_queue", () => {
@@ -116,12 +117,26 @@ describe("2. the adapter uses only the two approved read RPCs", () => {
     assert.match(code, /supabase\.rpc\("count_claim_review_queue"/);
   });
 
+  test("2.2b calls list_claim_review_filter_options", () => {
+    assert.match(code, /supabase\.rpc\("list_claim_review_filter_options"\)/);
+  });
+
   test("2.3 calls no other RPC", () => {
     const calls = [...code.matchAll(/\.rpc\("([a-z_]+)"/g)].map((m) => m[1]);
     assert.deepEqual(
       [...new Set(calls)].sort(),
-      ["count_claim_review_queue", "list_claim_review_queue"],
+      [
+        "count_claim_review_queue",
+        "list_claim_review_filter_options",
+        "list_claim_review_queue",
+      ],
     );
+  });
+
+  test("2.3b the filter-options RPC takes no arguments", () => {
+    // Not even the filters: the option set describes what MAY be chosen, so
+    // narrowing it by the current choice would erase every alternative.
+    assert.match(code, /rpc\("list_claim_review_filter_options"\)/);
   });
 
   test("2.4 never calls the detail, decision or object-reference functions", () => {
@@ -187,7 +202,7 @@ describe("2. the adapter uses only the two approved read RPCs", () => {
 });
 
 describe("3. nothing private crosses into the browser", () => {
-  test("3.1 the row type carries no bucket, path, hash, email or private id", () => {
+  test("3.1 the adapter carries no bucket, path, hash, email or personal id", () => {
     const c = codeOf(ADAPTER);
     for (const leak of [
       "storage_bucket",
@@ -199,10 +214,38 @@ describe("3. nothing private crosses into the browser", () => {
       "email",
       "phone",
       "submitted_by_profile_id",
-      "retailer_organization_id",
-      "organizationId",
+      "decided_by_profile_id",
+      "organization_member",
     ]) {
       assert.ok(!c.includes(leak), `adapter must not carry ${leak}`);
+    }
+  });
+
+  test("3.1b the two tenant ids appear ONLY in the filter-option shapes", () => {
+    // retailer_organization_id and retailer_shop_id are approved in the option type
+    // because the queue RPC types its filters as uuid. They must NOT leak into the
+    // per-receipt row, which is rendered for every receipt on the page.
+    const c = codeOf(ADAPTER);
+    const queueRowType = c.slice(
+      c.indexOf("type QueueRpcRow"),
+      c.indexOf("type FilterOptionRpcRow"),
+    );
+    assert.ok(queueRowType.length > 0);
+    for (const id of ["retailer_organization_id", "retailer_shop_id"]) {
+      assert.ok(
+        !queueRowType.includes(id),
+        `the queue row must not carry ${id} — only the option row may`,
+      );
+    }
+    const browserRowType = c.slice(
+      c.indexOf("export type ClaimReviewQueueRow"),
+      c.indexOf("export type ClaimReviewQueueCursor"),
+    );
+    for (const id of ["retailerId", "shopId"]) {
+      assert.ok(
+        !browserRowType.includes(id),
+        `the browser row type must not carry ${id}`,
+      );
     }
   });
 
@@ -590,11 +633,17 @@ describe("8. accessibility and presentation", () => {
 });
 
 describe("9. milestone boundaries", () => {
-  test("9.1 no migration was added by Phase 1C-B", () => {
+  test("9.1 exactly one migration was added — the filter-options follow-up", () => {
+    // Phase 1C-B began Web-only. The approved follow-up added ONE additive migration
+    // because the queue RPC returns no ids, so a picker had no values to offer.
     const migrations = readdirSync(join(ROOT, "supabase", "migrations")).filter((f) =>
       f.endsWith(".sql"),
     );
-    assert.equal(migrations.length, 60, "Phase 1C-B is Web-only");
+    assert.equal(migrations.length, 61);
+    assert.ok(
+      migrations.includes("20260819210000_claim_review_filter_options.sql"),
+      "and it is the filter-options migration",
+    );
   });
 
   test("9.2 no Phase 1C-C detail route was created", () => {
@@ -634,3 +683,273 @@ describe("9. milestone boundaries", () => {
     assert.ok(!access.includes("list_claim_review_queue"));
   });
 });
+
+/* ===========================================================================
+ * 10. Retailer and shop pickers — the approved Phase 1C-B follow-up
+ * ======================================================================== */
+const R1 = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa";
+const R2 = "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb";
+const S1A = "cccccccc-3333-4333-8333-cccccccccccc";
+const S1B = "dddddddd-4444-4444-8444-dddddddddddd";
+const S2A = "eeeeeeee-5555-4555-8555-eeeeeeeeeeee";
+const UNKNOWN = "ffffffff-6666-4666-8666-ffffffffffff";
+
+/** Two Retailers; the first has two shops. */
+const ALLOWED = [
+  { retailerId: R1, shopId: S1A },
+  { retailerId: R1, shopId: S1B },
+  { retailerId: R2, shopId: S2A },
+];
+
+describe("10. the filter-options migration and function", () => {
+  const MIGRATION = join(
+    ROOT,
+    "supabase",
+    "migrations",
+    "20260819210000_claim_review_filter_options.sql",
+  );
+
+  test("10.1 the migration exists and adds exactly one function", () => {
+    assert.ok(existsSync(MIGRATION));
+    const sql = read(MIGRATION).replace(/--[^\n]*/g, "");
+    assert.equal((sql.match(/^create function/gim) ?? []).length, 1);
+    assert.match(sql, /create function public\.list_claim_review_filter_options\(\)/);
+  });
+
+  test("10.2 it is additive — no table, permission, mapping, policy or write", () => {
+    const sql = read(MIGRATION).replace(/--[^\n]*/g, "");
+    for (const forbidden of [
+      "create table",
+      "create policy",
+      "alter table",
+      "drop ",
+      "truncate",
+      "insert into public.permissions",
+      "insert into public.role_permissions",
+      "update public.",
+      "delete from public.",
+      "create or replace",
+    ]) {
+      assert.ok(
+        !new RegExp(forbidden, "i").test(sql),
+        `the migration must not contain: ${forbidden}`,
+      );
+    }
+  });
+
+  test("10.3 SECURITY DEFINER, STABLE, empty search_path, correct grants", () => {
+    const sql = read(MIGRATION);
+    assert.match(sql, /security definer/);
+    assert.match(sql, /\bstable\b/);
+    assert.match(sql, /set search_path = ''/);
+    assert.match(sql, /revoke all\s+on function public\.list_claim_review_filter_options\(\) from public/);
+    assert.match(sql, /revoke execute on function public\.list_claim_review_filter_options\(\) from anon/);
+    assert.match(sql, /grant\s+execute on function public\.list_claim_review_filter_options\(\) to authenticated/);
+    assert.ok(
+      !/grant .*list_claim_review_filter_options.* to service_role/i.test(sql),
+      "service_role has no use for a filter list",
+    );
+  });
+
+  test("10.4 it repeats every queue eligibility predicate", () => {
+    const sql = read(MIGRATION).replace(/--[^\n]*/g, "");
+    for (const predicate of [
+      /resolve_claim_reviewer_organization\('RECEIPT_REVIEW_READ'\)/,
+      /s\.status = 'SUBMITTED'/,
+      /s\.submitted_at is not null/,
+      /vendor_retailers/,
+      /vr\.status = 'ACTIVE'/,
+      /storage\.objects/,
+      /not exists[\s\S]{0,120}receipt_review_decisions/,
+    ]) {
+      assert.match(sql, predicate);
+    }
+  });
+
+  test("10.5 it accepts no argument and returns only the six approved columns", () => {
+    const sql = read(MIGRATION);
+    assert.match(sql, /list_claim_review_filter_options\(\)\s*\nreturns table \(/);
+    const returns = sql.slice(sql.indexOf("returns table ("), sql.indexOf("language plpgsql"));
+    for (const col of [
+      "retailer_organization_id",
+      "retailer_name",
+      "retailer_shop_id",
+      "shop_name",
+      "shop_code",
+      "shop_status",
+    ]) {
+      assert.ok(returns.includes(col), `missing column ${col}`);
+    }
+    for (const forbidden of [
+      "storage_bucket",
+      "storage_object_path",
+      "file_sha256",
+      "email",
+      "phone",
+      "receipt_submission_id",
+      "profile_id",
+    ]) {
+      assert.ok(!returns.includes(forbidden), `must not return ${forbidden}`);
+    }
+  });
+});
+
+describe("11. picker selection is validated against the authorized set", () => {
+  test("11.1 a permitted Retailer and shop survive", () => {
+    const r = sanitizeFilterSelection(R1, S1A, ALLOWED);
+    assert.deepEqual(r, { retailerId: R1, shopId: S1A, changed: false });
+  });
+
+  test("11.2 an unknown Retailer is dropped", () => {
+    const r = sanitizeFilterSelection(UNKNOWN, null, ALLOWED);
+    assert.equal(r.retailerId, null);
+    assert.equal(r.changed, true);
+  });
+
+  test("11.3 an unknown shop is dropped", () => {
+    const r = sanitizeFilterSelection(null, UNKNOWN, ALLOWED);
+    assert.equal(r.shopId, null);
+    assert.equal(r.changed, true);
+  });
+
+  test("11.4 a shop belonging to a DIFFERENT Retailer is dropped", () => {
+    const r = sanitizeFilterSelection(R1, S2A, ALLOWED);
+    assert.equal(r.retailerId, R1, "the valid Retailer is kept");
+    assert.equal(r.shopId, null, "the incompatible shop is not forwarded");
+    assert.equal(r.changed, true);
+  });
+
+  test("11.5 an unknown Retailer does not drag down a valid shop's own Retailer", () => {
+    // Retailer unknown -> cleared; the shop is then judged against all pairs.
+    const r = sanitizeFilterSelection(UNKNOWN, S1A, ALLOWED);
+    assert.equal(r.retailerId, null);
+    assert.equal(r.shopId, S1A);
+  });
+
+  test("11.6 an empty option set clears any selection", () => {
+    const r = sanitizeFilterSelection(R1, S1A, []);
+    assert.deepEqual(r, { retailerId: null, shopId: null, changed: true });
+  });
+
+  test("11.7 nothing distinguishes 'foreign' from 'no longer pending'", () => {
+    // Both revert identically, so the outcome cannot be used to probe existence.
+    const foreign = sanitizeFilterSelection(UNKNOWN, null, ALLOWED);
+    const gone = sanitizeFilterSelection(R2, null, [{ retailerId: R1, shopId: S1A }]);
+    assert.deepEqual(
+      { r: foreign.retailerId, c: foreign.changed },
+      { r: gone.retailerId, c: gone.changed },
+    );
+  });
+
+  test("11.8 no selection at all is never 'changed'", () => {
+    assert.deepEqual(sanitizeFilterSelection(null, null, ALLOWED), {
+      retailerId: null,
+      shopId: null,
+      changed: false,
+    });
+  });
+});
+
+describe("12. picker rendering and dependent behaviour", () => {
+  const ui = codeOf(QUEUE_FILTERS_UI);
+
+  test("12.1 both pickers exist with default 'All' options", () => {
+    assert.match(ui, /<option value="">All Retailers<\/option>/);
+    assert.match(ui, /<option value="">All shops<\/option>/);
+  });
+
+  test("12.2 values use the two filter ids, labels use names", () => {
+    assert.match(ui, /value=\{r\.id\}/);
+    assert.match(ui, /\{r\.name\}/);
+    assert.match(ui, /value=\{s\.shopId\}/);
+    assert.match(ui, /s\.shopCode \? `\$\{s\.shopName\} \(\$\{s\.shopCode\}\)` : s\.shopName/);
+  });
+
+  test("12.3 Retailer choices are deduplicated", () => {
+    assert.match(ui, /distinctRetailers\(safeOptions\)/);
+    const adapter = codeOf(ADAPTER);
+    assert.match(adapter, /export function distinctRetailers/);
+    assert.match(adapter, /new Map<string, string>\(\)/);
+  });
+
+  test("12.4 shop choices narrow to the selected Retailer", () => {
+    assert.match(ui, /shopsForRetailer\(safeOptions, inputs\.retailerId\)/);
+    const adapter = codeOf(ADAPTER);
+    assert.match(adapter, /export function shopsForRetailer/);
+    assert.match(adapter, /o\.retailerId === retailerId/);
+  });
+
+  test("12.5 selections persist via defaultValue from the query string", () => {
+    assert.match(ui, /defaultValue=\{inputs\.retailerId \?\? ""\}/);
+    assert.match(ui, /defaultValue=\{inputs\.shopId \?\? ""\}/);
+  });
+
+  test("12.6 an options failure disables the pickers with retry copy", () => {
+    assert.match(ui, /optionsUnavailable/);
+    assert.match(ui, /disabled=\{optionsUnavailable\}/);
+    assert.match(ui, /temporarily unavailable/i);
+    assert.ok(
+      !/options \?\? \[\]\s*;[\s\S]{0,80}<option/.test(ui) || ui.includes("optionsUnavailable"),
+      "an empty picker must never stand in for a broken one",
+    );
+  });
+
+  test("12.7 the filter form still carries no cursor", () => {
+    assert.ok(!ui.includes(QUEUE_PARAM.cursorSubmittedAt));
+    assert.ok(!ui.includes(QUEUE_PARAM.cursorReceiptId));
+  });
+
+  test("12.8 shop status is shown in text, not colour alone", () => {
+    assert.match(ui, /s\.shopStatus !== "ACTIVE"/);
+  });
+});
+
+describe("13. the page corrects an impossible selection", () => {
+  const page = codeOf(QUEUE_PAGE);
+
+  test("13.1 it sanitizes only when options were actually read", () => {
+    assert.match(page, /filterOptions !== null && \(inputs\.retailerId \|\| inputs\.shopId\)/);
+  });
+
+  test("13.2 a changed selection redirects to a truthful URL", () => {
+    assert.match(page, /sanitizeFilterSelection\(/);
+    assert.match(page, /if \(safe\.changed\)/);
+    assert.match(page, /redirect\(\s*buildClaimReviewQueueHref\(/);
+  });
+
+  test("13.3 the correction drops the cursor but keeps the dates", () => {
+    // Bounded to the correction block itself. Slicing to end-of-file would sweep in
+    // the next-page link further down, which legitimately DOES carry a cursor.
+    const start = page.indexOf("if (safe.changed)");
+    const block = page.slice(start, page.indexOf("return (", start));
+    assert.ok(block.length > 0 && block.length < 800);
+    assert.match(block, /submittedFromDate: inputs\.submittedFromDate/);
+    assert.match(block, /submittedToDate: inputs\.submittedToDate/);
+    // One argument only, so no cursor rides along into the corrected URL.
+    assert.ok(
+      !block.includes("nextCursor") && !block.includes("cursor"),
+      "a corrected URL must not carry the old page cursor",
+    );
+  });
+
+  test("13.4 options are passed to the filter component", () => {
+    assert.match(page, /options=\{filterOptions\}/);
+  });
+
+  test("13.5 filtered-empty detection already covers all four filters", () => {
+    const filters = codeOf(FILTERS_MOD);
+    assert.match(
+      filters,
+      /hasActiveFilters:\s*\n?\s*retailerId !== null \|\|\s*\n?\s*shopId !== null \|\|\s*\n?\s*fromDate !== null \|\|\s*\n?\s*toDate !== null/,
+    );
+  });
+
+  test("13.6 Clear filters returns to the bare path, dropping all four and the cursor", () => {
+    assert.match(page, /href="\/review"/);
+    assert.match(ui_clear(), /href="\/review"/);
+  });
+});
+
+function ui_clear(): string {
+  return codeOf(QUEUE_FILTERS_UI);
+}
