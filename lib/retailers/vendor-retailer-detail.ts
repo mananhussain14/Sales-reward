@@ -90,6 +90,29 @@ export type VendorRetailerShopDetail = {
   city: string | null;
   countryCode: string | null;
   status: string;
+  /**
+   * The shop's own id — the ONE id this payload carries, and the reason the
+   * "no ids at all" rule below now has a single stated exception.
+   *
+   * It is required because a shop's time zone has to be addressable: the setter
+   * RPC needs to be told WHICH shop, and nothing else on this page identifies
+   * one (two shops may legitimately share name, code, city, country and status
+   * alike). It is an ADDRESS and never authorization —
+   * public.set_retailer_shop_timezone re-derives the Vendor from auth.uid() and
+   * joins the shop through vendor_retailers to it, so a shop id belonging to
+   * another Vendor selects nothing there and is refused exactly as an unknown
+   * one is.
+   */
+  shopId: string;
+  /**
+   * The configured IANA zone, or null when it has never been set.
+   *
+   * `null` is a first-class, load-bearing state rather than "missing data": until
+   * it is set, public.resolve_sale_instant refuses (SQLSTATE 55000) and no sale at
+   * this shop can be placed on the clock. The page renders that as an explicit
+   * warning rather than an empty cell.
+   */
+  timezoneName: string | null;
 };
 
 /**
@@ -133,15 +156,21 @@ export type VendorRetailerDetailResult =
 // A column that is never read cannot leak from a page, a payload, a log, or a
 // future refactor of this file.
 //
-// EXACTLY ONE id is selected: RelationshipRow.retailer_organization_id. It is a
-// temporary server-side join value — read from the Vendor-scoped relationship
-// row (already filtered by both the requested id and the Vendor derived from the
-// verified token), used to key queries 2 and 3, and then dropped during
-// assembly. It is never returned.
+// RelationshipRow.retailer_organization_id is a temporary server-side join value
+// — read from the Vendor-scoped relationship row (already filtered by both the
+// requested id and the Vendor derived from the verified token), used to key
+// queries 2 and 3, and then dropped during assembly. It is never returned.
 //
-// The returned VendorRetailerDetail payload therefore contains NO id of any
-// kind: no relationship id, no Retailer organization id, no Vendor organization
-// id, no shop id. Queries 2 and 3 do not select an id at all.
+// The returned VendorRetailerDetail payload carries no relationship id, no
+// Retailer organization id and no Vendor organization id.
+//
+// IT NOW CARRIES ONE ID: the SHOP id, added so a shop's time zone can be
+// addressed by the setter. That is a deliberate, single exception to the rule
+// this module previously held absolutely, and it is safe for the reason stated
+// on VendorRetailerShopDetail.shopId: the id is an address, and
+// public.set_retailer_shop_timezone proves ownership itself from auth.uid()
+// rather than trusting it. No other id was added, and the Retailer organization
+// id is still dropped.
 type RelationshipRow = { retailer_organization_id: string; status: string };
 type RetailerOrganizationRow = {
   name: string;
@@ -150,11 +179,13 @@ type RetailerOrganizationRow = {
   default_currency: string | null;
 };
 type RetailerShopRow = {
+  id: string;
   name: string;
   code: string | null;
   city: string | null;
   country_code: string | null;
   status: string;
+  timezone_name: string | null;
 };
 
 /**
@@ -250,14 +281,20 @@ async function loadDetail(
       .eq("organization_type", RETAILER_ORGANIZATION_TYPE)
       .maybeSingle()
       .then(unwrapRow<RetailerOrganizationRow>),
-    // One set-based read for every shop. Only the five displayed columns are
-    // selected: no shop id, no address lines, no region, no postal code, no
+    // One set-based read for every shop. Only the displayed columns plus the
+    // shop id are selected: no address lines, no region, no postal code, no
     // timestamps. Lifecycle status is not filtered — a SUSPENDED or DEACTIVATED
     // shop remains stored and visible, and omitting it would contradict the shop
     // COUNT the directory shows for the same Retailer.
+    //
+    // `id` and `timezone_name` were added for the time-zone control. This read is
+    // still governed by retailer_shops_select_vendor_authorized, which requires
+    // RETAILERS_READ on the shop's own Retailer, so the two new columns are
+    // visible on exactly the rows that were already visible — no row became
+    // readable that was not before.
     supabase
       .from("retailer_shops")
-      .select("name, code, city, country_code, status")
+      .select("id, name, code, city, country_code, status, timezone_name")
       .eq("retailer_organization_id", retailerOrganizationId)
       .then(unwrapRows<RetailerShopRow>),
   ]);
@@ -283,6 +320,8 @@ async function loadDetail(
         city: shop.city,
         countryCode: shop.country_code,
         status: shop.status,
+        shopId: shop.id,
+        timezoneName: shop.timezone_name,
       }))
       .sort((a, b) => a.name.localeCompare(b.name, "en")),
   };
