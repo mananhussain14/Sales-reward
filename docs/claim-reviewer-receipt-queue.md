@@ -182,11 +182,18 @@ this milestone. All the receipt tables have RLS enabled with zero policies, so
 Nothing here creates or reads a reward, coin, balance or payout — none of those
 objects exist. Extraction remains `DISABLED` and is not referenced.
 
-## Next milestone
+## Opening a receipt
 
-**Phase 1C-C** — the receipt detail page at `/review/[receiptSubmissionId]`, a
-server-side image proxy that authorizes through `get_claim_review_detail` before
-streaming from the private bucket, and the immutable verify/reject form backed by
-`decide_claim_receipt`. The queue's "Review receipt" action is disabled until then,
-and the shell's active-link logic already treats that future route as part of the
-queue section.
+**Phase 1C-C shipped**, so the queue's "Review receipt" action is now a real link to
+`/review/[receiptSubmissionId]` rather than the disabled "Soon" placeholder it was
+here. Its accessible name includes the Retailer and the submitted time, because
+"Review receipt" repeated down a list tells a screen-reader user nothing about which
+receipt they are opening.
+
+The link carries the receipt id **alone** — no filters, no cursor and no return URL
+— and the detail page returns to the bare `/review`. Nothing about the queue's
+filters, count or pagination changed, and the shell's prefix match already kept this
+section highlighted on the nested route.
+
+See `docs/claim-reviewer-receipt-detail-and-decision.md` for the detail page, the
+private image route and the immutable decision workflow.
