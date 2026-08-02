@@ -307,10 +307,16 @@ describe("5. generic setup requires a verified session and refuses configured us
 
   test("5.6 the page is NOT on the proxy public allowlist", () => {
     const proxy = codeOf(PROXY_ROUTING);
-    const publicSet = proxy.slice(proxy.indexOf("PUBLIC_PATHS"));
+    const publicSet = proxy.slice(
+      proxy.indexOf("PUBLIC_PATHS"),
+      proxy.indexOf("]);", proxy.indexOf("PUBLIC_PATHS")),
+    );
+    // The EXACT quoted literal, not a substring: the sibling entry
+    // "/invitations/account-setup/recover" is legitimately public and contains this
+    // page's path as a prefix, so a substring test would report a false regression.
     assert.ok(
-      !publicSet.includes("/invitations/account-setup"),
-      "generic setup requires the session /invitations/accept establishes",
+      !publicSet.includes('"/invitations/account-setup"'),
+      "generic setup requires the session the recovery route establishes",
     );
   });
 });
@@ -530,6 +536,133 @@ describe("9. existing portal and Flutter contracts are untouched", () => {
   });
 });
 
+describe("11. the generic recovery verifier", () => {
+  const RECOVER_ROUTE = join(SETUP_DIR, "recover", "route.ts");
+  const code = () => codeOf(RECOVER_ROUTE);
+  const raw = () => read(RECOVER_ROUTE);
+
+  test("11.1 the route exists", () => {
+    assert.ok(existsSync(RECOVER_ROUTE), `missing ${RECOVER_ROUTE}`);
+  });
+
+  test("11.2 it reads token_hash and type from the URL", () => {
+    assert.match(code(), /searchParams\.get\("token_hash"\)/);
+    assert.match(code(), /searchParams\.get\("type"\)/);
+  });
+
+  test("11.3 it accepts ONLY type=recovery", () => {
+    assert.match(raw(), /RECOVERY_TYPE\s*=\s*"recovery"/);
+    assert.match(code(), /type !== RECOVERY_TYPE/);
+    // An invite token must not be replayable against this route.
+    assert.ok(!code().includes('"invite"'));
+  });
+
+  test("11.4 a missing or empty token_hash fails to the generic error page", () => {
+    assert.match(
+      code(),
+      /typeof tokenHash !== "string"\s*\|\|\s*tokenHash\.length === 0/,
+    );
+    assert.match(raw(), /FAILURE_PATH\s*=\s*"\/invitations\/error"/);
+  });
+
+  test("11.5 success redirects to the fixed generic setup page", () => {
+    assert.match(raw(), /SETUP_PATH\s*=\s*"\/invitations\/account-setup"/);
+    assert.match(code(), /redirectTo\(request, SETUP_PATH\)/);
+  });
+
+  test("11.6 an Auth error and an Auth throw both fail safely", () => {
+    assert.match(code(), /if \(error\)/);
+    assert.match(code(), /\} catch \{/);
+    const failures = (code().match(/redirectTo\(request, FAILURE_PATH\)/g) ?? [])
+      .length;
+    assert.equal(failures, 3, "shape screen, reported error, and throw");
+  });
+
+  test("11.7 it verifies the token server-side with the ordinary client", () => {
+    assert.match(code(), /supabase\.auth\.verifyOtp\(\{/);
+    assert.match(code(), /type: RECOVERY_TYPE/);
+    assert.match(code(), /createClient\(\)/);
+  });
+
+  test("11.8 there is no caller-controlled redirect", () => {
+    const targets = new Set(
+      [...code().matchAll(/redirectTo\(request, ([A-Z_]+)\)/g)].map((m) => m[1]),
+    );
+    assert.deepEqual([...targets].sort(), ["FAILURE_PATH", "SETUP_PATH"]);
+    for (const forbidden of ["redirectTo=", "returnUrl", "next=", '"next"']) {
+      assert.ok(!code().includes(forbidden), `open-redirect vector: ${forbidden}`);
+    }
+    // The token is stripped from the outgoing URL.
+    assert.match(code(), /url\.search = ""/);
+  });
+
+  test("11.9 it imports no service-role client and writes nothing", () => {
+    for (const forbidden of [
+      "supabase/admin",
+      "createAdminClient",
+      "SERVICE_ROLE",
+      "service_role",
+      "profiles",
+      "organization_members",
+      "member_roles",
+      "audit_logs",
+      "CLAIM_REVIEWER",
+    ]) {
+      assert.ok(!code().includes(forbidden), `route must not reference ${forbidden}`);
+    }
+    assert.ok(!/\.rpc\(/.test(code()), "route must call no database function");
+  });
+
+  test("11.10 it never sets a password — that stays in the setup action", () => {
+    assert.ok(!code().includes("updateUser"));
+    assert.ok(!code().includes("password"));
+  });
+
+  test("11.11 nothing sensitive is logged", () => {
+    const logs = [...code().matchAll(/console\.(error|log|warn)\(([^)]*)\)/g)];
+    assert.ok(logs.length > 0);
+    for (const [, , arg] of logs) {
+      assert.match(arg.trim(), /^"[^"]*"$/, "log arguments must be fixed strings");
+    }
+    for (const leak of [
+      "tokenHash}",
+      "error.message",
+      "error.code",
+      "error.status",
+      "JSON.stringify",
+    ]) {
+      assert.ok(!code().includes(leak), `leaks ${leak}`);
+    }
+  });
+
+  test("11.12 it sets Referrer-Policy: no-referrer", () => {
+    assert.match(code(), /Referrer-Policy/);
+  });
+
+  test("11.13 the recovery landing is public; the setup page is NOT", () => {
+    const proxy = codeOf(PROXY_ROUTING);
+    const publicSet = proxy.slice(
+      proxy.indexOf("PUBLIC_PATHS"),
+      proxy.indexOf("]);", proxy.indexOf("PUBLIC_PATHS")),
+    );
+    assert.ok(
+      publicSet.includes('"/invitations/account-setup/recover"'),
+      "the recovery landing must be reachable without a session",
+    );
+    assert.ok(
+      !publicSet.includes('"/invitations/account-setup"'),
+      "the setup page must still require the session this route establishes",
+    );
+  });
+
+  test("11.14 the staff recovery route is untouched and still available", () => {
+    const staff = read(join(ROOT, "app", "invitations", "staff", "recover", "route.ts"));
+    assert.match(staff, /SET_PASSWORD_PATH\s*=\s*"\/invitations\/staff\/set-password"/);
+    const proxy = codeOf(PROXY_ROUTING);
+    assert.ok(proxy.includes('"/invitations/staff/recover"'));
+  });
+});
+
 describe("10. no personal identifier is committed", () => {
   test("10.1 no email address of any kind appears in the new files", () => {
     // Deliberately a SHAPE, not a list of names. An earlier draft of this test
@@ -538,7 +671,12 @@ describe("10. no personal identifier is committed", () => {
     // regex catches any address, including ones nobody thought to enumerate, and
     // itself contains no personal data.
     const emailShaped = /[\w.+-]+@[\w-]+\.[a-z]{2,}/i;
-    const scanned = [...GENERIC_FILES, COMPLETE_PAGE, LOGIN_PAGE];
+    const scanned = [
+      ...GENERIC_FILES,
+      join(SETUP_DIR, "recover", "route.ts"),
+      COMPLETE_PAGE,
+      LOGIN_PAGE,
+    ];
     for (const file of scanned) {
       const match = read(file).match(emailShaped);
       assert.equal(
@@ -551,7 +689,7 @@ describe("10. no personal identifier is committed", () => {
 
   test("10.2 no UUID literal appears in the new files", () => {
     const uuid = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
-    for (const file of GENERIC_FILES) {
+    for (const file of [...GENERIC_FILES, join(SETUP_DIR, "recover", "route.ts")]) {
       assert.ok(!uuid.test(read(file)), `${file} contains a UUID literal`);
     }
   });
