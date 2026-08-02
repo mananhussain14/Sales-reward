@@ -847,8 +847,14 @@ select is(
 select ok(pg_temp.list_permission_count('Vendor Super Admin') >= 3,
   'and it is at least the three foundation permissions the seed maps');
 
-select is(pg_temp.list_permission_count('Claim Reviewer'), 0,
-  'a role with no permission mappings reports 0 — CLAIM_REVIEWER is seeded exactly that way');
+-- FINANCE_ADMIN, not CLAIM_REVIEWER. Both were seeded with zero mappings, and this
+-- assertion used the reviewer until migration 20260818210000 deliberately gave it
+-- CLAIM_REVIEW_PORTAL_READ. The BEHAVIOUR under test — a role with no mappings reports 0
+-- rather than NULL or the whole catalogue — is unchanged; only the example had to move to
+-- a role that is still genuinely empty. FINANCE_ADMIN remains so until its own module is
+-- built, exactly as the 20260716133023 seed describes.
+select is(pg_temp.list_permission_count('Finance Admin'), 0,
+  'a role with no permission mappings reports 0 — FINANCE_ADMIN is seeded exactly that way');
 select is(pg_temp.list_permission_count('Undescribed Role'), 0,
   'a freshly defined role with no mappings reports 0 rather than NULL');
 
@@ -1058,8 +1064,16 @@ select is(
   'View the role and permission catalogue and organization role assignments.',
   'the stored permission description is returned verbatim');
 
-select is(pg_temp.permission_names(pg_temp.role_id('CLAIM_REVIEWER')), '{}'::text[],
+-- FINANCE_ADMIN for the same reason as the count assertion above: CLAIM_REVIEWER now
+-- holds exactly one permission by design, so it is no longer an example of an empty role.
+select is(pg_temp.permission_names(pg_temp.role_id('FINANCE_ADMIN')), '{}'::text[],
   'a role with no permissions returns an EMPTY list, not NULL and not the whole catalogue');
+
+-- And the reviewer's single portal permission is asserted positively, so the row this
+-- assertion used to cover is still covered rather than merely moved away from.
+select is(pg_temp.permission_names(pg_temp.role_id('CLAIM_REVIEWER')),
+  array['Open the Claim Review portal']::text[],
+  'CLAIM_REVIEWER holds exactly its one portal permission — no receipt access');
 
 select is(pg_temp.permission_names(pg_temp.role_id('UNDESCRIBED_ROLE')), '{}'::text[],
   'and so does a freshly defined role — a role with no mappings is never defaulted to all permissions');

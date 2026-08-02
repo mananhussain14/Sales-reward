@@ -7,6 +7,7 @@
 // exercise.
 import { getVendorSuperAdminAccess } from "@/lib/auth/vendor-admin-access";
 import { getRetailerPortalAccess } from "@/lib/staff/retailer-staff-access";
+import { getClaimReviewerAccess } from "@/lib/review/claim-reviewer-access";
 import {
   selectLanding,
   type LandingDecision,
@@ -62,10 +63,24 @@ export async function resolveAuthenticatedLanding(): Promise<LandingDecision> {
     // mapping, and each landing on a different page. Its "unavailable" is the single
     // operational-failure signal the decision can observe.
     const portal = await getRetailerPortalAccess();
-    return selectLanding(
-      "unauthorized",
-      portal.status === "authorized" ? portal.kind : portal.status,
-    );
+    const retailerStatus =
+      portal.status === "authorized" ? portal.kind : portal.status;
+
+    // The Claim Reviewer probe is issued ONLY when neither earlier read authorized
+    // the caller — the same "ask only when it could change the answer" discipline
+    // resolveRetailerPortalAccess already applies to its own probes. A Vendor never
+    // reaches it, and neither does an owner, a manager or a sales staff member, so
+    // no existing login gains a round trip.
+    //
+    // A Retailer "unavailable" is passed straight through rather than probed past:
+    // the caller may still be a Retailer, and handing them the reviewer portal
+    // during an outage would be the wrong portal, not a safe fallback.
+    if (retailerStatus !== "unauthorized") {
+      return selectLanding("unauthorized", retailerStatus);
+    }
+
+    const reviewer = await getClaimReviewerAccess();
+    return selectLanding("unauthorized", retailerStatus, reviewer.status);
   } catch {
     // Unreachable under the resolvers' contracts; handled anyway. An operational
     // failure must never masquerade as a denial, so it becomes "unavailable" —
