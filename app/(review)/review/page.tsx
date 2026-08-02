@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { getClaimReviewQueue } from "@/lib/review/claim-review-queue";
 import {
   buildClaimReviewQueueHref,
+  formatSubmittedAt,
   parseClaimReviewQueueParams,
   sanitizeFilterSelection,
 } from "@/lib/review/claim-review-queue-filters";
@@ -181,24 +182,25 @@ export default async function ClaimReviewQueuePage({
                 key={row.receiptSubmissionId}
                 row={row}
                 action={
-                  // Phase 1C-B ships the QUEUE. Opening a receipt needs the detail
-                  // page, its private image proxy and the decision form — all
-                  // Phase 1C-C. A disabled control that says so is honest; a link to
-                  // a route that does not exist is a 404 with extra steps.
+                  // LIVE IN PHASE 1C-C. The detail route, its private image stream
+                  // and the decision form all exist now, so this is a real link
+                  // rather than the disabled placeholder it was in Phase 1C-B.
                   //
-                  // A non-interactive element rather than a disabled <button>, so
-                  // keyboard users never tab to something that cannot act.
-                  // aria-disabled marks the state for assistive technology.
-                  <span
-                    aria-disabled="true"
-                    title="Receipt detail and review decisions arrive in the next milestone"
-                    className="inline-flex h-9 cursor-not-allowed items-center rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-400"
+                  // The accessible name carries the Retailer, because "Review
+                  // receipt" repeated down a list tells a screen-reader user
+                  // moving by link nothing about which receipt they are opening.
+                  //
+                  // The href carries the receipt id ALONE — no filters, no cursor,
+                  // no return URL. The detail page's own "Back to queue" goes to
+                  // the bare /review, so there is no caller-supplied destination
+                  // anywhere in this flow and an open redirect is impossible.
+                  <Link
+                    href={`/review/${row.receiptSubmissionId}`}
+                    aria-label={`Review receipt from ${row.retailerName}, submitted ${formatSubmittedAt(row.submittedAt)}`}
+                    className={buttonClasses({ variant: "primary", size: "sm" })}
                   >
                     Review receipt
-                    <span className="ml-2 rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
-                      Soon
-                    </span>
-                  </span>
+                  </Link>
                 }
               />
             ))}

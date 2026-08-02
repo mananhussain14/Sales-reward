@@ -557,12 +557,27 @@ describe("7. page behaviour and states", () => {
     assert.match(page, /buildClaimReviewQueueHref\(inputs, nextCursor\)/);
   });
 
-  test("7.8 the open action is disabled and explains why", () => {
-    assert.match(page, /aria-disabled="true"/);
+  // SUPERSEDED BY PHASE 1C-C, WHICH BUILT THE DETAIL ROUTE.
+  //
+  // The original pinned that the open action was DISABLED and linked nowhere,
+  // because the route did not exist and a link to it would have been a 404 with
+  // extra steps. That route exists now.
+  //
+  // The property worth keeping was never "disabled" — it was that this action goes
+  // somewhere real and carries nothing but the receipt id. The successor asserts
+  // exactly that, and adds a requirement the original never had: no return URL or
+  // filter state may ride along, so no caller-supplied destination can appear.
+  test("7.8 the open action links to the detail route, carrying only the id", () => {
     assert.match(page, /Review receipt/);
+    assert.match(page, /href=\{`\/review\/\$\{row\.receiptSubmissionId\}`\}/);
     assert.ok(
-      !/<Link[^>]*href=\{`\/review\/\$\{/.test(page),
-      "no link to the unbuilt detail route",
+      !/aria-disabled="true"/.test(page),
+      "the action must no longer be a disabled placeholder",
+    );
+    assert.ok(!/Soon/.test(page), "the Soon badge must be gone");
+    assert.ok(
+      !/[?&](returnTo|redirect|next|from)=/.test(page),
+      "no return-URL parameter may be attached",
     );
   });
 
@@ -646,13 +661,34 @@ describe("9. milestone boundaries", () => {
     );
   });
 
-  test("9.2 no Phase 1C-C detail route was created", () => {
-    const reviewDir = join(ROOT, "app", "(review)", "review");
-    const entries = readdirSync(reviewDir);
-    assert.ok(
-      !entries.some((e) => e.startsWith("[")),
-      "the dynamic detail route belongs to Phase 1C-C",
-    );
+  // SUPERSEDED BY PHASE 1C-C, WHICH CREATED THE DETAIL ROUTE.
+  //
+  // The original forbade any dynamic child of /review, because the detail route
+  // was the NEXT milestone's work and building it early would have shipped an
+  // unreviewed image path. It exists now, and its own suite
+  // (claim-review-detail-contract.test.ts) pins every property it must hold.
+  //
+  // What this file still owns is that the QUEUE did not grow a second architecture
+  // while that happened: these four queue files must remain free of any image,
+  // decision or service-role work, whatever the detail route now does.
+  test("9.2 the queue itself gained no image, decision or service-role work", () => {
+    for (const file of QUEUE_FILES) {
+      const c = codeOf(file);
+      for (const forbidden of [
+        "createSignedUrl",
+        "decide_claim_receipt",
+        "get_claim_review_detail",
+        "get_claim_review_object_reference",
+        "createAdminClient",
+        "supabase/admin",
+        "<img",
+      ]) {
+        assert.ok(
+          !c.includes(forbidden),
+          `${forbidden} must not appear in the queue file ${file}`,
+        );
+      }
+    }
   });
 
   test("9.3 no OCR, extraction or reward work appears", () => {

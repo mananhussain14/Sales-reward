@@ -106,6 +106,22 @@ function uuid(value: string | string[] | undefined): string | null {
   return raw !== null && UUID_RE.test(raw) ? raw : null;
 }
 
+/**
+ * True when a value is shaped like a receipt submission id.
+ *
+ * Exported for the Phase 1C-C detail route and image route, which must refuse a
+ * malformed id BEFORE it reaches an RPC — PostgREST would otherwise reject the
+ * whole call with a type error, and a route that 500s on a typo is both a worse
+ * experience and a louder signal than one that simply says "not found".
+ *
+ * SHAPE only. It says nothing about whether the receipt exists or who may read
+ * it; both of those are the database's to answer, and it answers them the same
+ * way for a stranger's receipt as for a nonexistent one.
+ */
+export function isReceiptSubmissionId(value: unknown): value is string {
+  return typeof value === "string" && UUID_RE.test(value);
+}
+
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** A calendar date that really exists, or null. Rejects 2026-02-31 and 2026-13-01. */
