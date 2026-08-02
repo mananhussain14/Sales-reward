@@ -214,6 +214,97 @@ describe("5. generic setup requires a verified session and refuses configured us
     assert.match(actions, /landing\.kind !== "unauthorized"/);
   });
 
+  test("5.7 the action independently re-checks the confirmed address", () => {
+    assert.match(actions, /supabase\.auth\.getUser\(\)/);
+    assert.match(actions, /email_confirmed_at/);
+  });
+
+  test("5.8 the confirmation check runs AFTER the session check", () => {
+    const sessionAt = actions.indexOf("if (!hasSession)");
+    const confirmAt = actions.indexOf("supabase.auth.getUser()");
+    assert.ok(sessionAt !== -1 && confirmAt !== -1);
+    assert.ok(
+      sessionAt < confirmAt,
+      "an unauthenticated caller must be refused before any Auth round trip",
+    );
+  });
+
+  test("5.9 the confirmation check runs BEFORE landing resolution", () => {
+    const confirmAt = actions.indexOf("supabase.auth.getUser()");
+    const landingAt = actions.indexOf("resolveAuthenticatedLanding()");
+    assert.ok(confirmAt !== -1 && landingAt !== -1);
+    assert.ok(
+      confirmAt < landingAt,
+      "an unconfirmed account must be refused before portal state is resolved",
+    );
+  });
+
+  test("5.10 all four confirmation failure modes fail closed to FAILURE_PATH", () => {
+    // The guard is one expression, so the four causes cannot diverge: a transport
+    // throw (caught to null), a reported Auth error, a missing user, and a null
+    // email_confirmed_at all reach the same fixed destination.
+    assert.match(
+      actions,
+      /userResult === null\s*\|\|\s*userResult\.error\s*\|\|\s*!userResult\.data\?\.user\?\.email_confirmed_at/,
+    );
+    const guardAt = actions.indexOf("userResult === null");
+    const after = actions.slice(guardAt, guardAt + 400);
+    assert.match(after, /redirect\(FAILURE_PATH\)/);
+  });
+
+  test("5.11 the confirmation guard catches a throw rather than letting it escape", () => {
+    assert.match(
+      actions,
+      /Promise\.resolve\(supabase\.auth\.getUser\(\)\)\.catch\(\s*\(\) => null,?\s*\)/,
+    );
+  });
+
+  test("5.12 an unconfirmed caller can never reach the password update", () => {
+    const confirmAt = actions.indexOf("userResult === null");
+    const updateAt = actions.indexOf("updateUser");
+    assert.ok(confirmAt !== -1 && updateAt !== -1);
+    assert.ok(
+      confirmAt < updateAt,
+      "the confirmation guard must precede the only Auth mutation",
+    );
+    // And nothing between the guard and the update can re-enter the happy path:
+    // the guard redirects, which throws NEXT_REDIRECT.
+    const between = actions.slice(confirmAt, updateAt);
+    assert.ok(between.includes("redirect(FAILURE_PATH)"));
+  });
+
+  test("5.13 the confirmation guard leaks no provider detail or identifier", () => {
+    const guardAt = actions.indexOf("const userResult");
+    const landingAt = actions.indexOf("resolveAuthenticatedLanding()");
+    const block = actions.slice(guardAt, landingAt);
+    for (const leak of [
+      "userResult.error.message",
+      "userResult.error.code",
+      "userResult.error.status",
+      "user.id",
+      "user.email",
+      "console.",
+    ]) {
+      assert.ok(!block.includes(leak), `confirmation guard leaks ${leak}`);
+    }
+  });
+
+  test("5.14 the guard introduces no new destination", () => {
+    // Exactly two redirect targets exist in this action, both module literals.
+    const targets = new Set(
+      [...actions.matchAll(/redirect\(([A-Z_]+)\)/g)].map((m) => m[1]),
+    );
+    assert.deepEqual([...targets].sort(), ["FAILURE_PATH", "SUCCESS_PATH"]);
+  });
+
+  test("5.15 the page and the action now enforce the same three preconditions", () => {
+    for (const source of [page, actions]) {
+      assert.match(source, /getClaims\(\)/);
+      assert.match(source, /email_confirmed_at/);
+      assert.match(source, /resolveAuthenticatedLanding\(\)/);
+    }
+  });
+
   test("5.6 the page is NOT on the proxy public allowlist", () => {
     const proxy = codeOf(PROXY_ROUTING);
     const publicSet = proxy.slice(proxy.indexOf("PUBLIC_PATHS"));

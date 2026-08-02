@@ -146,7 +146,42 @@ export async function completeGenericAccountSetupAction(
   }
 
   // ---------------------------------------------------------------------------
-  // 4. Refuse an already-configured user — re-checked here, not trusted from the page
+  // 4. Require an ALREADY-CONFIRMED address — re-checked here, not trusted
+  // ---------------------------------------------------------------------------
+  // The page performs this same check, and that is precisely why the action must
+  // too: a Server Action is a public endpoint, so a page guard is not its security
+  // boundary. Every other gate in this file is re-established here; this one was
+  // missing, which left the action holding one fewer precondition than the screen
+  // that renders it.
+  //
+  // This route never confirms an address and never sets one. It exists only to let
+  // someone whose invitation was ALREADY accepted choose a credential, so an account
+  // that has not completed verification must not be able to acquire a password here
+  // by posting directly.
+  //
+  // getUser() re-validates with the Auth server rather than reading a cached claim,
+  // so a stale or forged cookie cannot assert confirmation.
+  //
+  // FAILS CLOSED on all four ways this can go wrong — a transport throw (caught to
+  // null), a reported Auth error, no user in the response, and a null
+  // email_confirmed_at — and all four take the SAME fixed FAILURE_PATH the session
+  // check uses, so this adds no new error oracle. The result is never bound beyond
+  // these predicates: no message, code, status, address or id is read, returned or
+  // logged.
+  const userResult = await Promise.resolve(supabase.auth.getUser()).catch(
+    () => null,
+  );
+
+  if (
+    userResult === null ||
+    userResult.error ||
+    !userResult.data?.user?.email_confirmed_at
+  ) {
+    redirect(FAILURE_PATH);
+  }
+
+  // ---------------------------------------------------------------------------
+  // 5. Refuse an already-configured user — re-checked here, not trusted from the page
   // ---------------------------------------------------------------------------
   // This endpoint exists for accounts with NO portal. A Vendor Super Admin, Retailer
   // Owner, Retailer Manager, Sales Staff member or Claim Reviewer has an ordinary
@@ -164,7 +199,7 @@ export async function completeGenericAccountSetupAction(
   }
 
   // ---------------------------------------------------------------------------
-  // 5. Set the password — Supabase Auth only
+  // 6. Set the password — Supabase Auth only
   // ---------------------------------------------------------------------------
   // The ordinary authenticated client, under the caller's own token. No address and
   // no user id is passed: the session already identifies exactly one account, so
@@ -191,7 +226,7 @@ export async function completeGenericAccountSetupAction(
   }
 
   // ---------------------------------------------------------------------------
-  // 6. Sign out, then send them to sign in
+  // 7. Sign out, then send them to sign in
   // ---------------------------------------------------------------------------
   // The session that reached this point came from a one-time invitation token. It
   // has served its only purpose, and ending it deliberately means the next thing the
