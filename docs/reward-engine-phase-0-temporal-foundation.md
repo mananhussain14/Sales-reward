@@ -206,6 +206,11 @@ Two further consequences:
 - **No RPC writes the column yet.** Phase 0 adds no setter and no UI, so a zone can currently be
   set only by the table owner. Phase 1 must add a Vendor-side setter alongside the reviewer
   workflow.
+  **Update:** Phase 1A supplies that setter —
+  `public.set_retailer_shop_timezone`, gated on the new `SHOP_TIMEZONE_MANAGE` permission
+  mapped to `VENDOR_SUPER_ADMIN` alone. See
+  [shop-timezone-management.md](shop-timezone-management.md). It is **not yet deployed**, and
+  all four hosted shops remain unresolved.
 - **Fixed offsets are refused.** Only Region/City IANA names are accepted (`Asia/Kuwait`,
   `Europe/London`, `Europe/Paris`, `America/New_York`, `America/Argentina/Buenos_Aires`).
   `UTC+3`, `GMT+3`, bare `UTC`, bare `EST` and every `Etc/*` entry are rejected, because a fixed
