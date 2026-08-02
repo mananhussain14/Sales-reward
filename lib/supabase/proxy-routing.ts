@@ -100,6 +100,19 @@ export const PUBLIC_PATHS = new Set<string>([
   // generic error page. The page it redirects to, /invitations/staff/set-password, is
   // deliberately NOT in this set — it requires the session this route establishes.
   "/invitations/staff/recover",
+  // The GENERIC account-recovery landing, for an invited account that has no Retailer
+  // invitation and no portal. Same shape and same reasoning as the staff entry above:
+  // the visitor arrives from an emailed link carrying a one-time token hash and NO
+  // session, and establishing one is the entire purpose of the route. Bouncing them to
+  // /login would consume nothing but strand them, exactly as the defect this route
+  // fixes did.
+  //
+  // It grants nothing. The route verifies the token with the Auth server
+  // (verifyOtp({type: "recovery"})) and redirects; every failure lands on the same
+  // generic error page. The page it redirects to, /invitations/account-setup, is
+  // deliberately NOT in this set — it requires the session this route establishes, and
+  // re-checks the confirmed address and the absence of a portal on its own.
+  "/invitations/account-setup/recover",
 ]);
 
 /**
