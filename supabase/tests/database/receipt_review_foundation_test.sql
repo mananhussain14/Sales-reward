@@ -309,8 +309,8 @@ select is(
   (select count(*)::integer from public.role_permissions rp
    join public.roles r on r.id = rp.role_id
    where r.code = 'CLAIM_REVIEWER'),
-  3,
-  'A4. CLAIM_REVIEWER now holds exactly three permissions'
+  4,
+  'A4. CLAIM_REVIEWER now holds exactly four permissions'
 );
 
 select is(
@@ -319,8 +319,8 @@ select is(
    join public.roles r on r.id = rp.role_id
    join public.permissions p on p.id = rp.permission_id
    where r.code = 'CLAIM_REVIEWER'),
-  'CLAIM_REVIEW_PORTAL_READ,RECEIPT_REVIEW_DECIDE,RECEIPT_REVIEW_READ',
-  'A5. and they are exactly the portal permission plus the two new ones'
+  'CLAIM_REVIEW_PORTAL_READ,RECEIPT_QUALIFICATION_CLASSIFY,RECEIPT_REVIEW_DECIDE,RECEIPT_REVIEW_READ',
+  'A5. and they are exactly the portal, review and classify permissions'
 );
 
 -- The submission-side permissions belong to Sales Staff and must not have moved.

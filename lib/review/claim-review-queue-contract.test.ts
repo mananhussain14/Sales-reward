@@ -648,13 +648,17 @@ describe("8. accessibility and presentation", () => {
 });
 
 describe("9. milestone boundaries", () => {
-  test("9.1 exactly one migration was added — the filter-options follow-up", () => {
-    // Phase 1C-B began Web-only. The approved follow-up added ONE additive migration
-    // because the queue RPC returns no ids, so a picker had no values to offer.
+  // SUPERSEDED BY PHASE 1D-0, WHICH ADDED MIGRATION 62.
+  //
+  // The original asserted a total count of 61. That number belonged to Phase 1C-B
+  // and every later approved migration would break it, which makes it a calendar
+  // rather than a contract. What this file actually owns is that THIS milestone's
+  // migration exists and was not renamed or removed — so the successor pins that,
+  // and leaves the running total to whichever milestone last changed it.
+  test("9.1 the filter-options migration is present and unrenamed", () => {
     const migrations = readdirSync(join(ROOT, "supabase", "migrations")).filter((f) =>
       f.endsWith(".sql"),
     );
-    assert.equal(migrations.length, 61);
     assert.ok(
       migrations.includes("20260819210000_claim_review_filter_options.sql"),
       "and it is the filter-options migration",

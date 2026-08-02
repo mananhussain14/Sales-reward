@@ -232,6 +232,16 @@ highlighted on the nested route, which the shell's prefix match already handled.
 Nothing here creates or reads a reward, coin, balance or payout — none of those
 objects exist. Extraction remains `DISABLED` and no extraction control was added.
 
+## A VERIFIED decision is not reward eligibility
+
+Phase 1D-0 added a **separate** append-only qualification exclusion, so a receipt
+whose image was verified may still be barred from ever becoming a sale — for
+example a development screenshot that a reviewer legitimately accepted as legible.
+That exclusion never changes the decision recorded here: the verdict on this page
+stays exactly as the reviewer left it, and the qualification panel below it answers
+the different question of whether the record may proceed. See
+`docs/receipt-qualification-exclusions.md`.
+
 ## Next
 
 An independent review and merge, then **one separately approved controlled

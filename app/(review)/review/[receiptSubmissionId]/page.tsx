@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { getClaimReviewDetail } from "@/lib/review/claim-review-detail";
+import { getClaimReceiptQualification } from "@/lib/review/claim-receipt-qualification";
+import { QualificationPanel } from "@/app/(review)/review/[receiptSubmissionId]/qualification-panel";
 import {
   formatFileSize,
   formatMimeType,
@@ -96,6 +98,20 @@ export default async function ClaimReviewDetailPage({
   }
 
   const d = result.detail;
+
+  // Read ONLY for a VERIFIED receipt. A rejected one is already out of the reward
+  // path by being rejected, and a second control would imply the rejection was not
+  // enough. `null` here means the read failed — the panel says so rather than
+  // rendering "not excluded", which would be a guess about a financial control.
+  const qualificationResult =
+    d.decision === "VERIFIED"
+      ? await getClaimReceiptQualification(d.receiptSubmissionId)
+      : null;
+  const qualification =
+    qualificationResult?.status === "authorized"
+      ? qualificationResult.qualification
+      : null;
+
   const submittedLabel = formatSubmittedAt(d.submittedAt);
   const shopInactive = d.shopStatus !== "ACTIVE";
   const submitterInactive = d.submitterStatus !== "ACTIVE";
@@ -262,6 +278,16 @@ export default async function ClaimReviewDetailPage({
           ) : (
             <DecisionForm receiptSubmissionId={d.receiptSubmissionId} />
           )}
+
+          {/* Phase 1D-0. A SEPARATE question from the decision above: that one says
+              the image was verified, this says whether the record may go on to
+              become a sale. Only offered for a VERIFIED receipt. */}
+          {d.decision === "VERIFIED" ? (
+            <QualificationPanel
+              receiptSubmissionId={d.receiptSubmissionId}
+              qualification={qualification}
+            />
+          ) : null}
         </div>
       </div>
     </DetailShell>

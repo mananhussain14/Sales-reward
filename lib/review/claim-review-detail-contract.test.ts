@@ -1131,13 +1131,23 @@ describe("12. safe routing and not-found behaviour", () => {
 
 // ============================================================================
 describe("13. milestone boundaries and regression", () => {
-  test("13.1 no migration was added — the count is still 61", () => {
+  // SUPERSEDED BY PHASE 1D-0, WHICH ADDED MIGRATION 62.
+  //
+  // The original asserted "no migration exists after 20260819210000", which was the
+  // right statement while Phase 1C-C was Web-only and is simply false now that an
+  // approved later milestone has shipped one. The durable property is narrower and
+  // is what this file actually owns: PHASE 1C-C'S OWN FILES contain no SQL and add
+  // no migration of their own. A later milestone's migration cannot satisfy that,
+  // and a stray .sql appearing among these files still fails.
+  test("13.1 Phase 1C-C itself added no migration and no SQL", () => {
+    for (const file of PHASE_1C_C_FILES) {
+      assert.ok(!file.endsWith(".sql"), `${file} must not be SQL`);
+    }
     const dir = join(ROOT, "supabase", "migrations");
     const files = readdirSync(dir).filter((f) => f.endsWith(".sql"));
-    assert.equal(files.length, 61, "Phase 1C-C adds no migration");
     assert.ok(
-      !files.some((f) => f.startsWith("2026082") && f > "20260819210000_z"),
-      "no migration 62",
+      !files.some((f) => /detail|decision|image/i.test(f)),
+      "no migration bearing this milestone's name exists",
     );
   });
 
