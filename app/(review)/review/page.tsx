@@ -1,62 +1,224 @@
+import type { Metadata } from "next";
+import Link from "next/link";
+import { redirect } from "next/navigation";
+import { getClaimReviewQueue } from "@/lib/review/claim-review-queue";
+import {
+  buildClaimReviewQueueHref,
+  parseClaimReviewQueueParams,
+} from "@/lib/review/claim-review-queue-filters";
+import { QueueFilters } from "@/app/(review)/review/queue-filters";
+import { ReceiptQueueRow } from "@/app/(review)/review/receipt-queue-row";
+import { Alert } from "@/components/ui/alert";
+import { buttonClasses } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
+import { PageHeader } from "@/components/ui/page-header";
+
+export const metadata: Metadata = {
+  title: "Receipt review queue · SalesReward",
+};
 
 /**
- * The Claim Review dashboard.
+ * The Claim Reviewer receipt review QUEUE — Phase 1C-B.
  *
- * DELIBERATELY EMPTY, and it must stay that way until Phase 1C.
+ * A SERVER COMPONENT. Every value comes from two SECURITY DEFINER RPCs called with
+ * the reviewer's own token; nothing is fetched in the browser and no client
+ * component receives a receipt. The entire filter and pagination state lives in the
+ * query string, so this page needs no client state at all.
  *
- * This page performs NO data access of any kind. It does not read
- * receipt_submissions, receipt_confirmations, receipt_extractions, receipt images,
- * audit logs, campaign data or reward data, and it creates no Supabase client at
- * all. That is not an oversight to be filled in later by whoever touches this file
- * next — it is the boundary of the milestone:
+ * ============================================================================
+ * WHAT THIS PAGE CAN AND CANNOT TELL A REVIEWER
+ * ============================================================================
+ * IMAGE-ONLY, and the copy says so plainly. A receipt carries a stored image, a
+ * shop, a submitter and file metadata — and no transaction data whatsoever. There is
+ * no amount, currency, merchant, sale date or product anywhere in the schema for
+ * these rows: every receipt has zero Retailer confirmations and zero extractions,
+ * with OCR disabled. Implying otherwise would invite a reviewer to judge something
+ * they cannot see.
  *
- *   * the permission behind this portal, CLAIM_REVIEW_PORTAL_READ, authorizes the
- *     SHELL and nothing else. There is no receipt read permission yet, so any query
- *     added here would either be refused in SQL or would be reading data this
- *     caller has not been granted;
- *   * showing a COUNT would be the subtlest version of the same mistake. "6 receipts
- *     waiting" is receipt data, derived from a table this portal may not read, and
- *     it would leak the size of another tenant's activity through a number.
+ * The image is not shown here either. The bucket is private with zero storage
+ * policies, and the authorized read path is Phase 1C-C's work.
  *
- * The empty state is therefore written to look INTENTIONAL rather than broken — an
- * authorized reviewer seeing a blank page should understand that the queue has not
- * shipped, not that their access failed. The layout handles the genuinely failed
- * case separately, with a different message.
- *
- * A Server Component with no async work: there is nothing to await.
+ * ============================================================================
+ * AUTHORIZATION
+ * ============================================================================
+ * The layout already guards this route, and this page does NOT rely on that — the
+ * same check is repeated here because the rule must hold for this module whatever
+ * route tree it is composed into. Beneath both, the database decides: the RPCs take
+ * no Vendor, resolve it from auth.uid(), and return zero rows to anyone who is not
+ * an authorized reviewer. Hiding a control removes an accident, never a capability.
  */
-export default function ReviewDashboardPage() {
-  return (
-    <div className="mx-auto max-w-3xl space-y-6">
-      <div className="space-y-1">
-        <h2 className="text-xl font-semibold tracking-tight text-slate-900">
-          Claim Review
-        </h2>
-        <p className="text-sm text-slate-600">
-          Receipt verification for the Vendor you review for.
-        </p>
-      </div>
+export default async function ClaimReviewQueuePage({
+  searchParams,
+}: {
+  // A promise in this version of Next.js — it must be awaited before any value is
+  // read.
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+}) {
+  const resolved = await searchParams;
+  const { filters, inputs, cursor, hasActiveFilters, cursorWasReset } =
+    parseClaimReviewQueueParams(resolved);
 
-      <EmptyState
-        tone="indigo"
-        icon={
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={1.5}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className="h-6 w-6"
-            aria-hidden="true"
-          >
-            <path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-          </svg>
+  const queue = await getClaimReviewQueue(filters, cursor);
+
+  if (queue.status === "unauthenticated") {
+    redirect("/login");
+  }
+
+  // "unauthorized" and "unavailable" are deliberately NOT collapsed. A reviewer
+  // whose access was revoked belongs on the denial page; one hitting a transient
+  // fault must not be told they have lost access.
+  if (queue.status === "unauthorized") {
+    redirect("/review-access-denied");
+  }
+
+  if (queue.status === "unavailable") {
+    return (
+      <QueueShell>
+        <Alert tone="warning" title="We couldn’t load the review queue">
+          Something went wrong on our side. Please refresh this page to try again.
+        </Alert>
+      </QueueShell>
+    );
+  }
+
+  const { rows, totalCount, nextCursor } = queue;
+
+  return (
+    <QueueShell
+      count={totalCount}
+      // rows === null is a FAILED read, not an empty queue — the count must not
+      // claim "0 waiting" when the truth is "we do not know".
+      countIsKnown={rows !== null && totalCount !== null}
+    >
+      {cursorWasReset ? (
+        <Alert tone="warning" title="Showing the first page">
+          That page link was incomplete, so the queue has been reset to the
+          beginning. Your filters are unchanged.
+        </Alert>
+      ) : null}
+
+      <QueueFilters inputs={inputs} hasActiveFilters={hasActiveFilters} />
+
+      {rows === null ? (
+        // The read FAILED. Deliberately not an empty state: telling a reviewer their
+        // queue is clear when it could not be read is the worst lie available here.
+        <Alert tone="warning" title="We couldn’t load the receipts">
+          The queue is temporarily unavailable. Please refresh this page to try
+          again.
+        </Alert>
+      ) : rows.length === 0 ? (
+        hasActiveFilters ? (
+          <EmptyState
+            tone="slate"
+            icon={<QueueIcon />}
+            title="No receipts match these filters"
+            description="Try a wider date range, or clear the filters to see everything waiting for review."
+            action={
+              <Link
+                href="/review"
+                className={buttonClasses({ variant: "secondary" })}
+              >
+                Clear filters
+              </Link>
+            }
+          />
+        ) : (
+          <EmptyState
+            tone="emerald"
+            icon={<QueueIcon />}
+            title="No receipts are waiting for review"
+            description="New submissions appear here automatically, oldest first."
+          />
+        )
+      ) : (
+        <>
+          <ul className="space-y-3" aria-label="Receipts waiting for review">
+            {rows.map((row) => (
+              <ReceiptQueueRow
+                key={row.receiptSubmissionId}
+                row={row}
+                action={
+                  // Phase 1C-B ships the QUEUE. Opening a receipt needs the detail
+                  // page, its private image proxy and the decision form — all
+                  // Phase 1C-C. A disabled control that says so is honest; a link to
+                  // a route that does not exist is a 404 with extra steps.
+                  //
+                  // A non-interactive element rather than a disabled <button>, so
+                  // keyboard users never tab to something that cannot act.
+                  // aria-disabled marks the state for assistive technology.
+                  <span
+                    aria-disabled="true"
+                    title="Receipt detail and review decisions arrive in the next milestone"
+                    className="inline-flex h-9 cursor-not-allowed items-center rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-400"
+                  >
+                    Review receipt
+                    <span className="ml-2 rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                      Soon
+                    </span>
+                  </span>
+                }
+              />
+            ))}
+          </ul>
+
+          {nextCursor ? (
+            <div className="flex justify-center pt-2">
+              <Link
+                href={buildClaimReviewQueueHref(inputs, nextCursor)}
+                className={buttonClasses({ variant: "secondary" })}
+              >
+                Load older receipts
+              </Link>
+            </div>
+          ) : null}
+        </>
+      )}
+    </QueueShell>
+  );
+}
+
+/** The page frame, shared by every outcome so the header never disappears. */
+function QueueShell({
+  count,
+  countIsKnown = false,
+  children,
+}: {
+  count?: number | null;
+  countIsKnown?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="mx-auto w-full max-w-4xl space-y-6">
+      <PageHeader
+        eyebrow="Claim review"
+        title="Receipt review queue"
+        description="Receipts submitted by retail staff, oldest first. Review is image-based: check that each receipt is legible and genuine. Amounts, products and reward eligibility are not available in this milestone."
+        actions={
+          countIsKnown && typeof count === "number" ? (
+            <span className="inline-flex items-center rounded-lg bg-indigo-50 px-3 py-1.5 text-sm font-semibold text-indigo-700 ring-1 ring-indigo-100">
+              {count} waiting
+            </span>
+          ) : null
         }
-        title="Receipt review opens in the next milestone"
-        description="Your Claim Review access is active. There is no receipt queue to show yet — submitted receipts will appear here once review is switched on."
       />
+      {children}
     </div>
+  );
+}
+
+function QueueIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.5}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-6 w-6"
+      aria-hidden="true"
+    >
+      <path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+    </svg>
   );
 }

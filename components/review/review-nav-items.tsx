@@ -36,10 +36,10 @@ export type ReviewNavItem = {
 export const REVIEW_NAV_ITEMS: ReviewNavItem[] = [
   {
     label: "Review queue",
-    // Points at the portal root while the queue does not exist, so the entry can
-    // never resolve to a 404. It is disabled, so this href is not followed.
+    // The queue IS the portal root, so this is a real destination now rather than a
+    // placeholder pointing at one. Enabled in Phase 1C-B.
     href: "/review",
-    disabled: true,
+    disabled: false,
     icon: (
       <path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
     ),

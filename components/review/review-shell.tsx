@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { SignOutButton } from "@/components/auth/sign-out-button";
 import { REVIEW_NAV_ITEMS } from "@/components/review/review-nav-items";
 import { BrandLockup } from "@/components/ui/brand";
@@ -21,9 +23,11 @@ import { cn } from "@/components/ui/cn";
  * navigation source with either of the others. See
  * @/components/review/review-nav-items for why.
  *
- * THERE IS NO ACTIVE-LINK STATE and no `usePathname`, deliberately: /review is the
- * only route in this group and its single nav item is disabled, so highlighting
- * would be describing a choice the reviewer does not yet have.
+ * ACTIVE-LINK STATE arrived with Phase 1C-B, when /review became the real receipt
+ * queue rather than a placeholder. `isActiveNavItem` matches on the section prefix
+ * rather than exactly, so the queue entry stays highlighted on a future
+ * /review/[receiptSubmissionId] detail route — a reviewer who has opened a receipt
+ * has not left the queue section.
  *
  * Nothing here is an authorization boundary. Hiding or disabling a link is
  * presentation, not protection: the real decision is made in
@@ -62,12 +66,47 @@ function getInitials(organizationName: string): string {
   return initials.toUpperCase() || FALLBACK_INITIALS;
 }
 
+/**
+ * Whether a nav item is the section currently being viewed.
+ *
+ * PREFIX match, unlike the Retailer portal's exact match — and the difference is
+ * deliberate. There, "Overview" sits at the portal root with every other page nested
+ * beneath it, so a prefix test would light it up everywhere. Here /review IS the
+ * queue, and its only child is a receipt opened FROM that queue, so the section is
+ * genuinely still active on /review/[receiptSubmissionId].
+ *
+ * The boundary check on "/" prevents a sibling like /review-access-denied from
+ * matching, which a bare startsWith would wrongly claim.
+ */
+function isActiveNavItem(pathname: string, href: string): boolean {
+  return pathname === href || pathname.startsWith(`${href}/`);
+}
+
+/** The shared 20px nav glyph. */
+function NavIcon({ children }: { children: React.ReactNode }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.75}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-5 w-5 shrink-0"
+      aria-hidden="true"
+    >
+      {children}
+    </svg>
+  );
+}
+
 export function ReviewShell({
   userDisplayName,
   organizationName,
   children,
 }: ReviewShellProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const pathname = usePathname();
 
   const closeSidebar = useCallback(() => setSidebarOpen(false), []);
 
@@ -110,38 +149,60 @@ export function ReviewShell({
 
         <nav aria-label="Claim Review portal" className="px-3 py-4">
           <ul className="flex flex-col gap-1">
-            {REVIEW_NAV_ITEMS.map((item) => (
-              <li key={item.href}>
-                {/*
-                  Rendered as a non-interactive element rather than a disabled
-                  <Link>: a link that navigates nowhere is a worse affordance than
-                  something that never looked clickable. aria-disabled marks the
-                  state for assistive technology, and the visible "Soon" badge
-                  states it in text rather than by colour alone.
-                */}
-                <div
-                  aria-disabled="true"
-                  className="flex cursor-not-allowed items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium text-slate-400"
-                >
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth={1.75}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    className="h-5 w-5 shrink-0"
-                    aria-hidden="true"
-                  >
-                    {item.icon}
-                  </svg>
-                  {item.label}
-                  <span className="ml-auto rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-                    Soon
-                  </span>
-                </div>
-              </li>
-            ))}
+            {REVIEW_NAV_ITEMS.map((item) => {
+              const active = isActiveNavItem(pathname, item.href);
+
+              return (
+                <li key={item.href}>
+                  {item.disabled ? (
+                    /*
+                      A disabled entry renders as a non-interactive element rather
+                      than a disabled <Link>: a link that navigates nowhere is a
+                      worse affordance than something that never looked clickable.
+                      aria-disabled marks the state for assistive technology, and
+                      the visible "Soon" badge states it in text rather than by
+                      colour alone.
+
+                      No item uses this branch today — the queue is live — but it is
+                      kept so a future portal section can be listed before it works
+                      without reintroducing the pattern from scratch.
+                    */
+                    <div
+                      aria-disabled="true"
+                      className="flex cursor-not-allowed items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium text-slate-400"
+                    >
+                      <NavIcon>{item.icon}</NavIcon>
+                      {item.label}
+                      <span className="ml-auto rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                        Soon
+                      </span>
+                    </div>
+                  ) : (
+                    <Link
+                      href={item.href}
+                      onClick={closeSidebar}
+                      aria-current={active ? "page" : undefined}
+                      className={cn(
+                        "group relative flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500",
+                        active
+                          ? "bg-indigo-50 text-indigo-700"
+                          : "text-slate-600 hover:bg-slate-100 hover:text-slate-900",
+                      )}
+                    >
+                      <span
+                        aria-hidden="true"
+                        className={cn(
+                          "absolute left-0 top-1/2 h-6 w-1 -translate-y-1/2 rounded-r-full bg-indigo-600 transition-opacity",
+                          active ? "opacity-100" : "opacity-0",
+                        )}
+                      />
+                      <NavIcon>{item.icon}</NavIcon>
+                      {item.label}
+                    </Link>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         </nav>
       </aside>
