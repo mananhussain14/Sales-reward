@@ -516,14 +516,28 @@ describe("9. existing portal and Flutter contracts are untouched", () => {
     }
   });
 
-  test("9.2 no migration was added by this milestone", () => {
-    const migrations = readdirSync(join(ROOT, "supabase", "migrations")).filter(
-      (f) => f.endsWith(".sql"),
-    );
-    assert.equal(
-      migrations.length,
-      59,
-      "this is a Web-only milestone; a new migration means the scope grew",
+  test("9.2 no migration was added by the generic-invitation milestone", () => {
+    // Originally a global count pinned at 59. That was correct while this was the
+    // newest milestone, but it made every LATER milestone's legitimate migration fail
+    // here — Phase 1C-A's receipt-review foundation was the first. The claim being
+    // protected was never "the repository has 59 migrations"; it was "the generic
+    // invitation work needed no schema change". That is what is asserted now, and it
+    // is checkable forever: no migration anywhere mentions this flow's objects.
+    const dir = join(ROOT, "supabase", "migrations");
+    const offenders = readdirSync(dir)
+      .filter((f) => f.endsWith(".sql"))
+      .filter((f) => {
+        const sql = readFileSync(join(dir, f), "utf8");
+        return (
+          sql.includes("invitations/account-setup") ||
+          sql.includes("account_setup") ||
+          sql.includes("ACCOUNT_READY_NOTICE")
+        );
+      });
+    assert.deepEqual(
+      offenders,
+      [],
+      "the generic invitation flow is Web-only; no migration may implement it",
     );
   });
 

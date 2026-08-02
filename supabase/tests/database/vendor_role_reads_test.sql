@@ -1069,11 +1069,17 @@ select is(
 select is(pg_temp.permission_names(pg_temp.role_id('FINANCE_ADMIN')), '{}'::text[],
   'a role with no permissions returns an EMPTY list, not NULL and not the whole catalogue');
 
--- And the reviewer's single portal permission is asserted positively, so the row this
--- assertion used to cover is still covered rather than merely moved away from.
+-- And the reviewer's permissions are asserted positively, so the row this assertion
+-- used to cover is still covered rather than merely moved away from.
+--
+-- Phase 1C-A [20260819090000] added the two receipt-review permissions, so the expected
+-- list grew from one name to three. The assertion still pins the EXACT set, so a fourth
+-- permission arriving unnoticed fails here.
 select is(pg_temp.permission_names(pg_temp.role_id('CLAIM_REVIEWER')),
-  array['Open the Claim Review portal']::text[],
-  'CLAIM_REVIEWER holds exactly its one portal permission — no receipt access');
+  array['Decide a submitted receipt',
+        'Open the Claim Review portal',
+        'Read the Claim Review queue']::text[],
+  'CLAIM_REVIEWER holds exactly its portal permission and the two review permissions');
 
 select is(pg_temp.permission_names(pg_temp.role_id('UNDESCRIBED_ROLE')), '{}'::text[],
   'and so does a freshly defined role — a role with no mappings is never defaulted to all permissions');

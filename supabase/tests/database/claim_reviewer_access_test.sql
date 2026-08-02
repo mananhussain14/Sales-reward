@@ -185,10 +185,21 @@ select is(
 
 -- THE PORTAL-ONLY GUARANTEE. Phase 1B must not create the permissions that will
 -- authorize receipt data, or a later milestone would find them already granted.
+-- SUPERSEDED BY PHASE 1C-A [20260819090000], WHICH CREATED THIS PERMISSION.
+--
+-- The original assertion read "RECEIPT_REVIEW_READ does NOT exist yet". Its purpose was
+-- never the absence itself — it was that Phase 1B must not hand receipt access to
+-- anyone. Phase 1C-A grants it deliberately, so the absence check is replaced by the
+-- stronger form of the same guarantee: it exists, and it reaches exactly one role.
+-- Deleting the assertion would have dropped the protection; this keeps it.
 select is(
-  (select count(*)::integer from public.permissions where code = 'RECEIPT_REVIEW_READ'),
-  0,
-  'A5. RECEIPT_REVIEW_READ does NOT exist yet — receipt reads are Phase 1C'
+  (select coalesce(string_agg(r.code, ',' order by r.code), '(none)')
+   from public.role_permissions rp
+   join public.roles r on r.id = rp.role_id
+   join public.permissions p on p.id = rp.permission_id
+   where p.code = 'RECEIPT_REVIEW_READ'),
+  'CLAIM_REVIEWER',
+  'A5. RECEIPT_REVIEW_READ reaches CLAIM_REVIEWER and no other role'
 );
 
 select is(
@@ -197,14 +208,20 @@ select is(
   'A6. RECEIPT_VERIFY does NOT exist yet — verification is a later milestone'
 );
 
+-- SUPERSEDED BY PHASE 1C-A [20260819090000], WHICH ADDED TWO PERMISSIONS.
+--
+-- The original assertion pinned the count at ONE. Its purpose was to stop the reviewer
+-- role quietly accumulating capability, so the successor pins the exact SET rather than
+-- a number — which is strictly stronger: a fourth permission, or a different third one,
+-- now fails just as loudly, and the failure names what changed.
 select is(
-  (select count(*)::integer
+  (select string_agg(p.code, ',' order by p.code)
    from public.role_permissions rp
    join public.roles r on r.id = rp.role_id
    join public.permissions p on p.id = rp.permission_id
    where r.code = 'CLAIM_REVIEWER'),
-  1,
-  'A7. CLAIM_REVIEWER holds exactly ONE permission — the portal, and nothing more'
+  'CLAIM_REVIEW_PORTAL_READ,RECEIPT_REVIEW_DECIDE,RECEIPT_REVIEW_READ',
+  'A7. CLAIM_REVIEWER holds exactly the portal permission plus the two review permissions'
 );
 
 -- ============================================================================
