@@ -105,6 +105,13 @@ now, with its meaning fixed and its tests written, so Phase 1D-B has one obvious
 predicate to depend on instead of re-deriving the anti-join and getting it subtly
 wrong.
 
+**The first enforced consumer shipped in Phase 1D-A:**
+`finalize_claim_receipt_sale_header` calls this helper under the receipt row lock,
+in both the RPC and the `verified_sales` insert assertion. A receipt with an
+unreversed exclusion — the hosted `TEST_DATA` screenshot among them — can never
+become an authoritative sale. See
+`docs/verified-sale-header-database-foundation.md`.
+
 It is **not granted to any browser role** — `authenticated`, `anon` and `PUBLIC`
 are all revoked — so it adds no executable surface. It is an internal helper for
 other `SECURITY DEFINER` functions, exactly like
