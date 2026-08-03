@@ -309,8 +309,9 @@ select is(
   (select count(*)::integer from public.role_permissions rp
    join public.roles r on r.id = rp.role_id
    where r.code = 'CLAIM_REVIEWER'),
-  5,
-  'A4. CLAIM_REVIEWER now holds exactly five permissions'
+  6,
+  -- Phase 1D-B added RECEIPT_SALE_ITEMS_FINALIZE by approval.
+  'A4. CLAIM_REVIEWER now holds exactly six permissions'
 );
 
 select is(
@@ -319,8 +320,8 @@ select is(
    join public.roles r on r.id = rp.role_id
    join public.permissions p on p.id = rp.permission_id
    where r.code = 'CLAIM_REVIEWER'),
-  'CLAIM_REVIEW_PORTAL_READ,RECEIPT_QUALIFICATION_CLASSIFY,RECEIPT_REVIEW_DECIDE,RECEIPT_REVIEW_READ,RECEIPT_SALE_HEADER_FINALIZE',
-  'A5. and they are exactly the portal, review, classify and finalize permissions'
+  'CLAIM_REVIEW_PORTAL_READ,RECEIPT_QUALIFICATION_CLASSIFY,RECEIPT_REVIEW_DECIDE,RECEIPT_REVIEW_READ,RECEIPT_SALE_HEADER_FINALIZE,RECEIPT_SALE_ITEMS_FINALIZE',
+  'A5. and they are exactly the portal, review, classify and both finalize permissions'
 );
 
 -- The submission-side permissions belong to Sales Staff and must not have moved.
@@ -866,10 +867,11 @@ select is(
   (select count(*)::integer from pg_class c
    where c.relnamespace = 'public'::regnamespace and c.relkind = 'r'
      and (c.relname like '%reward%' or c.relname like '%coin%'
-       or c.relname like '%balance%' or c.relname like '%payout%'
-       or c.relname like '%verified_sale_item%')),
+       or c.relname like '%balance%' or c.relname like '%payout%')),
   0,
-  'K4. no reward, coin, balance, payout or verified-sale-item table exists'
+  -- The sale-ITEM table stopped being forbidden in Phase 1D-B, which created
+  -- public.verified_sale_items by approval; K4b pins the sale surface exactly.
+  'K4. no reward, coin, balance or payout table exists'
 );
 
 select is(
@@ -877,8 +879,8 @@ select is(
    from pg_class c
    where c.relnamespace = 'public'::regnamespace and c.relkind = 'r'
      and c.relname like '%verified_sale%'),
-  'verified_sales',
-  'K4b. and the only sale object is the single approved Phase 1D-A header table'
+  'verified_sale_items,verified_sales',
+  'K4b. and the only sale objects are the approved 1D-A header and 1D-B item tables'
 );
 
 -- The Flutter contract is untouched.

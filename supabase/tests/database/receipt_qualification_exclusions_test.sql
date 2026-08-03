@@ -305,8 +305,9 @@ select is(
    join public.roles r on r.id = rp.role_id
    join public.permissions p on p.id = rp.permission_id
    where r.code = 'CLAIM_REVIEWER'),
-  'CLAIM_REVIEW_PORTAL_READ,RECEIPT_QUALIFICATION_CLASSIFY,RECEIPT_REVIEW_DECIDE,RECEIPT_REVIEW_READ,RECEIPT_SALE_HEADER_FINALIZE',
-  'A3. CLAIM_REVIEWER now holds exactly its five approved permissions'
+  -- Phase 1D-B adds RECEIPT_SALE_ITEMS_FINALIZE by approval.
+  'CLAIM_REVIEW_PORTAL_READ,RECEIPT_QUALIFICATION_CLASSIFY,RECEIPT_REVIEW_DECIDE,RECEIPT_REVIEW_READ,RECEIPT_SALE_HEADER_FINALIZE,RECEIPT_SALE_ITEMS_FINALIZE',
+  'A3. CLAIM_REVIEWER now holds exactly its six approved permissions'
 );
 
 -- SUPERSEDED BY PHASE 1D-A, which added the approved RECEIPT_SALE_HEADER_FINALIZE.
@@ -324,8 +325,10 @@ select is(
 select is(
   (select coalesce(string_agg(code, ',' order by code), 'NONE')::text
    from public.permissions where code ~ 'SALE'),
-  'RECEIPT_SALE_HEADER_FINALIZE',
-  'A4b. and the only sale permission is the approved sale-header finalize permission'
+  -- Phase 1D-B adds the approved item-finalize permission beside it. Reward
+  -- machinery above stays forbidden entirely.
+  'RECEIPT_SALE_HEADER_FINALIZE,RECEIPT_SALE_ITEMS_FINALIZE',
+  'A4b. and the only sale permissions are the two approved finalize permissions'
 );
 
 select is(
@@ -990,18 +993,19 @@ select is(
      and (table_name ilike '%reward%' or table_name ilike '%coin%'
           or table_name ilike '%ledger%' or table_name ilike '%wallet%'
           or table_name ilike '%balance%' or table_name ilike '%payout%'
-          or table_name ilike '%verified_sale_item%'
           or table_name ilike '%campaign_qualification%')),
   'NONE',
-  'J8. no reward, coin, ledger, wallet, balance, payout, sale-item or campaign-qualification table was created'
+  -- The sale-ITEM table is no longer forbidden: Phase 1D-B created
+  -- public.verified_sale_items by approval, and J8b pins the sale surface exactly.
+  'J8. no reward, coin, ledger, wallet, balance, payout or campaign-qualification table was created'
 );
 
 select is(
   (select coalesce(string_agg(table_name, ',' order by table_name), 'NONE')::text
    from information_schema.tables
    where table_schema = 'public' and table_name ilike '%verified_sale%'),
-  'verified_sales',
-  'J8b. and the only sale object is the single approved header table'
+  'verified_sale_items,verified_sales',
+  'J8b. and the only sale objects are the two approved tables'
 );
 
 select is(

@@ -220,8 +220,9 @@ select is(
    join public.roles r on r.id = rp.role_id
    join public.permissions p on p.id = rp.permission_id
    where r.code = 'CLAIM_REVIEWER'),
-  'CLAIM_REVIEW_PORTAL_READ,RECEIPT_QUALIFICATION_CLASSIFY,RECEIPT_REVIEW_DECIDE,RECEIPT_REVIEW_READ,RECEIPT_SALE_HEADER_FINALIZE',
-  'A7. CLAIM_REVIEWER holds exactly the portal, review, classify and finalize permissions'
+  -- Phase 1D-B adds RECEIPT_SALE_ITEMS_FINALIZE by approval.
+  'CLAIM_REVIEW_PORTAL_READ,RECEIPT_QUALIFICATION_CLASSIFY,RECEIPT_REVIEW_DECIDE,RECEIPT_REVIEW_READ,RECEIPT_SALE_HEADER_FINALIZE,RECEIPT_SALE_ITEMS_FINALIZE',
+  'A7. CLAIM_REVIEWER holds exactly the portal, review, classify and both finalize permissions'
 );
 
 -- ============================================================================
