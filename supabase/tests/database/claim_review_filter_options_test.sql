@@ -511,8 +511,10 @@ select is(
    join public.roles r on r.id = rp.role_id
    join public.permissions p on p.id = rp.permission_id
    where r.code = 'CLAIM_REVIEWER'),
-  'CLAIM_REVIEW_PORTAL_READ,RECEIPT_QUALIFICATION_CLASSIFY,RECEIPT_REVIEW_DECIDE,RECEIPT_REVIEW_READ,RECEIPT_SALE_HEADER_FINALIZE',
-  'G7. and CLAIM_REVIEWER still holds exactly its five permissions'
+  -- Phase 1D-B adds RECEIPT_SALE_ITEMS_FINALIZE by approval. The exact SET is
+  -- still pinned, so a seventh permission still fails loudly and names itself.
+  'CLAIM_REVIEW_PORTAL_READ,RECEIPT_QUALIFICATION_CLASSIFY,RECEIPT_REVIEW_DECIDE,RECEIPT_REVIEW_READ,RECEIPT_SALE_HEADER_FINALIZE,RECEIPT_SALE_ITEMS_FINALIZE',
+  'G7. and CLAIM_REVIEWER still holds exactly its six permissions'
 );
 
 select ok(

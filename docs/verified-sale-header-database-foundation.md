@@ -348,4 +348,6 @@ state and offers no finalization action at all. See
 
 **Then (Phase 1D-B):** product items and quantities, attached to
 `verified_sales.id`. The header deliberately carries no product column so that
-work can add a table without reshaping this one.
+work could add tables without reshaping this one — which is exactly what happened.
+See `docs/receipt-product-proposals-and-sale-items-foundation.md`; migration 64
+adds three tables and touches nothing here.

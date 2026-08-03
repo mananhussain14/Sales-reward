@@ -486,15 +486,21 @@ describe("5. migration and milestone boundaries", () => {
   test("5.1 Phase 1D-0's migration is present, unrenamed and still exactly one", () => {
     const dir = join(ROOT, "supabase", "migrations");
     const files = readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();
-    assert.equal(files.length, 63);
+    // Phase 1D-B added migration 64 by approval. The running total is pinned in
+    // one place; what THIS file owns is that Phase 1D-0 still contributes exactly
+    // one migration, in its original position, under its original name.
+    assert.equal(files.length, 64);
     assert.equal(
       files.filter((f) => f.includes("receipt_qualification_exclusions")).length,
       1,
       "Phase 1D-0 must contribute exactly one migration",
     );
     assert.equal(files[61], "20260820090000_receipt_qualification_exclusions.sql");
-    // Phase 1D-A's migration is the only one after it.
     assert.equal(files[62], "20260821090000_verified_sale_headers.sql");
+    assert.equal(
+      files[63],
+      "20260822090000_receipt_product_proposals_and_sale_items.sql",
+    );
   });
 
   test("5.2 the migration is additive: no drop, alter-of-existing, update or delete", () => {

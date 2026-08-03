@@ -338,8 +338,9 @@ select is(
    join public.roles r on r.id = rp.role_id
    join public.permissions p on p.id = rp.permission_id
    where r.code = 'CLAIM_REVIEWER'),
-  'CLAIM_REVIEW_PORTAL_READ,RECEIPT_QUALIFICATION_CLASSIFY,RECEIPT_REVIEW_DECIDE,RECEIPT_REVIEW_READ,RECEIPT_SALE_HEADER_FINALIZE',
-  'A3. CLAIM_REVIEWER now holds exactly its five approved permissions');
+  -- Phase 1D-B adds RECEIPT_SALE_ITEMS_FINALIZE by approval.
+  'CLAIM_REVIEW_PORTAL_READ,RECEIPT_QUALIFICATION_CLASSIFY,RECEIPT_REVIEW_DECIDE,RECEIPT_REVIEW_READ,RECEIPT_SALE_HEADER_FINALIZE,RECEIPT_SALE_ITEMS_FINALIZE',
+  'A3. CLAIM_REVIEWER now holds exactly its six approved permissions');
 
 select is(
   (select count(*)::integer from public.permissions
@@ -836,8 +837,17 @@ select is(pg_temp.try_sql('update public.verified_sales set total_minor = 1'),
   'REFUSED:23514', 'I1. UPDATE is refused');
 select is(pg_temp.try_sql('delete from public.verified_sales'),
   'REFUSED:23514', 'I2. DELETE is refused');
-select is(pg_temp.try_sql('truncate public.verified_sales'),
-  'REFUSED:23514', 'I3. TRUNCATE is refused');
+-- Phase 1D-B made verified_sales a foreign-key TARGET (verified_sale_items and
+-- receipt_product_review_decisions both reference it), so PostgreSQL now refuses
+-- TRUNCATE with 0A000 before the guard trigger can fire. The refusal is the
+-- durable property; I3b pins the guard itself so it cannot be quietly dropped.
+select matches(pg_temp.try_sql('truncate public.verified_sales'),
+  '^REFUSED:', 'I3. TRUNCATE is refused');
+select is(
+  (select count(*)::integer from pg_trigger t
+   where t.tgrelid = 'public.verified_sales'::regclass
+     and t.tgname = 'verified_sales_guard_truncate' and not t.tgisinternal),
+  1, 'I3b. and the TRUNCATE guard trigger is still installed');
 
 select is(pg_temp.finalize(pg_temp.id('r_main')), 'ALREADY_FINALIZED',
   'I4. the same reviewer retrying gets ALREADY_FINALIZED');
@@ -1108,12 +1118,14 @@ select is(
   (select coalesce(string_agg(table_name, ','), 'NONE')::text
    from information_schema.tables
    where table_schema='public'
-     and (table_name ilike '%verified_sale_item%' or table_name ilike '%reward%'
+     and (table_name ilike '%reward%'
           or table_name ilike '%coin%' or table_name ilike '%ledger%'
           or table_name ilike '%wallet%' or table_name ilike '%balance%'
           or table_name ilike '%payout%' or table_name ilike '%campaign_qualification%')),
   'NONE',
-  'M7. no sale-item, reward, coin, ledger, wallet, balance, payout or campaign-qualification table was created');
+  -- The sale-ITEM table is Phase 1D-B's approved work and is no longer forbidden
+  -- here; this suite still owns the rule that NO reward machinery exists.
+  'M7. no reward, coin, ledger, wallet, balance, payout or campaign-qualification table was created');
 
 select is(
   (select string_agg(t.tgname, ',' order by t.tgname) from pg_trigger t

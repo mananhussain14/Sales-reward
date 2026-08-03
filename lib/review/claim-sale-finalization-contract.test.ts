@@ -771,12 +771,21 @@ describe("8. the sale-header panel", () => {
 
 // ============================================================================
 describe("9. milestone boundaries", () => {
-  test("9.1 no migration was added — the count is still 63", () => {
+  // SUPERSEDED BY PHASE 1D-B, WHICH ADDED MIGRATION 64 BY APPROVAL.
+  //
+  // The durable property this Web milestone owns is that IT added no SQL — which
+  // 9.2 asserts directly against its own files. The running total is pinned here
+  // with the current number so it still fails loudly on an unapproved 65th.
+  test("9.1 the Phase 1D-A migration is unrenamed, and 1D-B's is the only one after it", () => {
     const dir = join(ROOT, "supabase", "migrations");
     const files = readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();
-    assert.equal(files.length, 63);
+    assert.equal(files.length, 64);
     assert.equal(files[62], "20260821090000_verified_sale_headers.sql");
-    assert.ok(!files.some((f) => f.startsWith("2026082") && f > "20260821090000_z"));
+    assert.equal(
+      files[63],
+      "20260822090000_receipt_product_proposals_and_sale_items.sql",
+    );
+    assert.ok(!files.some((f) => f > "20260822090000_z"), "no migration 65 exists");
   });
 
   test("9.2 this milestone adds no SQL of its own", () => {
