@@ -511,8 +511,8 @@ select is(
    join public.roles r on r.id = rp.role_id
    join public.permissions p on p.id = rp.permission_id
    where r.code = 'CLAIM_REVIEWER'),
-  'CLAIM_REVIEW_PORTAL_READ,RECEIPT_REVIEW_DECIDE,RECEIPT_REVIEW_READ',
-  'G7. and CLAIM_REVIEWER still holds exactly its three permissions'
+  'CLAIM_REVIEW_PORTAL_READ,RECEIPT_QUALIFICATION_CLASSIFY,RECEIPT_REVIEW_DECIDE,RECEIPT_REVIEW_READ',
+  'G7. and CLAIM_REVIEWER still holds exactly its four permissions'
 );
 
 select ok(
