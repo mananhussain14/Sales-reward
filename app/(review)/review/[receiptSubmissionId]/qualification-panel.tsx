@@ -1,6 +1,15 @@
 "use client";
 
-import { useActionState, useEffect, useId, useRef, useState } from "react";
+import {
+  useActionState,
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
+import { useRouter } from "next/navigation";
 import { classifyReceiptQualificationAction } from "@/app/(review)/review/[receiptSubmissionId]/qualification-actions";
 import {
   type QualificationActionState,
@@ -15,6 +24,12 @@ import {
   reasonRequiresNote,
   type ExclusionReason,
 } from "@/lib/review/claim-receipt-qualification-input";
+import {
+  REFRESHING_MESSAGE,
+  SLOW_REQUEST_MESSAGE,
+  SLOW_REQUEST_NOTICE_MS,
+  shouldRefreshAfterSettlement,
+} from "@/lib/review/claim-receipt-qualification-settlement";
 import type { ClaimReceiptQualification } from "@/lib/review/claim-receipt-qualification";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -96,6 +111,72 @@ export function QualificationPanel({
     }
   }, [open]);
 
+  // ==========================================================================
+  // SETTLEMENT: outcome first, refresh second
+  // ==========================================================================
+  // The action no longer revalidates this route, so `pending` clears as soon as
+  // the database answers. The panel shows that answer, and only then asks the
+  // server for fresh data. The client router refresh merges the new payload
+  // "without losing unaffected client-side React (e.g. useState)", so `state` —
+  // and the outcome the reviewer is reading — survives it.
+  //
+  // Requested ONCE per settlement, tracked in a ref rather than state so the
+  // request itself cannot re-trigger the effect that made it.
+  const router = useRouter();
+  const [isRefreshing, startRefresh] = useTransition();
+  const refreshRequested = useRef(false);
+
+  // ONE call site, deliberately. Both the automatic post-settlement refresh and
+  // the manual uncertain-result button go through here, so the re-read of this
+  // route exists in exactly one place and cannot quietly multiply.
+  const refreshQualification = useCallback(() => {
+    startRefresh(() => {
+      router.refresh();
+    });
+  }, [router]);
+
+  useEffect(() => {
+    if (!shouldRefreshAfterSettlement(state)) return;
+    if (refreshRequested.current) return;
+    refreshRequested.current = true;
+    refreshQualification();
+  }, [state, refreshQualification]);
+
+  // A slow request is still a request. This ONLY changes what is on screen: it
+  // cancels nothing, resubmits nothing, claims no failure and touches no
+  // database state.
+  //
+  // The timer is armed by the SUBMIT EVENT rather than by an effect, because the
+  // thing being timed is the submission — and starting it where it belongs keeps
+  // state out of an effect. It is disarmed when the action settles, and the flag
+  // is reset during render using the same adjust-state-during-render pattern the
+  // dialog above already uses.
+  const [slow, setSlow] = useState(false);
+  const slowTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function armSlowNotice() {
+    if (slowTimer.current !== null) clearTimeout(slowTimer.current);
+    slowTimer.current = setTimeout(() => setSlow(true), SLOW_REQUEST_NOTICE_MS);
+  }
+
+  if (!pending && slow) setSlow(false);
+
+  useEffect(() => {
+    if (pending) return;
+    if (slowTimer.current !== null) {
+      clearTimeout(slowTimer.current);
+      slowTimer.current = null;
+    }
+  }, [pending]);
+
+  // Nothing should outlive the panel.
+  useEffect(
+    () => () => {
+      if (slowTimer.current !== null) clearTimeout(slowTimer.current);
+    },
+    [],
+  );
+
   // Escape closes — but never mid-submit, so a stray keypress cannot leave a
   // reviewer unsure whether an immutable event was recorded.
   useEffect(() => {
@@ -143,6 +224,7 @@ export function QualificationPanel({
         </Alert>
       ) : null}
 
+      {/* THE AUTHORITATIVE ANSWER, rendered before anything is re-fetched. */}
       {state.settled ? (
         <>
           <Alert
@@ -157,20 +239,64 @@ export function QualificationPanel({
           >
             {state.message}
           </Alert>
-          <p className="mt-3 text-xs text-slate-500">
-            Reload this page to see the current qualification state.
-          </p>
+
+          {isRefreshing ? (
+            // Says the panel is catching up, NOT that the write is in doubt. The
+            // sentence above it has already stated what the database did.
+            <p role="status" className="mt-3 text-xs text-slate-500">
+              {REFRESHING_MESSAGE}
+            </p>
+          ) : (
+            <div className="mt-4 border-t border-slate-200 pt-4">
+              {qualification ? (
+                excluded ? (
+                  <ExcludedBody qualification={qualification} />
+                ) : (
+                  <NotExcludedBody />
+                )
+              ) : (
+                <p className="text-sm text-slate-600">
+                  The current qualification state could not be re-read. Reload
+                  the page to see it. Your recorded result above is unaffected.
+                </p>
+              )}
+            </div>
+          )}
         </>
       ) : null}
 
+      {/* An UNCERTAIN result is neither success nor failure, and is toned and
+          worded as its own thing so it can never read as either. */}
       {state.formError ? (
-        <Alert tone="error" role="alert" className="mt-3">
-          {state.formError}
-        </Alert>
+        <>
+          <Alert
+            tone={state.uncertain ? "warning" : "error"}
+            role="alert"
+            className="mt-3"
+          >
+            {state.formError}
+          </Alert>
+          {state.uncertain ? (
+            <div className="mt-3">
+              <button
+                type="button"
+                onClick={refreshQualification}
+                disabled={isRefreshing}
+                className={buttonClasses({ variant: "secondary" })}
+              >
+                {isRefreshing ? "Refreshing…" : "Refresh qualification status"}
+              </button>
+            </div>
+          ) : null}
+        </>
       ) : null}
 
       {!unavailable && !state.settled ? (
-        <form action={formAction} className="mt-3">
+        <form
+          action={formAction}
+          onSubmit={armSlowNotice}
+          className="mt-3"
+        >
           <input
             type="hidden"
             name="receiptSubmissionId"
@@ -377,8 +503,11 @@ export function QualificationPanel({
                     </p>
                   )}
                   {pending && (
+                    // One live region for the whole submit lifecycle, so a
+                    // screen reader hears "Recording…" once and then the slow
+                    // notice once — not the same sentence on a timer.
                     <p role="status" className="text-slate-600">
-                      Recording…
+                      {slow ? SLOW_REQUEST_MESSAGE : "Recording…"}
                     </p>
                   )}
                 </div>

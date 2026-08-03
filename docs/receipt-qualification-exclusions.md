@@ -218,6 +218,15 @@ Nothing in this implementation hard-codes that receipt, its filename, its review
 or any UUID. The action works for any authorized `VERIFIED` receipt, and a test
 pins the absence of hard-coded identifiers.
 
+## How the panel reports a write
+
+The Server Action returns the authoritative outcome and revalidates nothing, then
+the panel renders that outcome and re-reads the route once. An incomplete request
+is reported as *uncertain* rather than as failure, and idempotency remains the
+database's. See `docs/server-action-authoritative-settlement.md` — that document
+exists because an earlier version of this panel revalidated its own route and left
+a committed, audited exclusion showing "Recording…" indefinitely.
+
 ## Next
 
 **Phase 1D-A** — the authoritative sale header: `verified_sales`, the resolved UTC

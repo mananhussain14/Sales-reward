@@ -34,6 +34,16 @@ import {
   REASONS_REQUIRING_NOTE,
   validateQualificationInput,
 } from "./claim-receipt-qualification-input.ts";
+import {
+  isQualificationOutcome,
+  QUALIFICATION_OUTCOMES,
+  REFRESHING_MESSAGE,
+  settleQualificationOutcome,
+  shouldRefreshAfterSettlement,
+  SLOW_REQUEST_MESSAGE,
+  SLOW_REQUEST_NOTICE_MS,
+  UNCERTAIN_RESULT_MESSAGE,
+} from "./claim-receipt-qualification-settlement.ts";
 
 const ROOT = join(import.meta.dirname, "..", "..");
 const DETAIL_DIR = join(ROOT, "app", "(review)", "review", "[receiptSubmissionId]");
@@ -45,6 +55,9 @@ const ACTIONS = join(DETAIL_DIR, "qualification-actions.ts");
 const ACTION_STATE = join(DETAIL_DIR, "qualification-action-state.ts");
 const PANEL = join(DETAIL_DIR, "qualification-panel.tsx");
 const DETAIL_PAGE = join(DETAIL_DIR, "page.tsx");
+const SETTLEMENT_MOD = join(
+  ROOT, "lib", "review", "claim-receipt-qualification-settlement.ts",
+);
 const MIGRATION = join(
   ROOT, "supabase", "migrations", "20260820090000_receipt_qualification_exclusions.sql",
 );
@@ -197,31 +210,45 @@ describe("2. the write adapter and Server Action", () => {
     }
   });
 
-  test("2.10 only the detail path is revalidated, not the queue", () => {
-    assert.match(a, /revalidatePath\(`\/review\/\$\{receiptSubmissionId\}`\)/);
-    assert.ok(
-      !/revalidatePath\("\/review"\)/.test(a),
-      "a decided receipt is already absent from the queue",
-    );
+  // SUPERSEDED BY THE SETTLEMENT CORRECTION.
+  //
+  // 2.10 and 2.11 used to pin that the action revalidated the detail path and did so only
+  // after an authoritative outcome. That was the behaviour which held the action's reply
+  // behind a cross-region re-render of the very page the reviewer was on, leaving a
+  // committed, audited exclusion showing "Recording…" forever.
+  //
+  // The successors are STRICTER, not weaker: the action must now revalidate NOTHING, and
+  // must not even import next/cache, so the hang cannot be reintroduced by accident.
+  test("2.10 the action revalidates nothing — its reply is never held behind a re-render", () => {
+    assert.ok(!/revalidatePath/.test(a), "the action revalidates a path again");
+    assert.ok(!/from "next\/cache"/.test(a), "the action imports next/cache again");
   });
 
-  test("2.11 revalidation happens only after an authoritative outcome", () => {
-    const rev = a.indexOf("revalidatePath(");
-    assert.ok(a.indexOf('result.status === "unavailable"') < rev);
-    assert.ok(a.indexOf('result.status === "refused"') < rev);
+  test("2.11 the route is re-read by the panel, after the outcome, exactly once", () => {
+    const p = codeOf(PANEL);
+    assert.equal(
+      (p.match(/router\.refresh\(/g) ?? []).length,
+      1,
+      "the panel must own exactly one route re-read",
+    );
+    // The refresh is gated on the shared settlement predicate rather than on an ad-hoc
+    // boolean, so it can never fire while the RPC is still in flight.
+    assert.match(p, /shouldRefreshAfterSettlement\(state\)/);
+    assert.match(p, /refreshRequested\.current/);
   });
 
   test("2.12 a settled state short-circuits a resubmission", () => {
     assert.match(a, /if \(prevState\.settled\)\s*\{\s*return prevState;/);
   });
 
-  test("2.13 all five outcomes are handled, and an outage never settles", () => {
-    for (const o of ["EXCLUDED", "ALREADY_EXCLUDED", "REINSTATED", "ALREADY_REINSTATED", "CONFLICT"]) {
-      assert.ok(a.includes(o), `${o} must be handled`);
-    }
+  test("2.13 an outage never settles and never claims failure", () => {
     const outage = a.match(/result\.status === "unavailable"[\s\S]*?\n  \}/);
     assert.ok(outage);
-    assert.ok(!/settled: true/.test(outage[0]));
+    assert.ok(!/settled: true/.test(outage[0]), "an outage must not settle");
+    assert.match(outage[0], /uncertain: true/, "an outage must be marked uncertain");
+    // The five authoritative outcomes now live in the pure settlement module, where they
+    // are exercised behaviourally rather than grepped for. §6 owns that.
+    assert.match(a, /settleQualificationOutcome\(result\.outcome\)/);
   });
 
   test("2.14 an unreadable outcome is unavailable, never success", () => {
@@ -537,5 +564,210 @@ describe("5. migration and milestone boundaries", () => {
   test("5.11 the Phase 1C-C document notes the separate qualification state", () => {
     const doc = read(join(ROOT, "docs", "claim-reviewer-receipt-detail-and-decision.md"));
     assert.match(doc, /qualification/i);
+  });
+});
+
+// ============================================================================
+// 6. AUTHORITATIVE SETTLEMENT (real behavioural tests of the pure module)
+//
+// These call the mapping instead of grepping for its strings. Before the
+// settlement correction the outcome copy lived inside a `"use server"` file and
+// could only be source-scanned; moving it into a pure module is what makes
+// "does CONFLICT settle without claiming success?" an assertion rather than a
+// substring search.
+// ============================================================================
+describe("6. authoritative settlement", () => {
+  test("6.1 exactly five authoritative outcomes exist", () => {
+    assert.deepEqual(
+      [...QUALIFICATION_OUTCOMES],
+      ["EXCLUDED", "ALREADY_EXCLUDED", "REINSTATED", "ALREADY_REINSTATED", "CONFLICT"],
+    );
+    assert.ok(isQualificationOutcome("EXCLUDED"));
+    assert.ok(!isQualificationOutcome("UNAVAILABLE"));
+    assert.ok(!isQualificationOutcome("SUCCESS"));
+  });
+
+  test("6.2 every outcome settles, so none can re-offer the form", () => {
+    for (const o of QUALIFICATION_OUTCOMES) {
+      assert.equal(settleQualificationOutcome(o).settled, true, o);
+      assert.equal(settleQualificationOutcome(o).outcome, o);
+      assert.ok(settleQualificationOutcome(o).message.length > 0, o);
+    }
+  });
+
+  test("6.3 only the two writing outcomes report a change", () => {
+    assert.equal(settleQualificationOutcome("EXCLUDED").changed, true);
+    assert.equal(settleQualificationOutcome("REINSTATED").changed, true);
+    assert.equal(settleQualificationOutcome("ALREADY_EXCLUDED").changed, false);
+    assert.equal(settleQualificationOutcome("ALREADY_REINSTATED").changed, false);
+    assert.equal(settleQualificationOutcome("CONFLICT").changed, false);
+  });
+
+  test("6.4 EXCLUDED states the decision is unchanged and promises no reward", () => {
+    const m = settleQualificationOutcome("EXCLUDED").message;
+    assert.match(m, /VERIFIED review decision is unchanged/);
+    assert.match(m, /cannot become an authoritative sale/);
+  });
+
+  test("6.5 REINSTATED is a reversal event and creates no sale or reward", () => {
+    const m = settleQualificationOutcome("REINSTATED").message;
+    assert.match(m, /reversal event/);
+    assert.match(m, /original exclusion remains/);
+    assert.match(m, /does not create a sale or a reward/);
+  });
+
+  test("6.6 the idempotent outcomes are not reported as failures", () => {
+    for (const o of ["ALREADY_EXCLUDED", "ALREADY_REINSTATED"] as const) {
+      const m = settleQualificationOutcome(o).message;
+      assert.match(m, /already/i);
+      assert.match(m, /no second event was created/);
+      assert.ok(!/error|failed|could not/i.test(m), `${o} reads as a failure`);
+    }
+  });
+
+  test("6.7 CONFLICT says nothing was recorded and names nobody", () => {
+    const m = settleQualificationOutcome("CONFLICT").message;
+    assert.match(m, /changed elsewhere/);
+    assert.match(m, /nothing was recorded/);
+    assert.ok(!/reviewer|user|by [A-Z]/.test(m), "CONFLICT leaks another actor");
+    assert.ok(!/[0-9a-f]{8}-[0-9a-f]{4}/i.test(m), "CONFLICT leaks an identifier");
+  });
+
+  test("6.8 no outcome message promises a coin, campaign or payout", () => {
+    for (const o of QUALIFICATION_OUTCOMES) {
+      const m = settleQualificationOutcome(o).message;
+      assert.ok(!/coin|payout|campaign qualified|balance/i.test(m), o);
+    }
+  });
+
+  test("6.9 an uncertain result never claims the write failed", () => {
+    assert.match(UNCERTAIN_RESULT_MESSAGE, /could not confirm/i);
+    assert.match(UNCERTAIN_RESULT_MESSAGE, /Refresh/i);
+    assert.ok(
+      !/nothing was recorded|was not recorded|did not save/i.test(UNCERTAIN_RESULT_MESSAGE),
+      "uncertain copy asserts a failure it cannot know",
+    );
+    // It must also not imply success. "recorded" legitimately appears inside
+    // "whether this was recorded", so this looks for an ASSERTION of success —
+    // an opening claim or a completed-tense one — rather than the bare word.
+    assert.ok(
+      !/^Recorded|successfully|has been recorded|is recorded/i.test(
+        UNCERTAIN_RESULT_MESSAGE,
+      ),
+      "uncertain copy asserts success",
+    );
+    // The uncertainty must be stated before the word "recorded" ever appears.
+    assert.ok(
+      UNCERTAIN_RESULT_MESSAGE.indexOf("could not confirm") <
+        UNCERTAIN_RESULT_MESSAGE.indexOf("recorded"),
+    );
+    // And it must point at database idempotency rather than at a retry button.
+    assert.match(UNCERTAIN_RESULT_MESSAGE, /will not create a second event/);
+  });
+
+  test("6.10 refresh happens only after a settled, certain outcome", () => {
+    assert.equal(shouldRefreshAfterSettlement({ settled: true, uncertain: false }), true);
+    // still pending / validation failure
+    assert.equal(shouldRefreshAfterSettlement({ settled: false, uncertain: false }), false);
+    // uncertain transport failure — the reviewer refreshes deliberately instead
+    assert.equal(shouldRefreshAfterSettlement({ settled: false, uncertain: true }), false);
+    assert.equal(shouldRefreshAfterSettlement({ settled: true, uncertain: true }), false);
+  });
+
+  test("6.11 the slow notice tells the reviewer not to resubmit", () => {
+    assert.match(SLOW_REQUEST_MESSAGE, /Do not submit again/i);
+    assert.ok(!/failed|error|lost/i.test(SLOW_REQUEST_MESSAGE), "slow copy claims failure");
+    assert.ok(SLOW_REQUEST_NOTICE_MS >= 2000, "the notice would flash on a normal request");
+    assert.ok(SLOW_REQUEST_NOTICE_MS <= 10000, "the notice would arrive too late to help");
+  });
+
+  test("6.12 the refreshing notice does not reopen the question of the write", () => {
+    assert.match(REFRESHING_MESSAGE, /Recorded/);
+    assert.ok(!/may have|might|unknown|checking whether/i.test(REFRESHING_MESSAGE));
+  });
+
+  test("6.13 the settlement module stays pure — no I/O, no framework, no client", () => {
+    const src = codeOf(SETTLEMENT_MOD);
+    assert.ok(!/\bimport\b/.test(src), "the settlement module imported something");
+    assert.ok(!/next\/|supabase|fetch\(|process\.env/.test(src));
+    assert.ok(!/"use server"|"use client"/.test(src));
+  });
+});
+
+// ============================================================================
+// 7. THE PANEL'S SETTLEMENT LIFECYCLE (strict source boundaries)
+// ============================================================================
+describe("7. panel settlement lifecycle", () => {
+  const p = codeOf(PANEL);
+  const a = codeOf(ACTIONS);
+
+  test("7.1 the outcome renders before any refresh is requested", () => {
+    // The settled Alert is defined ahead of the refreshing notice in the same block,
+    // and the refresh is fired from an effect — after render, never during it.
+    assert.ok(p.indexOf("state.settled ?") < p.indexOf("{REFRESHING_MESSAGE}"));
+    assert.match(p, /useEffect\(\(\) => \{\s*if \(!shouldRefreshAfterSettlement\(state\)\) return;/);
+  });
+
+  test("7.2 the refresh is requested at most once per settlement", () => {
+    assert.match(p, /refreshRequested = useRef\(false\)/);
+    assert.match(p, /if \(refreshRequested\.current\) return;/);
+    assert.match(p, /refreshRequested\.current = true;/);
+  });
+
+  test("7.3 the form is not offered again once settled", () => {
+    assert.match(p, /!unavailable && !state\.settled \? \(/);
+  });
+
+  test("7.4 there is exactly one submit control, inside the dialog", () => {
+    const submits = [...p.matchAll(/type="submit"/g)];
+    assert.equal(submits.length, 1);
+    assert.ok(submits[0].index! > p.indexOf('role="dialog"'));
+  });
+
+  test("7.5 the slow notice is presentation only — it writes nothing", () => {
+    // The one timer only flips a presentation flag — it touches no action.
+    const slow = p.match(/slowTimer\.current = setTimeout\([\s\S]{0,120}/);
+    assert.ok(slow, "the slow-notice timer was not found");
+    assert.match(slow[0], /setSlow\(true\)/);
+    assert.ok(!/formAction|classifyReceiptQualification/.test(slow[0]));
+    // It is armed by the submit event, not by an effect.
+    assert.match(p, /onSubmit=\{armSlowNotice\}/);
+    // exactly one timer in the whole panel, and it only flips a boolean
+    assert.equal((p.match(/setTimeout\(/g) ?? []).length, 1);
+    assert.equal((p.match(/setInterval\(/g) ?? []).length, 0, "a polling loop appeared");
+  });
+
+  test("7.6 nothing retries or resubmits automatically", () => {
+    for (const src of [p, a]) {
+      assert.ok(!/retry|\bresubmit\b/i.test(src.replace(/attempt/gi, "")), "an automatic retry appeared");
+    }
+    assert.equal(
+      (p.match(/<form[\s\S]{0,80}?action=\{formAction\}/g) ?? []).length,
+      1,
+      "the action is wired to exactly one form",
+    );
+  });
+
+  test("7.7 the uncertain state offers a deliberate refresh, not a resubmit", () => {
+    assert.match(p, /state\.uncertain \? \(/);
+    assert.match(p, /Refresh qualification status/);
+    const btn = p.match(/onClick=\{refreshQualification\}[\s\S]{0,200}/);
+    assert.ok(btn, "the uncertain control does not refresh");
+    assert.ok(!/type="submit"/.test(btn[0]), "the uncertain control submits");
+  });
+
+  test("7.8 pending and refreshing are announced, not colour-coded", () => {
+    assert.ok((p.match(/role="status"/g) ?? []).length >= 2);
+    assert.match(p, /\{slow \? SLOW_REQUEST_MESSAGE : "Recording…"\}/);
+  });
+
+  test("7.9 no optimistic qualification state anywhere", () => {
+    assert.ok(!/useOptimistic|setExcluded|setQualification/.test(p));
+  });
+
+  test("7.10 the panel still never sees a Vendor, actor or event id", () => {
+    assert.ok(!/vendor|actorId|profileId|eventId|reversesEventId/i.test(
+      p.replace(/SalesReward Vendor/g, ""),
+    ));
   });
 });
