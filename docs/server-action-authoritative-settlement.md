@@ -141,6 +141,14 @@ today; a second one arriving in Phase 1D-A is the right moment to judge what, if
 anything, genuinely generalises. The pure settlement module is already the reusable
 part.
 
+**Second consumer (Phase 1D-A).** Sale-header finalization follows this sequence
+exactly — see `docs/claim-reviewer-sale-header-finalization-web.md`. Having built
+it twice, the reusable part is still just *a pure settlement module per action*:
+the two share a shape but not a line of code, and the copy, the outcome vocabulary
+and the unsettled-question case (`AMBIGUOUS_TIME_REQUIRES_CHOICE`) differ enough
+that a generic abstraction would have to be parameterised into meaninglessness. It
+stays unextracted deliberately.
+
 ## Limitations
 
 - The correction removes the *response-critical* re-render, not the underlying

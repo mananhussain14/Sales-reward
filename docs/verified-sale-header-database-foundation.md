@@ -339,11 +339,12 @@ ledger, balance or payout. No Web UI. No change to `receipt_confirmations`,
 
 ## Handoff
 
-**Next (Web):** the Claim Reviewer sale-header context and finalization UI, built
-on the two read RPCs and the write RPC, following the settlement pattern in
-`docs/server-action-authoritative-settlement.md` — outcome first, refresh second,
-no automatic retry, database-owned idempotency. An excluded receipt must show the
-excluded state and offer no finalization action at all.
+**Web — delivered.** The Claim Reviewer sale-header context and finalization UI is
+built on the two read RPCs and the write RPC and follows the settlement pattern in
+`docs/server-action-authoritative-settlement.md`: outcome first, refresh second, no
+automatic retry, database-owned idempotency. An excluded receipt shows the excluded
+state and offers no finalization action at all. See
+`docs/claim-reviewer-sale-header-finalization-web.md`.
 
 **Then (Phase 1D-B):** product items and quantities, attached to
 `verified_sales.id`. The header deliberately carries no product column so that

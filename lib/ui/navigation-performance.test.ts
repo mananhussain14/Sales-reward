@@ -118,11 +118,22 @@ describe("navigation uses client-side Next.js Link, never a full reload", () => 
    *
    *    See docs/server-action-authoritative-settlement.md.
    *
+   * 3. SALE-HEADER PANEL — the SECOND consumer of the same settlement pattern,
+   *    added by Phase 1D-A. Finalizing a sale header is an immutable, audited
+   *    financial write on the SAME heavy cross-region route that produced the
+   *    original hang, so its action returns the authoritative outcome and
+   *    revalidates nothing, and the panel re-reads the route itself afterwards.
+   *    Identical justification to (2): a re-attempt of a Server Component read,
+   *    not navigation and not a write. Test 4b below covers both actions.
+   *
+   *    See docs/claim-reviewer-sale-header-finalization-web.md.
+   *
    * See docs/retailer-manage-staff-shops-web.md § 11.
    */
   const REFRESH_ALLOWED = new Set([
     "app/(retailer)/retailer/staff/manage-shops-dialog.tsx",
     "app/(review)/review/[receiptSubmissionId]/qualification-panel.tsx",
+    "app/(review)/review/[receiptSubmissionId]/sale-header-panel.tsx",
   ]);
 
   test("4 & 5. no full-reload navigation or stray router.refresh anywhere", () => {
@@ -154,18 +165,22 @@ describe("navigation uses client-side Next.js Link, never a full reload", () => 
    * reviewer hit while classifying a receipt as TEST_DATA, so it is pinned here rather
    * than left to code review.
    */
-  test("4b. the qualification action never revalidates the route it answers from", () => {
-    const action = stripComments(
-      read("app/(review)/review/[receiptSubmissionId]/qualification-actions.ts"),
-    );
-    assert.ok(
-      !/revalidatePath/.test(action),
-      "qualification-actions.ts revalidates its own route again — this is the Recording… hang",
-    );
-    assert.ok(
-      !/from "next\/cache"/.test(action),
-      "qualification-actions.ts imports next/cache again",
-    );
+  test("4b. no immutable-write action revalidates the route it answers from", () => {
+    for (const file of [
+      "app/(review)/review/[receiptSubmissionId]/qualification-actions.ts",
+      "app/(review)/review/[receiptSubmissionId]/sale-finalization-actions.ts",
+    ]) {
+      const action = stripComments(read(file));
+      assert.ok(
+        !/revalidatePath/.test(action),
+        `${file} revalidates its own route again — this is the Recording… hang`,
+      );
+      assert.ok(
+        !/from "next\/cache"/.test(action),
+        `${file} imports next/cache again`,
+      );
+      assert.ok(!/redirect\(/.test(action), `${file} redirects`);
+    }
   });
 });
 
