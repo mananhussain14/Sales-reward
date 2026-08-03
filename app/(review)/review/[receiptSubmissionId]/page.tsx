@@ -4,6 +4,9 @@ import { notFound, redirect } from "next/navigation";
 import { getClaimReviewDetail } from "@/lib/review/claim-review-detail";
 import { getClaimReceiptQualification } from "@/lib/review/claim-receipt-qualification";
 import { QualificationPanel } from "@/app/(review)/review/[receiptSubmissionId]/qualification-panel";
+import { getClaimReceiptSaleContext } from "@/lib/review/claim-receipt-sale-context";
+import { getVerifiedSaleHeader } from "@/lib/review/verified-sale-header";
+import { SaleHeaderPanel } from "@/app/(review)/review/[receiptSubmissionId]/sale-header-panel";
 import {
   formatFileSize,
   formatMimeType,
@@ -103,14 +106,37 @@ export default async function ClaimReviewDetailPage({
   // path by being rejected, and a second control would imply the rejection was not
   // enough. `null` here means the read failed — the panel says so rather than
   // rendering "not excluded", which would be a guess about a financial control.
-  const qualificationResult =
+  //
+  // The two reads run CONCURRENTLY. Both are gated on the same already-completed
+  // receipt authorization and each re-derives the Vendor from auth.uid() in SQL,
+  // so overlapping them changes nothing about who may read what — it only stops
+  // the reviewer paying for two sequential cross-region round trips.
+  const [qualificationResult, saleContextResult] =
     d.decision === "VERIFIED"
-      ? await getClaimReceiptQualification(d.receiptSubmissionId)
-      : null;
+      ? await Promise.all([
+          getClaimReceiptQualification(d.receiptSubmissionId),
+          getClaimReceiptSaleContext(d.receiptSubmissionId),
+        ])
+      : [null, null];
+
   const qualification =
     qualificationResult?.status === "authorized"
       ? qualificationResult.qualification
       : null;
+
+  // `null` means the sale context could not be read. The panel renders an
+  // unavailable state; it must never be mistaken for "no proposal", "not
+  // excluded" or "finalizable".
+  const saleContext =
+    saleContextResult?.status === "authorized" ? saleContextResult.context : null;
+
+  // Only fetched once the context says a sale exists, so an unfinalized receipt
+  // costs no extra round trip.
+  const saleHeaderResult = saleContext?.alreadyFinalized
+    ? await getVerifiedSaleHeader(d.receiptSubmissionId)
+    : null;
+  const saleHeader =
+    saleHeaderResult?.status === "authorized" ? saleHeaderResult.header : null;
 
   const submittedLabel = formatSubmittedAt(d.submittedAt);
   const shopInactive = d.shopStatus !== "ACTIVE";
@@ -286,6 +312,19 @@ export default async function ClaimReviewDetailPage({
             <QualificationPanel
               receiptSubmissionId={d.receiptSubmissionId}
               qualification={qualification}
+            />
+          ) : null}
+
+          {/* Phase 1D-A. A THIRD separate question: the decision says the image
+              was verified, the qualification panel says the record is not
+              excluded, and this says whether a reviewer accepted the Sales Staff
+              figures as an authoritative sale. Only offered for a VERIFIED
+              receipt, for the same reason the qualification panel is. */}
+          {d.decision === "VERIFIED" ? (
+            <SaleHeaderPanel
+              receiptSubmissionId={d.receiptSubmissionId}
+              context={saleContext}
+              header={saleHeader}
             />
           ) : null}
         </div>

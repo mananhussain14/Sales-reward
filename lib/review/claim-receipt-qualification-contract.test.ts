@@ -373,8 +373,20 @@ describe("4. the qualification panel", () => {
   test("4.1 the panel renders only for a VERIFIED decision", () => {
     assert.match(page, /d\.decision === "VERIFIED" \? \(/);
     assert.match(page, /<QualificationPanel/);
-    // and the read is also gated on VERIFIED, so a rejected receipt costs no RPC
-    assert.match(page, /d\.decision === "VERIFIED"\s*\?\s*await getClaimReceiptQualification/);
+    // The read is still gated on VERIFIED, so a rejected receipt costs no RPC.
+    // Pinned as "the qualification read is inside the VERIFIED branch" rather than
+    // as one await-expression shape: Phase 1D-A made the reviewer reads concurrent,
+    // which changes the syntax without changing the gate.
+    const gated = page.match(
+      /d\.decision === "VERIFIED"[\s\S]{0,400}?getClaimReceiptQualification\(/,
+    );
+    assert.ok(gated, "the qualification read is no longer gated on a VERIFIED decision");
+    assert.ok(
+      !/^\s*(const|await)[^\n]*getClaimReceiptQualification\(/m.test(
+        page.slice(0, page.indexOf('d.decision === "VERIFIED"')),
+      ),
+      "the qualification read must not happen before the VERIFIED gate",
+    );
   });
 
   test("4.2 the unclassified copy does not claim reward eligibility", () => {
