@@ -305,15 +305,27 @@ select is(
    join public.roles r on r.id = rp.role_id
    join public.permissions p on p.id = rp.permission_id
    where r.code = 'CLAIM_REVIEWER'),
-  'CLAIM_REVIEW_PORTAL_READ,RECEIPT_QUALIFICATION_CLASSIFY,RECEIPT_REVIEW_DECIDE,RECEIPT_REVIEW_READ',
-  'A3. CLAIM_REVIEWER now holds exactly its four approved permissions'
+  'CLAIM_REVIEW_PORTAL_READ,RECEIPT_QUALIFICATION_CLASSIFY,RECEIPT_REVIEW_DECIDE,RECEIPT_REVIEW_READ,RECEIPT_SALE_HEADER_FINALIZE',
+  'A3. CLAIM_REVIEWER now holds exactly its five approved permissions'
+);
+
+-- SUPERSEDED BY PHASE 1D-A, which added the approved RECEIPT_SALE_HEADER_FINALIZE.
+-- The original forbade any SALE_ permission outright, which was right while no sale
+-- object existed. The durable property is narrower and is asserted in two halves:
+-- reward machinery is still forbidden entirely, and the ONLY sale permission that
+-- may exist is the one Phase 1D-A approved.
+select is(
+  (select count(*)::integer from public.permissions
+    where code ~ '(REWARD|COIN|BALANCE|PAYOUT|LEDGER)'),
+  0,
+  'A4. no reward, coin, balance, payout or ledger permission was added'
 );
 
 select is(
-  (select count(*)::integer from public.permissions
-    where code ~ '(REWARD|COIN|BALANCE|PAYOUT|LEDGER|SALE_)'),
-  0,
-  'A4. no reward, coin, balance, payout, ledger or sale permission was added'
+  (select coalesce(string_agg(code, ',' order by code), 'NONE')::text
+   from public.permissions where code ~ 'SALE'),
+  'RECEIPT_SALE_HEADER_FINALIZE',
+  'A4b. and the only sale permission is the approved sale-header finalize permission'
 );
 
 select is(
@@ -966,16 +978,30 @@ select is(
   'J7. extraction is still DISABLED'
 );
 
+-- SUPERSEDED BY PHASE 1D-A, which created public.verified_sales deliberately.
+-- What THIS suite owns is that the qualification milestone created no reward
+-- machinery, and that Phase 1D-A did not smuggle in a product line either — so the
+-- successor still forbids every one of those, and pins the sale surface to exactly
+-- the one approved header table.
 select is(
   (select coalesce(string_agg(table_name, ','), 'NONE')::text
    from information_schema.tables
    where table_schema = 'public'
-     and (table_name ilike '%verified_sale%' or table_name ilike '%reward%'
-          or table_name ilike '%coin%' or table_name ilike '%ledger%'
-          or table_name ilike '%wallet%' or table_name ilike '%balance%'
-          or table_name ilike '%payout%')),
+     and (table_name ilike '%reward%' or table_name ilike '%coin%'
+          or table_name ilike '%ledger%' or table_name ilike '%wallet%'
+          or table_name ilike '%balance%' or table_name ilike '%payout%'
+          or table_name ilike '%verified_sale_item%'
+          or table_name ilike '%campaign_qualification%')),
   'NONE',
-  'J8. no verified_sales, reward, coin, ledger, wallet, balance or payout table was created'
+  'J8. no reward, coin, ledger, wallet, balance, payout, sale-item or campaign-qualification table was created'
+);
+
+select is(
+  (select coalesce(string_agg(table_name, ',' order by table_name), 'NONE')::text
+   from information_schema.tables
+   where table_schema = 'public' and table_name ilike '%verified_sale%'),
+  'verified_sales',
+  'J8b. and the only sale object is the single approved header table'
 );
 
 select is(

@@ -121,19 +121,49 @@ select ok(
 
 -- It takes a shop id and resolves no tenant of its own, so it must stay behind a contract
 -- that has already resolved the caller from auth.uid().
+-- Pinned to the THREE-ARGUMENT signature this suite owns. Phase 1D-A added a
+-- four-argument overload, so filtering by name alone now matches two functions;
+-- A3b and A4b below cover EVERY overload, which is stricter than the original
+-- single-row assumption rather than a relaxation of it.
 select is(
   (select p.prosecdef from pg_catalog.pg_proc p
-   join pg_catalog.pg_namespace n on n.oid = p.pronamespace
-   where n.nspname = 'public' and p.proname = 'resolve_sale_instant'),
+   where p.oid = 'public.resolve_sale_instant(uuid, date, time without time zone)'::regprocedure),
   true,
   'A3. it is SECURITY DEFINER, like every other resolver in this schema'
 );
 
 select ok(
   (select 'search_path=""' = any (p.proconfig) from pg_catalog.pg_proc p
-   join pg_catalog.pg_namespace n on n.oid = p.pronamespace
-   where n.nspname = 'public' and p.proname = 'resolve_sale_instant'),
+   where p.oid = 'public.resolve_sale_instant(uuid, date, time without time zone)'::regprocedure),
   'A4. and runs with an EMPTY search_path'
+);
+
+select is(
+  (select count(*)::integer from pg_catalog.pg_proc p
+   join pg_catalog.pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public' and p.proname = 'resolve_sale_instant'
+     and not p.prosecdef),
+  0,
+  'A3b. EVERY resolve_sale_instant overload is SECURITY DEFINER'
+);
+
+select is(
+  (select count(*)::integer from pg_catalog.pg_proc p
+   join pg_catalog.pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public' and p.proname = 'resolve_sale_instant'
+     and not ('search_path=""' = any (p.proconfig))),
+  0,
+  'A4b. and every overload runs with an EMPTY search_path'
+);
+
+select is(
+  (select count(*)::integer from pg_catalog.pg_proc p
+   join pg_catalog.pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public' and p.proname = 'resolve_sale_instant'
+     and (has_function_privilege('authenticated', p.oid, 'EXECUTE')
+          or has_function_privilege('anon', p.oid, 'EXECUTE'))),
+  0,
+  'A4c. and no overload is reachable by a browser role'
 );
 
 -- ============================================================================
