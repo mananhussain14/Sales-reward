@@ -375,15 +375,23 @@ select is(
   'A12. the only sale permissions are the two approved finalize permissions'
 );
 
+-- SUPERSEDED IN PART BY PHASE 2A-A: migration 65 created campaign qualification and
+-- reward EVIDENCE by approval, so those four tables are excluded by name. Everything
+-- that MOVES money — coin, ledger, balance, payout — stays forbidden, which is the
+-- rule this assertion has always actually been protecting.
 select is(
   (select count(*)::integer from information_schema.tables
    where table_schema = 'public'
      and (table_name like '%reward%' or table_name like '%coin%'
        or table_name like '%ledger%' or table_name like '%balance%'
        or table_name like '%payout%' or table_name like '%campaign_result%'
-       or table_name like '%qualification_result%')),
+       or table_name like '%qualification_result%')
+     and table_name not in ('campaign_sale_evaluations',
+                            'campaign_sale_item_qualifications',
+                            'campaign_rewards',
+                            'campaign_subject_accumulators')),
   0,
-  'A8. no reward, coin, ledger, balance, payout or campaign-result table exists'
+  'A8. no coin, ledger, balance or payout table exists (Phase 2A-A evidence excepted)'
 );
 
 
@@ -1372,8 +1380,17 @@ select is(pg_temp.try_sql('update public.verified_sale_items set quantity = 99')
           'REFUSED:23514', 'L13. UPDATE on an authoritative item is refused');
 select is(pg_temp.try_sql('delete from public.verified_sale_items'),
           'REFUSED:23514', 'L14. DELETE on an authoritative item is refused');
+-- CHANGED BY PHASE 2A-A: campaign_sale_item_qualifications.verified_sale_item_id now
+-- references this table, so a plain TRUNCATE is rejected with 0A000 before any
+-- BEFORE TRUNCATE trigger fires. The statement is still refused — more strongly, in
+-- fact — but by the reference graph rather than by the guard, so both mechanisms are
+-- now named. CASCADE is what removes the shortcut and actually reaches the guard.
 select is(pg_temp.try_sql('truncate public.verified_sale_items'),
-          'REFUSED:23514', 'L15. TRUNCATE on authoritative items is refused');
+          'REFUSED:0A000',
+          'L15. a plain TRUNCATE on authoritative items is refused by the inbound foreign key');
+select is(pg_temp.try_sql('truncate public.verified_sale_items cascade'),
+          'REFUSED:23514',
+          'L15b. ...and a CASCADE TRUNCATE, which does reach it, is refused by the guard');
 
 select is(pg_temp.try_sql($f$update public.receipt_product_review_decisions set decision = 'REJECTED'$f$),
           'REFUSED:23514', 'L16. a decision cannot be REOPENED by update');

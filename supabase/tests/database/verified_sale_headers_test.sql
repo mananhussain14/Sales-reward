@@ -1121,11 +1121,18 @@ select is(
      and (table_name ilike '%reward%'
           or table_name ilike '%coin%' or table_name ilike '%ledger%'
           or table_name ilike '%wallet%' or table_name ilike '%balance%'
-          or table_name ilike '%payout%' or table_name ilike '%campaign_qualification%')),
+          or table_name ilike '%payout%' or table_name ilike '%campaign_qualification%')
+     -- Phase 2A-A (migration 65) created qualification and reward EVIDENCE by
+     -- approval. It computes nothing and pays nothing: no coin, ledger, wallet,
+     -- balance or payout object exists, which is the rule this suite still owns.
+     and table_name not in ('campaign_sale_evaluations',
+                            'campaign_sale_item_qualifications',
+                            'campaign_rewards',
+                            'campaign_subject_accumulators')),
   'NONE',
   -- The sale-ITEM table is Phase 1D-B's approved work and is no longer forbidden
   -- here; this suite still owns the rule that NO reward machinery exists.
-  'M7. no reward, coin, ledger, wallet, balance, payout or campaign-qualification table was created');
+  'M7. no coin, ledger, wallet, balance or payout table was created (Phase 2A-A evidence excepted)');
 
 select is(
   (select string_agg(t.tgname, ',' order by t.tgname) from pg_trigger t
