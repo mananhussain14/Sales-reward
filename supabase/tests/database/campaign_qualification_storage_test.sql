@@ -2106,9 +2106,13 @@ select is((select count(*)::integer from information_schema.columns
 select is((select count(*)::integer from pg_proc p
            join pg_namespace n on n.oid = p.pronamespace
            where n.nspname = 'public' and p.proname = f), 0,
+-- SUPERSEDED IN PART BY PHASE 2A-B, UNIT 66A: campaign_versions_matching_sale was
+-- created by approval in migration 20260824090000 and is excepted by name. It is a
+-- PURE resolver — its own suite asserts it performs no write and touches none of the
+-- tables below — so the rule this assertion actually owns is intact: Migration 65 is
+-- storage only, and no evaluation RPC, reward calculation or accumulator update exists.
   'J1. no matching or evaluation helper exists yet: ' || f)
 from unnest(array[
-  'campaign_versions_matching_sale',
   'campaign_item_eligible_at',
   'verified_sale_beneficiary',
   'verified_sale_is_evaluable',
