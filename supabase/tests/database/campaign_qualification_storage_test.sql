@@ -2128,6 +2128,12 @@ from unnest(array[
 -- The ONE non-trigger function this migration adds is the completeness helper. It
 -- takes an evaluation id and returns a boolean: it matches nothing, computes no
 -- reward, and grants nothing.
+--
+-- NARROWED FOR PHASE 2A-B, UNIT 66B: campaign_sale_item_eligible_at matches the
+-- campaign_sale_% pattern and was created by approval in migration 20260824090000. It is
+-- named EXACTLY, not pattern-excluded, so any OTHER campaign_sale_% function — an
+-- aggregator, an evaluator, a reward calculator — still fails this assertion the moment
+-- it appears. Its own suite proves it is pure, internal and non-writing.
 select is(
   (select coalesce(string_agg(p.proname, ',' order by p.proname), 'NONE')
    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
@@ -2135,8 +2141,9 @@ select is(
      and (p.proname like 'campaign_sale_%' or p.proname like 'campaign_reward%'
           or p.proname like 'campaign_subject_%' or p.proname like 'campaign_evaluation_%')
      and p.prorettype <> 'trigger'::regtype),
-  'campaign_evaluation_has_complete_items',
-  'J2. the only non-trigger function added is the completeness helper');
+  'campaign_evaluation_has_complete_items,campaign_sale_item_eligible_at',
+  'J2. the only non-trigger functions are the completeness helper and the approved '
+  'Unit 66B resolver');
 
 select is(
   (select count(*)::integer from pg_proc p
