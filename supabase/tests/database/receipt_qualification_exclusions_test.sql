@@ -993,11 +993,18 @@ select is(
      and (table_name ilike '%reward%' or table_name ilike '%coin%'
           or table_name ilike '%ledger%' or table_name ilike '%wallet%'
           or table_name ilike '%balance%' or table_name ilike '%payout%'
-          or table_name ilike '%campaign_qualification%')),
+          or table_name ilike '%campaign_qualification%')
+     -- Phase 2A-A (migration 65) created qualification and reward EVIDENCE by
+     -- approval. No coin, ledger, wallet, balance or payout object came with it,
+     -- and none may appear until the ledger milestone.
+     and table_name not in ('campaign_sale_evaluations',
+                            'campaign_sale_item_qualifications',
+                            'campaign_rewards',
+                            'campaign_subject_accumulators')),
   'NONE',
   -- The sale-ITEM table is no longer forbidden: Phase 1D-B created
   -- public.verified_sale_items by approval, and J8b pins the sale surface exactly.
-  'J8. no reward, coin, ledger, wallet, balance, payout or campaign-qualification table was created'
+  'J8. no coin, ledger, wallet, balance or payout table was created (Phase 2A-A evidence excepted)'
 );
 
 select is(

@@ -867,11 +867,17 @@ select is(
   (select count(*)::integer from pg_class c
    where c.relnamespace = 'public'::regnamespace and c.relkind = 'r'
      and (c.relname like '%reward%' or c.relname like '%coin%'
-       or c.relname like '%balance%' or c.relname like '%payout%')),
+       or c.relname like '%balance%' or c.relname like '%payout%')
+     -- Phase 2A-A (migration 65) created reward EVIDENCE by approval. The
+     -- money-moving objects this rule exists for remain forbidden.
+     and c.relname not in ('campaign_sale_evaluations',
+                           'campaign_sale_item_qualifications',
+                           'campaign_rewards',
+                           'campaign_subject_accumulators')),
   0,
   -- The sale-ITEM table stopped being forbidden in Phase 1D-B, which created
   -- public.verified_sale_items by approval; K4b pins the sale surface exactly.
-  'K4. no reward, coin, balance or payout table exists'
+  'K4. no coin, balance or payout table exists (Phase 2A-A evidence excepted)'
 );
 
 select is(
