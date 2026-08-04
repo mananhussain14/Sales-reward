@@ -7,6 +7,9 @@ import { QualificationPanel } from "@/app/(review)/review/[receiptSubmissionId]/
 import { getClaimReceiptSaleContext } from "@/lib/review/claim-receipt-sale-context";
 import { getVerifiedSaleHeader } from "@/lib/review/verified-sale-header";
 import { SaleHeaderPanel } from "@/app/(review)/review/[receiptSubmissionId]/sale-header-panel";
+import { getClaimReceiptProductContext } from "@/lib/review/claim-receipt-product-context";
+import { getVerifiedSaleItems } from "@/lib/review/verified-sale-items";
+import { ProductPanel } from "@/app/(review)/review/[receiptSubmissionId]/product-panel";
 import {
   formatFileSize,
   formatMimeType,
@@ -111,13 +114,14 @@ export default async function ClaimReviewDetailPage({
   // receipt authorization and each re-derives the Vendor from auth.uid() in SQL,
   // so overlapping them changes nothing about who may read what — it only stops
   // the reviewer paying for two sequential cross-region round trips.
-  const [qualificationResult, saleContextResult] =
+  const [qualificationResult, saleContextResult, productContextResult] =
     d.decision === "VERIFIED"
       ? await Promise.all([
           getClaimReceiptQualification(d.receiptSubmissionId),
           getClaimReceiptSaleContext(d.receiptSubmissionId),
+          getClaimReceiptProductContext(d.receiptSubmissionId),
         ])
-      : [null, null];
+      : [null, null, null];
 
   const qualification =
     qualificationResult?.status === "authorized"
@@ -130,13 +134,30 @@ export default async function ClaimReviewDetailPage({
   const saleContext =
     saleContextResult?.status === "authorized" ? saleContextResult.context : null;
 
-  // Only fetched once the context says a sale exists, so an unfinalized receipt
-  // costs no extra round trip.
-  const saleHeaderResult = saleContext?.alreadyFinalized
-    ? await getVerifiedSaleHeader(d.receiptSubmissionId)
-    : null;
+  // `null` means the product context could not be read. The panel renders an
+  // unreadable state; it must never be mistaken for "no proposal", "not
+  // excluded", "no decision yet" or "ready to decide". A zero-row read — missing,
+  // foreign or unauthorized — collapses into the same `null` deliberately.
+  const productContext =
+    productContextResult?.status === "authorized"
+      ? productContextResult.context
+      : null;
+
+  // Both are fetched ONLY once the context says the record exists, so an
+  // unfinalized or undecided receipt costs no extra round trip. They run
+  // concurrently and are bounded: one read each, no polling.
+  const [saleHeaderResult, saleItemsResult] = await Promise.all([
+    saleContext?.alreadyFinalized
+      ? getVerifiedSaleHeader(d.receiptSubmissionId)
+      : null,
+    productContext?.alreadyAccepted
+      ? getVerifiedSaleItems(d.receiptSubmissionId)
+      : null,
+  ]);
   const saleHeader =
     saleHeaderResult?.status === "authorized" ? saleHeaderResult.header : null;
+  const saleItems =
+    saleItemsResult?.status === "authorized" ? saleItemsResult.sale : null;
 
   const submittedLabel = formatSubmittedAt(d.submittedAt);
   const shopInactive = d.shopStatus !== "ACTIVE";
@@ -325,6 +346,20 @@ export default async function ClaimReviewDetailPage({
               receiptSubmissionId={d.receiptSubmissionId}
               context={saleContext}
               header={saleHeader}
+            />
+          ) : null}
+
+          {/* Phase 1D-B. A FOURTH separate question: the decision says the image
+              was verified, the qualification panel says the record is not
+              excluded, the sale panel says when the sale happened and for how
+              much, and this says WHAT was sold — whether a reviewer accepted the
+              Sales Staff product list as authoritative. Only offered for a
+              VERIFIED receipt, for the same reason the others are. */}
+          {d.decision === "VERIFIED" ? (
+            <ProductPanel
+              receiptSubmissionId={d.receiptSubmissionId}
+              context={productContext}
+              sale={saleItems}
             />
           ) : null}
         </div>
