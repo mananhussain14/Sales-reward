@@ -2,6 +2,8 @@
 --
 --   Unit 66A  public.campaign_versions_matching_sale(uuid)          Sections A-I
 --   Unit 66B  public.campaign_sale_item_eligible_at(uuid, uuid)     Sections J-P
+--   Unit 66C  public.campaign_matching_result_for_sale(uuid)          Sections Q-V
+--             public.campaign_matching_qualified_items_for_sale(uuid)
 --
 -- Run with:  supabase test db
 --
@@ -581,6 +583,286 @@ create function pg_temp.b_dispatch() returns text language sql stable as $$
 $$;
 
 
+-- ---- Unit 66C fixture: an isolated third tenant ----------------------------
+-- Vendor C and Retailer C trade only with each other and appear in no other section.
+-- Orchestration tests assert EXACT campaign sets, counts, units and row orders, so they
+-- are kept out of the shared Vendor A fixture where adding one campaign would silently
+-- change another section's expectations.
+create function pg_temp.publish_cfg(
+  p_key text, p_vendor uuid, p_admin uuid, p_name text,
+  p_starts timestamptz, p_ends timestamptz, p_priority integer,
+  p_stacking text, p_excl_key text,
+  p_product_scope text, p_product_ids uuid[], p_coins bigint
+) returns uuid language plpgsql as $$
+declare v_c uuid; v_v uuid;
+begin
+  perform pg_temp.act_as(p_admin);
+  v_c := public.create_vendor_campaign_draft(
+    p_name, 'Described.', p_starts, p_ends, 'Asia/Dubai', 'ALL_RETAILERS',
+    'INDIVIDUAL_STAFF', p_product_scope, p_stacking, p_excl_key, p_priority,
+    'PER_UNIT_COINS', p_coins, null, null, null, null, null, p_product_ids);
+  perform public.publish_vendor_campaign(v_c);
+  select c.published_version_id into v_v from public.campaigns c where c.id = v_c;
+  perform pg_temp.sign_out();
+  insert into pg_temp.f values (p_key || '_campaign', v_c), (p_key, v_v);
+  return v_v;
+end;
+$$;
+
+/* A verified sale whose proposed item set the reviewer REJECTED. The header is
+   finalized, so the authoritative sale exists — with zero authoritative items. */
+create function pg_temp.sale_rejected(
+  p_key text, p_retailer uuid, p_shop uuid, p_staff uuid, p_vendor uuid,
+  p_reviewer uuid, p_lines jsonb
+) returns uuid language plpgsql as $$
+declare v_r uuid; v_local timestamp;
+begin
+  v_local := date_trunc('minute', (now() + interval '2 hours') at time zone 'Asia/Dubai');
+  v_r := pg_temp.new_receipt(p_retailer, p_shop, p_staff);
+  perform pg_temp.act_as(p_staff);
+  perform public.confirm_receipt_with_products(
+    v_r, v_local::date, 'AED', 2::smallint, 12345::bigint, p_lines,
+    'Test Merchant', 'DOC-1', v_local::time, 10000::bigint, 2345::bigint);
+  insert into public.receipt_review_decisions
+    (receipt_submission_id, vendor_organization_id, decision, decided_by_profile_id)
+  values (v_r, p_vendor, 'VERIFIED', p_reviewer);
+  perform pg_temp.act_as(p_reviewer);
+  perform public.finalize_claim_receipt_sale_header(v_r, null);
+  perform public.finalize_claim_receipt_sale_items(v_r, 'REJECTED', 'WRONG_PRODUCT', null);
+  perform pg_temp.sign_out();
+  insert into pg_temp.f
+  select p_key, v.id from public.verified_sales v where v.receipt_submission_id = v_r;
+  return pg_temp.id(p_key);
+end;
+$$;
+
+do $$
+declare v uuid; v_p uuid;
+begin
+  insert into pg_temp.f values
+    ('vendor_c',   pg_temp.new_org('CM Vendor C',   'VENDOR')),
+    ('retailer_c', pg_temp.new_org('CM Retailer C', 'RETAILER')),
+    ('vsc',    pg_temp.new_person('CM','AdminC')),
+    ('revc',   pg_temp.new_person('CM','RevC')),
+    ('staffc', pg_temp.new_person('CM','StaffC'));
+
+  perform pg_temp.add_member(pg_temp.id('vsc'),    pg_temp.id('vendor_c'),   'VENDOR_SUPER_ADMIN');
+  perform pg_temp.add_member(pg_temp.id('revc'),   pg_temp.id('vendor_c'),   'CLAIM_REVIEWER');
+  perform pg_temp.add_member(pg_temp.id('staffc'), pg_temp.id('retailer_c'), 'SALES_STAFF');
+
+  insert into public.vendor_retailers (vendor_organization_id, retailer_organization_id, status)
+  values (pg_temp.id('vendor_c'), pg_temp.id('retailer_c'), 'ACTIVE');
+
+  insert into public.retailer_shops (retailer_organization_id, name, code, status, timezone_name)
+  values (pg_temp.id('retailer_c'), 'CM Shop C', 'CMC', 'ACTIVE', 'Asia/Dubai') returning id into v;
+  insert into pg_temp.f values ('shop_c', v);
+
+  insert into pg_temp.f values
+    ('c_p1', pg_temp.new_product(pg_temp.id('vendor_c'), 'CM-C1', 'C One',   pg_temp.id('vsc'))),
+    ('c_p2', pg_temp.new_product(pg_temp.id('vendor_c'), 'CM-C2', 'C Two',   pg_temp.id('vsc'))),
+    ('c_p3', pg_temp.new_product(pg_temp.id('vendor_c'), 'CM-C3', 'C Dead',  pg_temp.id('vsc'))),
+    ('c_p4', pg_temp.new_product(pg_temp.id('vendor_c'), 'CM-C4', 'C Gap',   pg_temp.id('vsc')));
+
+  foreach v_p in array array[pg_temp.id('c_p1'), pg_temp.id('c_p2'),
+                             pg_temp.id('c_p3'), pg_temp.id('c_p4')]
+  loop
+    perform pg_temp.assign(v_p, pg_temp.id('retailer_c'), pg_temp.id('vsc'));
+  end loop;
+end;
+$$;
+
+-- Six sales, each shaped for exactly one rule. c_p3 becomes INACTIVE and c_p4's timeline
+-- falls silent AFTER all of them exist, so every sale is created from a healthy state.
+do $$
+begin
+  -- one eligible line, one that will become ineligible
+  perform pg_temp.sale_at_offset('cs_mix', pg_temp.id('retailer_c'), pg_temp.id('shop_c'),
+    pg_temp.id('staffc'), pg_temp.id('vendor_c'), pg_temp.id('revc'),
+    jsonb_build_array(pg_temp.line(pg_temp.id('c_p1'), 4), pg_temp.line(pg_temp.id('c_p3'), 5)),
+    interval '2 hours');
+
+  -- two lines that both stay eligible
+  perform pg_temp.sale_at_offset('cs_two', pg_temp.id('retailer_c'), pg_temp.id('shop_c'),
+    pg_temp.id('staffc'), pg_temp.id('vendor_c'), pg_temp.id('revc'),
+    jsonb_build_array(pg_temp.line(pg_temp.id('c_p1'), 4), pg_temp.line(pg_temp.id('c_p2'), 3)),
+    interval '2 hours');
+
+  -- nothing eligible at all
+  perform pg_temp.sale_at_offset('cs_none', pg_temp.id('retailer_c'), pg_temp.id('shop_c'),
+    pg_temp.id('staffc'), pg_temp.id('vendor_c'), pg_temp.id('revc'),
+    jsonb_build_array(pg_temp.line(pg_temp.id('c_p3'), 5)), interval '2 hours');
+
+  -- one eligible line beside one whose history falls silent
+  perform pg_temp.sale_at_offset('cs_poison', pg_temp.id('retailer_c'), pg_temp.id('shop_c'),
+    pg_temp.id('staffc'), pg_temp.id('vendor_c'), pg_temp.id('revc'),
+    jsonb_build_array(pg_temp.line(pg_temp.id('c_p1'), 4), pg_temp.line(pg_temp.id('c_p4'), 9)),
+    interval '2 hours');
+
+  -- a single line the SELECTED_PRODUCTS exclusive campaign never selected
+  perform pg_temp.sale_at_offset('cs_solo', pg_temp.id('retailer_c'), pg_temp.id('shop_c'),
+    pg_temp.id('staffc'), pg_temp.id('vendor_c'), pg_temp.id('revc'),
+    jsonb_build_array(pg_temp.line(pg_temp.id('c_p1'), 4)), interval '2 hours');
+
+  -- the reviewer rejected the whole proposed set: an authoritative sale, zero items
+  perform pg_temp.sale_rejected('cs_reject', pg_temp.id('retailer_c'), pg_temp.id('shop_c'),
+    pg_temp.id('staffc'), pg_temp.id('vendor_c'), pg_temp.id('revc'),
+    jsonb_build_array(pg_temp.line(pg_temp.id('c_p1'), 4)));
+end;
+$$;
+
+-- Vendor C's campaigns. Published while every product is healthy, so the SELECTED_PRODUCTS
+-- versions can freeze what they were meant to freeze.
+do $$
+declare v_at timestamptz; v_e uuid; v_l uuid; i integer;
+begin
+  select v.sale_at into v_at from public.verified_sales v where v.id = pg_temp.id('cs_two');
+
+  -- Two STACKABLE campaigns with DIFFERENT product scopes, so Section S can prove each
+  -- keeps its own item set rather than sharing one.
+  perform pg_temp.publish_cfg('cc_ok', pg_temp.id('vendor_c'), pg_temp.id('vsc'), 'CC Open',
+    v_at - interval '10 days', v_at + interval '10 days', 10, 'STACKABLE', null,
+    'ALL_ELIGIBLE_PRODUCTS', null, 5);
+
+  perform pg_temp.publish_cfg('cc_snap', pg_temp.id('vendor_c'), pg_temp.id('vsc'), 'CC Snap',
+    v_at - interval '10 days', v_at + interval '10 days', 20, 'STACKABLE', null,
+    'SELECTED_PRODUCTS', array[pg_temp.id('c_p2')]::uuid[], 5);
+
+  -- Its status timeline is closed below, so Unit 66A calls it NOT_EVALUABLE even though
+  -- every item of cs_two is ELIGIBLE. That is what makes rule 7 testable.
+  perform pg_temp.publish_cfg('cc_gap', pg_temp.id('vendor_c'), pg_temp.id('vsc'), 'CC Gap',
+    v_at - interval '10 days', v_at + interval '10 days', 30, 'STACKABLE', null,
+    'ALL_ELIGIBLE_PRODUCTS', null, 5);
+
+  -- EXCLUSIVE key BUNDLE. The HIGH-priority campaign deliberately matches FEWER units
+  -- (one selected product, 3 units) and is worth ONE coin per unit; the low-priority
+  -- rival matches every product (7 units) at 999 coins per unit. Priority must still win.
+  perform pg_temp.publish_cfg('cx_hi', pg_temp.id('vendor_c'), pg_temp.id('vsc'), 'CX High',
+    v_at - interval '10 days', v_at + interval '10 days', 900, 'EXCLUSIVE', 'BUNDLE',
+    'SELECTED_PRODUCTS', array[pg_temp.id('c_p2')]::uuid[], 1);
+
+  perform pg_temp.publish_cfg('cx_lo', pg_temp.id('vendor_c'), pg_temp.id('vsc'), 'CX Low',
+    v_at - interval '10 days', v_at + interval '10 days', 100, 'EXCLUSIVE', 'BUNDLE',
+    'ALL_ELIGIBLE_PRODUCTS', null, 999);
+
+  -- EXCLUSIVE key TIEB: equal priority, different start. The earlier start must win.
+  --
+  -- THE PAIR IS BUILT SO THE START DATE IS THE ONLY THING THAT CAN DECIDE IT. Version ids
+  -- are random, so a naively-published pair leaves the LATER campaign holding the lower id
+  -- roughly half the time — and in exactly those runs, dropping campaign_starts_at from the
+  -- tie-break still elects the earlier campaign, by luck, and the test passes while the
+  -- rule is broken. Publishing until the later-starting campaign holds the LOWER id makes
+  -- the two keys DISAGREE: start says CX TieEarly, id says CX TieLate. Now only an
+  -- implementation that consults the start date in the right position can win the test,
+  -- in every run. Rejected pairs are CANCELLED, which Unit 66A omits entirely.
+  i := 0;
+  loop
+    i := i + 1;
+    v_e := pg_temp.publish_cfg('cx_te_try' || i, pg_temp.id('vendor_c'), pg_temp.id('vsc'),
+      'CX TieEarly ' || i, v_at - interval '9 days', v_at + interval '10 days', 500,
+      'EXCLUSIVE', 'TIEB', 'ALL_ELIGIBLE_PRODUCTS', null, 5);
+    v_l := pg_temp.publish_cfg('cx_tl_try' || i, pg_temp.id('vendor_c'), pg_temp.id('vsc'),
+      'CX TieLate ' || i, v_at - interval '8 days', v_at + interval '10 days', 500,
+      'EXCLUSIVE', 'TIEB', 'ALL_ELIGIBLE_PRODUCTS', null, 5);
+
+    exit when v_l < v_e;
+
+    perform pg_temp.lifecycle(pg_temp.id('cx_te_try' || i || '_campaign'), pg_temp.id('vsc'), 'CANCEL');
+    perform pg_temp.lifecycle(pg_temp.id('cx_tl_try' || i || '_campaign'), pg_temp.id('vsc'), 'CANCEL');
+
+    if i >= 30 then
+      raise exception 'Could not build an id-inverted TIEB pair in 30 attempts';
+    end if;
+  end loop;
+
+  insert into pg_temp.f values ('cx_te', v_e), ('cx_tl', v_l);
+
+  -- EXCLUSIVE key TIEC: equal priority AND equal start, so only the version id separates
+  -- them. Which id is lower is random per run, which is exactly why T7 computes the
+  -- expected winner rather than naming one.
+  perform pg_temp.publish_cfg('cx_ia', pg_temp.id('vendor_c'), pg_temp.id('vsc'), 'CX IdA',
+    v_at - interval '7 days', v_at + interval '10 days', 500, 'EXCLUSIVE', 'TIEC',
+    'ALL_ELIGIBLE_PRODUCTS', null, 5);
+
+  perform pg_temp.publish_cfg('cx_ib', pg_temp.id('vendor_c'), pg_temp.id('vsc'), 'CX IdB',
+    v_at - interval '7 days', v_at + interval '10 days', 500, 'EXCLUSIVE', 'TIEC',
+    'ALL_ELIGIBLE_PRODUCTS', null, 5);
+end;
+$$;
+
+-- Vendor C's injuries, after every sale and every publication.
+do $$
+declare v_at timestamptz;
+begin
+  select v.sale_at into v_at from public.verified_sales v where v.id = pg_temp.id('cs_two');
+
+  update public.vendor_products set status = 'INACTIVE' where id = pg_temp.id('c_p3');
+
+  update public.vendor_product_status_history set valid_to = v_at - interval '1 hour'
+   where vendor_product_id = pg_temp.id('c_p4') and valid_to is null;
+
+  -- CC Gap's campaign timeline is closed an hour before the sale, leaving the sale
+  -- instant uncovered. Unit 66A's own suite proves this produces NO_TEMPORAL_RECORD.
+  update public.campaign_version_status_history set valid_to = v_at - interval '1 hour'
+   where campaign_id = pg_temp.id('cc_gap_campaign') and valid_to is null;
+end;
+$$;
+
+/* One campaign's final result for one sale: outcome/reason/count/units, or ABSENT. */
+create function pg_temp.res(p_sale uuid, p_version uuid) returns text
+language sql stable as $$
+  select coalesce(
+    (select r.outcome || '/' || coalesce(r.non_qualification_reason, '-') || '/'
+         || r.qualifying_item_count::text || '/' || r.qualifying_units::text
+     from public.campaign_matching_result_for_sale(p_sale) r
+     where r.campaign_version_id = p_version),
+    'ABSENT')
+$$;
+
+/* The campaign result set as one ordered digest. row_number() over () numbers rows in
+   the order the function emitted them, so this pins ORDER as well as content. */
+create function pg_temp.res_digest(p_sale uuid) returns text language sql stable as $$
+  select string_agg(t.line, ' >> ' order by t.n)
+  from (select row_number() over () as n,
+               r.outcome || '/' || coalesce(r.non_qualification_reason, '-') || '/'
+            || r.qualifying_item_count::text || '/' || r.qualifying_units::text as line
+        from public.campaign_matching_result_for_sale(p_sale) r) t
+$$;
+
+create function pg_temp.res_order(p_sale uuid) returns uuid[] language sql stable as $$
+  select array_agg(t.v order by t.n)
+  from (select row_number() over () as n, r.campaign_version_id as v
+        from public.campaign_matching_result_for_sale(p_sale) r) t
+$$;
+
+create function pg_temp.items_digest(p_sale uuid) returns text language sql stable as $$
+  select coalesce(string_agg(t.line, ' >> ' order by t.n), 'NONE')
+  from (select row_number() over () as n,
+               q.campaign_version_id::text || ':' || q.vendor_product_id::text || ':'
+            || q.qualifying_units::text || ':' || q.product_source || ':'
+            || coalesce(q.product_status_at_sale, '-') || ':'
+            || coalesce(q.assignment_status_at_sale, '-') as line
+        from public.campaign_matching_qualified_items_for_sale(p_sale) q) t
+$$;
+
+/* The qualifying products of one campaign, in the order the helper returned them. */
+create function pg_temp.item_products(p_sale uuid, p_version uuid) returns uuid[]
+language sql stable as $$
+  select array_agg(t.v order by t.n)
+  from (select row_number() over () as n, q.vendor_product_id as v
+        from public.campaign_matching_qualified_items_for_sale(p_sale) q
+        where q.campaign_version_id = p_version) t
+$$;
+
+/* Either Unit 66C function's body, normalized as Sections F and O normalize the others. */
+create function pg_temp.c_body(p_name text) returns text language sql stable as $$
+  select lower(regexp_replace(regexp_replace(p.prosrc, '--[^\n]*', ' ', 'g'), '\s+', ' ', 'g'))
+  from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+  where n.nspname = 'public' and p.proname = p_name
+$$;
+
+create table pg_temp.snap (k text primary key, v text);
+
+
 -- ============================================================================
 -- SECTION A — SCHEMA AND SECURITY
 -- ============================================================================
@@ -637,9 +919,13 @@ select is((select count(*)::integer from pg_proc p join pg_namespace n on n.oid 
 -- same migration and is excepted BY NAME, not by pattern. Section J proves it is pure,
 -- internal and non-writing; the rule this assertion owns — that no aggregation,
 -- evaluation RPC, reward calculation or application surface exists yet — is intact.
-  'B1. Unit 66C/67/68 function does not exist yet: ' || f)
+-- NARROWED AGAIN FOR UNIT 66C: campaign_matching_result_for_sale and
+-- campaign_matching_qualified_items_for_sale were created by approval in the same
+-- migration and are excepted BY NAME. Section Q proves both are pure, internal and
+-- non-writing. The rule this assertion owns — that no evaluation RPC, reward
+-- calculation, accumulator update or application surface exists yet — is intact.
+  'B1. Unit 67/68 function does not exist yet: ' || f)
 from unnest(array[
-  'campaign_matching_result_for_sale',
   'evaluate_sale_campaign_qualification',
   'get_sale_campaign_qualification',
   'list_my_staff_rewards'
@@ -1107,16 +1393,20 @@ select is((select count(*)::integer from public.permissions), 32,
 -- ============================================================================
 -- The two resolvers are the whole of Migration 66. Nothing that aggregates, decides an
 -- exclusive winner, calculates a reward or exposes a surface may exist yet.
+-- NARROWED FOR UNIT 66C, exactly as B1 above: the two orchestration functions are
+-- excepted by name, and every executor, calculator and surface stays forbidden.
 select is((select count(*)::integer from pg_proc p join pg_namespace n on n.oid = p.pronamespace
            where n.nspname = 'public' and p.proname = f), 0,
-  'K1. Unit 66C/67/68 function still does not exist: ' || f)
+  'K1. Unit 67/68 function still does not exist: ' || f)
 from unnest(array[
-  'campaign_matching_result_for_sale',
   'campaign_sale_items_eligible_at',
   'campaign_sale_qualifying_units',
   'campaign_sale_exclusive_winner',
   'evaluate_sale_campaign_qualification',
-  'award_campaign_reward'
+  'award_campaign_reward',
+  'campaign_reward_for_sale',
+  'get_sale_campaign_qualification',
+  'list_my_staff_rewards'
 ]) as f;
 
 select is(
@@ -1124,9 +1414,12 @@ select is(
    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
    where n.nspname = 'public' and p.proname like 'campaign_%'
      and p.prorettype <> 'trigger'::regtype
-     and p.proname in ('campaign_versions_matching_sale','campaign_sale_item_eligible_at')),
+     and p.proname in ('campaign_versions_matching_sale','campaign_sale_item_eligible_at',
+                       'campaign_matching_result_for_sale',
+                       'campaign_matching_qualified_items_for_sale')),
+  'campaign_matching_qualified_items_for_sale,campaign_matching_result_for_sale,'
   'campaign_sale_item_eligible_at,campaign_versions_matching_sale',
-  'K2. both Migration 66 resolvers exist, and they are the two that were approved');
+  'K2. all four Migration 66 functions exist, and they are the four that were approved');
 
 select is((select count(*)::integer from pg_proc p join pg_namespace n on n.oid = p.pronamespace
            where n.nspname = 'public' and p.proname like 'campaign_%'
@@ -1427,9 +1720,11 @@ select ok(pg_temp.b_body_no_evidence() not like '%is_version_in_force%'
 -- both functions so a future unit cannot slip one in beside a passing 66B.
 select is((select count(*)::integer from pg_proc p join pg_namespace n on n.oid = p.pronamespace
            where n.nspname = 'public'
-             and p.proname in ('campaign_versions_matching_sale','campaign_sale_item_eligible_at')
+             and p.proname in ('campaign_versions_matching_sale','campaign_sale_item_eligible_at',
+                               'campaign_matching_result_for_sale',
+                               'campaign_matching_qualified_items_for_sale')
              and p.prosrc ~* 'vendor_retailer_eligible_products_at|vendor_product_eligible_for_retailer_at'), 0,
-  'O13. neither Migration 66 resolver touches either unsafe composite helper');
+  'O13. no Migration 66 function touches either unsafe composite helper');
 
 
 -- ============================================================================
@@ -1455,6 +1750,618 @@ select is((select count(*)::integer from public.campaign_subject_accumulators), 
 select is((select count(*)::integer from public.campaign_eligible_products ep
            where ep.campaign_version_id = pg_temp.id('cv_snap')), 3,
   'P6. reading the frozen product set neither added to it nor removed from it');
+
+
+
+
+-- ============================================================================
+-- ============================================================================
+-- UNIT 66C — ORCHESTRATION
+--   public.campaign_matching_result_for_sale(uuid)
+--   public.campaign_matching_qualified_items_for_sale(uuid)
+-- ============================================================================
+-- ============================================================================
+-- Five properties carry this unit:
+--
+--   1. AN INELIGIBLE ITEM DOES NOT VETO ITS NEIGHBOURS, but ONE UNKNOWN ITEM VETOES THE
+--      WHOLE CAMPAIGN. Those two rules pull in opposite directions and a single
+--      implementation has to get both right. Section R.
+--
+--   2. THE TIE-BREAK IS priority, start, id — AND NOTHING ELSE. The fixture makes the
+--      high-priority campaign match FEWER units and pay ONE coin against a rival's 999,
+--      so a winner chosen by money or by basket size would be visibly wrong. Section T.
+--
+--   3. A SUPPRESSED LOSER IS INERT. Zero count, zero units, no qualifying items — but
+--      the row is still returned, because "matched and lost" is evidence. Section T/U.
+--
+--   4. ONLY FINAL OUTCOMES REACH THE ITEM HELPER. Provisionally-qualified-then-suppressed
+--      campaigns contribute nothing. Section U.
+--
+--   5. ORDER IS PART OF THE CONTRACT. Two calls agree, and current state cannot move a
+--      historical result. Section V.
+
+
+-- ============================================================================
+-- SECTION Q — UNIT 66C SCHEMA AND SECURITY
+-- ============================================================================
+select has_function('public', 'campaign_matching_result_for_sale', array['uuid'],
+  'Q1. the orchestration resolver exists with the exact signature');
+
+select has_function('public', 'campaign_matching_qualified_items_for_sale', array['uuid'],
+  'Q2. the qualifying-item helper exists with the exact signature');
+
+select is((select pg_get_function_result(p.oid) from pg_proc p
+           join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public' and p.proname = 'campaign_matching_result_for_sale'),
+  'TABLE(campaign_id uuid, campaign_version_id uuid, vendor_organization_id uuid, '
+  'retailer_organization_id uuid, retailer_shop_id uuid, beneficiary_profile_id uuid, '
+  'sale_at timestamp with time zone, performance_scope text, reward_recipient_scope text, '
+  'product_scope text, product_eligibility_resolution text, stacking_mode text, '
+  'exclusivity_key text, priority integer, campaign_starts_at timestamp with time zone, '
+  'campaign_ends_at timestamp with time zone, outcome text, non_qualification_reason text, '
+  'qualifying_item_count integer, qualifying_units integer)',
+  'Q3. the result contract is exactly the approved 20 columns and types');
+
+select is((select pg_get_function_result(p.oid) from pg_proc p
+           join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public'
+             and p.proname = 'campaign_matching_qualified_items_for_sale'),
+  'TABLE(campaign_id uuid, campaign_version_id uuid, verified_sale_id uuid, '
+  'verified_sale_item_id uuid, vendor_product_id uuid, qualifying_units integer, '
+  'product_source text, product_status_at_sale text, assignment_status_at_sale text)',
+  'Q4. the item contract is exactly the approved 9 columns and types — a typed row set, '
+  'not JSON');
+
+select ok((select bool_and(p.provolatile = 's') from pg_proc p
+           join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public' and p.proname like 'campaign_matching_%'),
+  'Q5. both are STABLE');
+
+select ok((select bool_and(p.prosecdef) from pg_proc p
+           join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public' and p.proname like 'campaign_matching_%'),
+  'Q6. both are SECURITY DEFINER');
+
+select ok((select bool_and(p.proconfig @> array['search_path=""']) from pg_proc p
+           join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public' and p.proname like 'campaign_matching_%'),
+  'Q7. both run with an empty search_path');
+
+select ok((select bool_and(p.proacl::text = '{postgres=X/postgres}') from pg_proc p
+           join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public' and p.proname like 'campaign_matching_%'),
+  'Q8. both are owner-execute-only — the default PUBLIC grant really was revoked');
+
+select is((select count(*)::integer from information_schema.role_routine_grants
+           where routine_schema = 'public' and routine_name like 'campaign_matching_%'
+             and grantee in ('anon','authenticated','service_role','PUBLIC')), 0,
+  'Q9. no application role may execute either function');
+
+select ok((select bool_and(obj_description(p.oid, 'pg_proc') is not null) from pg_proc p
+           join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public' and p.proname like 'campaign_matching_%'),
+  'Q10. both are documented');
+
+select is((select count(*)::integer from public.permissions), 32,
+  'Q11. the permission catalogue is still 32 — no new permission was minted');
+
+select is((select count(*)::integer from public.role_permissions rp
+           join public.permissions pm on pm.id = rp.permission_id
+           where pm.code like '%CAMPAIGN_MATCH%' or pm.code like '%EVALUAT%'), 0,
+  'Q12. no role was granted a matching or evaluation permission');
+
+select is((select count(*)::integer from information_schema.tables
+           where table_schema = 'public' and table_type = 'BASE TABLE'), 47,
+  'Q13. Unit 66C added no table either — still the 47 from Migration 65');
+
+select ok((select bool_and(regexp_replace(p.prosrc, '--[^\n]*', '', 'g')
+                  !~* '\minsert\s+into\M|\mupdate\s+public\.|\mdelete\s+from\M|\mtruncate\M')
+           from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public' and p.proname like 'campaign_matching_%'),
+  'Q14. neither executable body contains INSERT, UPDATE, DELETE or TRUNCATE');
+
+select ok((select bool_and(p.prosrc !~* '\mexecute\s+|\mformat\s*\(|\mquote_ident\M')
+           from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public' and p.proname like 'campaign_matching_%'),
+  'Q15. neither uses dynamic SQL');
+
+select ok((select bool_and(p.prosrc !~* '\mnow\s*\(|\mcurrent_timestamp\M|published_version_id')
+           from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public' and p.proname like 'campaign_matching_%'),
+  'Q16. neither reads now() or campaigns.published_version_id');
+
+-- No Migration 67 exists, and Migration 66 is still one ledger entry.
+select is((select count(*)::integer from supabase_migrations.schema_migrations
+           where version > '20260824090000'), 0,
+  'Q17. no migration after 20260824090000 has been applied');
+
+select is((select count(*)::integer from supabase_migrations.schema_migrations
+           where version = '20260824090000'), 1,
+  'Q18. Migration 66 is recorded exactly once');
+
+-- IT COMPOSES. If either helper name disappeared from the body, this unit would have
+-- started re-deriving an answer that already has an owner.
+select ok(pg_temp.c_body('campaign_matching_result_for_sale')
+            like '%campaign_versions_matching_sale%',
+  'Q19. the resolver composes Unit 66A rather than re-deriving candidacy');
+
+select ok(pg_temp.c_body('campaign_matching_result_for_sale')
+            like '%campaign_sale_item_eligible_at%',
+  'Q20. ...and composes Unit 66B rather than re-deriving product eligibility');
+
+select ok(pg_temp.c_body('campaign_matching_qualified_items_for_sale')
+            like '%campaign_matching_result_for_sale%',
+  'Q21. the item helper composes the resolver, so the QUALIFIED set is decided once');
+
+-- Neither may consult the status timeline, the frozen snapshot or the product timelines
+-- directly: every one of those questions belongs to 66A or 66B.
+select ok((select bool_and(p.prosrc !~* 'campaign_version_status_history|campaign_eligible_products|campaign_eligible_retailers|vendor_product_status_history|vendor_product_retailer_assignment')
+           from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public' and p.proname like 'campaign_matching_%'),
+  'Q22. neither reaches past its helpers into the underlying history or snapshot tables');
+
+
+-- ============================================================================
+-- SECTION R — MULTI-ITEM AGGREGATION
+-- ============================================================================
+-- Preconditions, so every negative below is known to fail on the intended rule rather
+-- than on a campaign that was never targeted or never in force.
+select is((select count(*)::integer from public.verified_sale_items i
+           where i.verified_sale_id = pg_temp.id('cs_two')), 2,
+  'R1. precondition: cs_two carries exactly two authoritative items');
+
+select is((select m.candidate_result from public.campaign_versions_matching_sale(pg_temp.id('cs_two')) m
+           where m.campaign_version_id = pg_temp.id('cc_ok')), 'CANDIDATE',
+  'R2. precondition: CC Open is a genuine 66A candidate for cs_two');
+
+-- ONE ELIGIBLE, ONE INELIGIBLE. The ineligible line contributes nothing and vetoes
+-- nothing.
+select is(pg_temp.res(pg_temp.id('cs_mix'), pg_temp.id('cc_ok')), 'QUALIFIED/-/1/4',
+  'R3. one eligible and one ineligible item still QUALIFIES, counting only the eligible '
+  'one and only its 4 units');
+
+select is((select e.eligibility_result from public.campaign_sale_item_eligible_at(
+             pg_temp.id('cc_ok'),
+             (select i.id from public.verified_sale_items i
+              where i.verified_sale_id = pg_temp.id('cs_mix')
+                and i.vendor_product_id = pg_temp.id('c_p3'))) e), 'NOT_ELIGIBLE',
+  'R4. ...and the uncounted line really was NOT_ELIGIBLE, not merely absent');
+
+select is(pg_temp.res(pg_temp.id('cs_two'), pg_temp.id('cc_ok')), 'QUALIFIED/-/2/7',
+  'R5. two eligible items give an exact count of 2 and the exact sum 4 + 3 = 7');
+
+-- NOTHING ELIGIBLE.
+select is(pg_temp.res(pg_temp.id('cs_none'), pg_temp.id('cc_ok')),
+  'NOT_QUALIFIED/NO_QUALIFYING_ITEMS/0/0',
+  'R6. every item decidable and none eligible is NOT_QUALIFIED / NO_QUALIFYING_ITEMS');
+
+select is((select m.candidate_result from public.campaign_versions_matching_sale(pg_temp.id('cs_none')) m
+           where m.campaign_version_id = pg_temp.id('cc_ok')), 'CANDIDATE',
+  'R7. ...and R6 failed on its items, not because the campaign was omitted');
+
+-- A REJECTED item set: an authoritative sale with zero authoritative items. Reachable,
+-- legitimate, and vacuously NO_QUALIFYING_ITEMS rather than an error.
+select is((select count(*)::integer from public.verified_sale_items i
+           where i.verified_sale_id = pg_temp.id('cs_reject')), 0,
+  'R8. precondition: a REJECTED proposal leaves an authoritative sale with no items');
+
+select is(pg_temp.res(pg_temp.id('cs_reject'), pg_temp.id('cc_ok')),
+  'NOT_QUALIFIED/NO_QUALIFYING_ITEMS/0/0',
+  'R9. a sale with no authoritative items is NO_QUALIFYING_ITEMS, and does not raise');
+
+-- ONE UNKNOWN ITEM POISONS THE CAMPAIGN, even though its neighbour is eligible.
+select is(pg_temp.res(pg_temp.id('cs_poison'), pg_temp.id('cc_ok')),
+  'NOT_EVALUABLE/NO_TEMPORAL_RECORD/0/0',
+  'R10. one item with no temporal record makes the whole evaluation NOT_EVALUABLE');
+
+select is((select e.eligibility_result from public.campaign_sale_item_eligible_at(
+             pg_temp.id('cc_ok'),
+             (select i.id from public.verified_sale_items i
+              where i.verified_sale_id = pg_temp.id('cs_poison')
+                and i.vendor_product_id = pg_temp.id('c_p1'))) e), 'ELIGIBLE',
+  'R11. ...and the other item genuinely WAS eligible — missing history outranks it');
+
+select is((select count(*)::integer from public.campaign_matching_qualified_items_for_sale(
+             pg_temp.id('cs_poison'))
+           where campaign_version_id = pg_temp.id('cc_ok')), 0,
+  'R12. a poisoned evaluation contributes no qualifying items at all');
+
+-- UNIT 66A SAID NOT_EVALUABLE. The items are not consulted, and the campaign result is
+-- not upgraded by them. CC Gap's items are ALL eligible, so any implementation that let
+-- item evidence overrule unknown campaign history would report QUALIFIED / 2 / 7 here.
+select is((select m.candidate_result from public.campaign_versions_matching_sale(pg_temp.id('cs_two')) m
+           where m.campaign_version_id = pg_temp.id('cc_gap')), 'NOT_EVALUABLE',
+  'R13. precondition: Unit 66A calls CC Gap NOT_EVALUABLE for cs_two');
+
+select is(pg_temp.res(pg_temp.id('cs_two'), pg_temp.id('cc_gap')),
+  'NOT_EVALUABLE/NO_TEMPORAL_RECORD/0/0',
+  'R14. unknown CAMPAIGN history stays NOT_EVALUABLE even though every item is eligible');
+
+select is(pg_temp.res(pg_temp.id('cs_two'), pg_temp.id('cc_ok')), 'QUALIFIED/-/2/7',
+  'R15. ...and the very same items DO qualify a campaign whose history is known');
+
+-- Duplicate item rows are impossible by construction, and the resolver's own integrity
+-- check would raise if 66B ever answered twice for one item.
+select has_index('public', 'verified_sale_items', 'verified_sale_items_product_unique_idx',
+  'R16. one product may appear at most once per authoritative sale');
+
+select has_index('public', 'verified_sale_items', 'verified_sale_items_line_unique_idx',
+  'R17. ...and one line number may appear at most once');
+
+select ok(pg_temp.c_body('campaign_matching_result_for_sale') like '%count(distinct%',
+  'R18. the resolver counts DISTINCT judged items, and raises when the total disagrees');
+
+-- Outcome and reason are a closed, paired vocabulary across every campaign of every
+-- Vendor C sale at once.
+select ok((select bool_and(
+             r.outcome in ('QUALIFIED','NOT_QUALIFIED','NOT_EVALUABLE')
+             and ((r.outcome = 'QUALIFIED'     and r.non_qualification_reason is null)
+               or (r.outcome = 'NOT_QUALIFIED' and r.non_qualification_reason
+                     in ('NO_QUALIFYING_ITEMS','SUPPRESSED_BY_EXCLUSIVITY'))
+               or (r.outcome = 'NOT_EVALUABLE' and r.non_qualification_reason = 'NO_TEMPORAL_RECORD')))
+           from unnest(array[pg_temp.id('cs_mix'), pg_temp.id('cs_two'), pg_temp.id('cs_none'),
+                             pg_temp.id('cs_poison'), pg_temp.id('cs_solo'), pg_temp.id('cs_reject')]) as sale,
+                lateral public.campaign_matching_result_for_sale(sale) r),
+  'R19. outcome and reason are paired from the approved vocabulary in every result');
+
+select ok((select bool_and(r.outcome = 'QUALIFIED'
+                           or (r.qualifying_item_count = 0 and r.qualifying_units = 0))
+           from unnest(array[pg_temp.id('cs_mix'), pg_temp.id('cs_two'), pg_temp.id('cs_none'),
+                             pg_temp.id('cs_poison'), pg_temp.id('cs_solo'), pg_temp.id('cs_reject')]) as sale,
+                lateral public.campaign_matching_result_for_sale(sale) r),
+  'R20. every result other than QUALIFIED reports zero items and zero units');
+
+select ok((select bool_and(r.qualifying_item_count >= 1 and r.qualifying_units >= 1)
+           from unnest(array[pg_temp.id('cs_mix'), pg_temp.id('cs_two')]) as sale,
+                lateral public.campaign_matching_result_for_sale(sale) r
+           where r.outcome = 'QUALIFIED'),
+  'R21. ...and every QUALIFIED result reports at least one item and one unit');
+
+-- Lineage still raises rather than producing NOT_EVALUABLE evidence.
+select throws_ok('select * from public.campaign_matching_result_for_sale(null)',
+  '22023', null, 'R22. a null sale id raises invalid_parameter_value');
+
+select is(pg_temp.try_sql(format(
+  'select * from public.campaign_matching_result_for_sale(%L)', gen_random_uuid())),
+  'REFUSED:23503', 'R23. a missing verified sale raises foreign_key_violation');
+
+-- The item helper needs its OWN guards: its query joins on p_verified_sale_id, so the
+-- planner proves the join empty for a bad id and never executes the resolver whose
+-- raises would otherwise fire. Without these, broken lineage would return an empty set
+-- indistinguishable from "this sale matched nothing".
+select throws_ok('select * from public.campaign_matching_qualified_items_for_sale(null)',
+  '22023', null, 'R24. the item helper raises on a null sale id too');
+
+select is(pg_temp.try_sql(format(
+  'select * from public.campaign_matching_qualified_items_for_sale(%L)', gen_random_uuid())),
+  'REFUSED:23503',
+  'R25. ...and on a missing verified sale, rather than returning an empty result');
+
+
+-- ============================================================================
+-- SECTION S — STACKABLE
+-- ============================================================================
+select is((select cv.stacking_mode || '/' || coalesce(cv.exclusivity_key, '-')
+           from public.campaign_versions cv where cv.id = pg_temp.id('cc_ok')), 'STACKABLE/-',
+  'S1. precondition: CC Open is STACKABLE with no exclusivity key');
+
+select is((select cv.stacking_mode || '/' || coalesce(cv.exclusivity_key, '-')
+           from public.campaign_versions cv where cv.id = pg_temp.id('cc_snap')), 'STACKABLE/-',
+  'S2. precondition: so is CC Snap');
+
+select is(pg_temp.res(pg_temp.id('cs_two'), pg_temp.id('cc_ok')), 'QUALIFIED/-/2/7',
+  'S3. two stackable campaigns both remain QUALIFIED — the open-scope one on 2 items');
+
+select is(pg_temp.res(pg_temp.id('cs_two'), pg_temp.id('cc_snap')), 'QUALIFIED/-/1/3',
+  'S4. ...and the frozen-scope one on its own single selected item');
+
+select is(pg_temp.item_products(pg_temp.id('cs_two'), pg_temp.id('cc_snap')),
+  array[pg_temp.id('c_p2')]::uuid[],
+  'S5. each stackable campaign keeps its OWN item set, not a shared one');
+
+select is(pg_temp.item_products(pg_temp.id('cs_two'), pg_temp.id('cc_ok')),
+  array[pg_temp.id('c_p1'), pg_temp.id('c_p2')]::uuid[],
+  'S6. ...and the open-scope campaign keeps both of its items, in line order');
+
+-- Two STACKABLE campaigns sharing a key is impossible: campaign_versions_exclusivity_paired
+-- makes a key equivalent to EXCLUSIVE, so NULL keys can never form one shared group.
+select is((select count(*)::integer from public.campaign_versions cv
+           where cv.stacking_mode = 'STACKABLE' and cv.exclusivity_key is not null), 0,
+  'S7. a STACKABLE campaign can never carry an exclusivity key');
+
+select ok(pg_temp.c_body('campaign_matching_result_for_sale') like '%k_stacking = ''exclusive''%',
+  'S8. only EXCLUSIVE rows enter the suppression window');
+
+
+-- ============================================================================
+-- SECTION T — EXCLUSIVITY
+-- ============================================================================
+-- The fixture is deliberately adversarial: the HIGH-priority campaign matches FEWER
+-- units and is worth ONE coin per unit, against a rival matching more units at 999.
+select is((select cv.priority::text || '/' || cv.exclusivity_key
+           from public.campaign_versions cv where cv.id = pg_temp.id('cx_hi')), '900/BUNDLE',
+  'T1. precondition: CX High is priority 900 in key BUNDLE');
+
+select is((select cv.priority::text || '/' || cv.exclusivity_key
+           from public.campaign_versions cv where cv.id = pg_temp.id('cx_lo')), '100/BUNDLE',
+  'T2. precondition: CX Low is priority 100 in the same key');
+
+select ok((select (select r.coins_per_unit from public.campaign_rules r
+                   where r.campaign_version_id = pg_temp.id('cx_lo') and r.sequence = 1)
+         > (select r.coins_per_unit from public.campaign_rules r
+                   where r.campaign_version_id = pg_temp.id('cx_hi') and r.sequence = 1)),
+  'T3. precondition: the LOSER is worth far more per unit than the winner');
+
+select is(pg_temp.res(pg_temp.id('cs_two'), pg_temp.id('cx_hi')), 'QUALIFIED/-/1/3',
+  'T4. higher priority wins, keeping its own smaller item count and unit total');
+
+select is(pg_temp.res(pg_temp.id('cs_two'), pg_temp.id('cx_lo')),
+  'NOT_QUALIFIED/SUPPRESSED_BY_EXCLUSIVITY/0/0',
+  'T5. the loser is SUPPRESSED_BY_EXCLUSIVITY with zero count and zero units — despite '
+  'matching more units at a higher coin rate');
+
+-- PRIORITY TIE -> EARLIER START.
+select is(pg_temp.res(pg_temp.id('cs_two'), pg_temp.id('cx_te')), 'QUALIFIED/-/2/7',
+  'T6. on a priority tie the earlier campaign_starts_at wins');
+
+select is(pg_temp.res(pg_temp.id('cs_two'), pg_temp.id('cx_tl')),
+  'NOT_QUALIFIED/SUPPRESSED_BY_EXCLUSIVITY/0/0',
+  'T7. ...and the later-starting rival is suppressed');
+
+select ok((select (select cv.priority from public.campaign_versions cv where cv.id = pg_temp.id('cx_te'))
+                = (select cv.priority from public.campaign_versions cv where cv.id = pg_temp.id('cx_tl'))),
+  'T8. ...and T6 really was decided on the start date, because the priorities are equal');
+
+-- The inversion that makes T6 load-bearing: the id key points the OTHER way, so an
+-- implementation that dropped campaign_starts_at would elect CX TieLate every run.
+select ok(pg_temp.id('cx_tl') < pg_temp.id('cx_te'),
+  'T8b. ...and the LATER-starting campaign holds the LOWER version id, so start date and '
+  'id disagree and only the start date can produce T6''s answer');
+
+-- PRIORITY AND START TIE -> LOWER VERSION ID. Which id is lower varies per run, so the
+-- expected winner is computed rather than named.
+select ok((select (select cv.starts_at from public.campaign_versions cv where cv.id = pg_temp.id('cx_ia'))
+                = (select cv.starts_at from public.campaign_versions cv where cv.id = pg_temp.id('cx_ib'))),
+  'T9. precondition: the TIEC pair shares a priority AND a start instant');
+
+select is(pg_temp.res(pg_temp.id('cs_two'), least(pg_temp.id('cx_ia'), pg_temp.id('cx_ib'))),
+  'QUALIFIED/-/2/7',
+  'T10. with both keys tied, the LOWER campaign_version_id wins');
+
+select is(pg_temp.res(pg_temp.id('cs_two'), greatest(pg_temp.id('cx_ia'), pg_temp.id('cx_ib'))),
+  'NOT_QUALIFIED/SUPPRESSED_BY_EXCLUSIVITY/0/0',
+  'T11. ...and the higher one is suppressed');
+
+-- THREE KEYS, THREE WINNERS. Exclusivity partitions; it does not elect one campaign
+-- per sale.
+select is((select count(*)::integer from public.campaign_matching_result_for_sale(pg_temp.id('cs_two')) r
+           where r.outcome = 'QUALIFIED' and r.stacking_mode = 'EXCLUSIVE'), 3,
+  'T12. each of the three exclusivity keys produces exactly one winner');
+
+select is((select coalesce(string_agg(distinct r.exclusivity_key, ',' order by r.exclusivity_key), 'NONE')
+           from public.campaign_matching_result_for_sale(pg_temp.id('cs_two')) r
+           where r.outcome = 'QUALIFIED' and r.stacking_mode = 'EXCLUSIVE'),
+  'BUNDLE,TIEB,TIEC',
+  'T13. ...and they are one winner per distinct key, not three from one key');
+
+select is((select count(*)::integer from public.campaign_matching_result_for_sale(pg_temp.id('cs_two')) r
+           where r.non_qualification_reason = 'SUPPRESSED_BY_EXCLUSIVITY'), 3,
+  'T14. and exactly three losers were suppressed');
+
+-- STACKABLE campaigns are untouched by any of it.
+select is((select count(*)::integer from public.campaign_matching_result_for_sale(pg_temp.id('cs_two')) r
+           where r.stacking_mode = 'STACKABLE' and r.outcome = 'QUALIFIED'), 2,
+  'T15. both STACKABLE campaigns survive the exclusive contest untouched');
+
+-- ANOTHER SALE RESOLVES INDEPENDENTLY, and a campaign that fails on its own items never
+-- suppresses a rival. On cs_solo the high-priority campaign has nothing eligible, so the
+-- key's winner is the low-priority one that does.
+select is(pg_temp.res(pg_temp.id('cs_solo'), pg_temp.id('cx_hi')),
+  'NOT_QUALIFIED/NO_QUALIFYING_ITEMS/0/0',
+  'T16. on another sale the high-priority campaign qualifies for nothing...');
+
+select is(pg_temp.res(pg_temp.id('cs_solo'), pg_temp.id('cx_lo')), 'QUALIFIED/-/1/4',
+  'T17. ...so the low-priority rival wins that key there — losers never suppress');
+
+select is(pg_temp.res(pg_temp.id('cs_two'), pg_temp.id('cx_lo')),
+  'NOT_QUALIFIED/SUPPRESSED_BY_EXCLUSIVITY/0/0',
+  'T18. ...while the same campaign is still suppressed on cs_two — per sale, not global');
+
+-- REWARD VALUE IS NEVER CONSULTED, textually as well as behaviourally.
+select ok(pg_temp.c_body('campaign_matching_result_for_sale')
+            !~ 'campaign_rules|coins_per_unit|reward_coins|threshold_units|max_reward_coins|rule_type',
+  'T19. the resolver names no reward rule, coin rate, threshold, cap or tier');
+
+select ok(pg_temp.c_body('campaign_matching_result_for_sale')
+            like '%partition by p.k_excl_key order by p.k_priority desc, p.k_starts_at asc, p.k_version_id asc%',
+  'T20. the tie-break is exactly priority DESC, starts_at ASC, version_id ASC');
+
+-- The window must not see qualifying_units or the item count.
+select ok((select substring(pg_temp.c_body('campaign_matching_result_for_sale')
+                    from position('partition by' in pg_temp.c_body('campaign_matching_result_for_sale'))
+                    for 200) !~ 'p_units|p_count|qualifying_units|qualifying_item_count'),
+  'T21. basket size is not part of the ordering — one campaign''s quantities cannot move '
+  'another''s rank');
+
+
+-- ============================================================================
+-- SECTION U — THE QUALIFYING ITEM HELPER
+-- ============================================================================
+select is((select count(*)::integer from public.campaign_matching_qualified_items_for_sale(
+             pg_temp.id('cs_two'))), 8,
+  'U1. cs_two yields eight qualifying item rows: 1 + 2 + 2 + 1 + 2 across five winners');
+
+select is((select coalesce(string_agg(distinct r.outcome, ','), 'NONE')
+           from public.campaign_matching_result_for_sale(pg_temp.id('cs_two')) r
+           where r.campaign_version_id in (
+             select q.campaign_version_id
+             from public.campaign_matching_qualified_items_for_sale(pg_temp.id('cs_two')) q)),
+  'QUALIFIED',
+  'U2. every campaign appearing in the item helper is finally QUALIFIED');
+
+select is((select count(*)::integer from public.campaign_matching_qualified_items_for_sale(
+             pg_temp.id('cs_two')) q where q.campaign_version_id = pg_temp.id('cx_lo')), 0,
+  'U3. a SUPPRESSED_BY_EXCLUSIVITY loser contributes no item rows');
+
+select is((select count(*)::integer from public.campaign_matching_qualified_items_for_sale(
+             pg_temp.id('cs_two')) q where q.campaign_version_id = pg_temp.id('cc_gap')), 0,
+  'U4. a NOT_EVALUABLE campaign contributes no item rows');
+
+select is((select count(*)::integer from public.campaign_matching_qualified_items_for_sale(
+             pg_temp.id('cs_none'))), 0,
+  'U5. a sale whose every campaign is NO_QUALIFYING_ITEMS yields no item rows at all');
+
+-- Exact identity and quantity, taken from the authoritative row.
+select ok((select q.verified_sale_id = pg_temp.id('cs_mix')
+             and q.verified_sale_item_id = (select i.id from public.verified_sale_items i
+                                            where i.verified_sale_id = pg_temp.id('cs_mix')
+                                              and i.vendor_product_id = pg_temp.id('c_p1'))
+             and q.vendor_product_id = pg_temp.id('c_p1')
+             and q.qualifying_units = 4
+           from public.campaign_matching_qualified_items_for_sale(pg_temp.id('cs_mix')) q
+           where q.campaign_version_id = pg_temp.id('cc_ok')),
+  'U6. the row carries the exact sale, item, product and authoritative quantity');
+
+select ok((select bool_and(q.qualifying_units = i.quantity)
+           from public.campaign_matching_qualified_items_for_sale(pg_temp.id('cs_two')) q
+           join public.verified_sale_items i on i.id = q.verified_sale_item_id),
+  'U7. every returned quantity equals the authoritative item quantity');
+
+select ok((select bool_and(q.campaign_version_id <> pg_temp.id('cc_ok')
+                           or q.vendor_product_id <> pg_temp.id('c_p3'))
+           from public.campaign_matching_qualified_items_for_sale(pg_temp.id('cs_mix')) q),
+  'U8. the ineligible line of a qualified campaign is not returned');
+
+-- SNAPSHOT evidence is null; LIVE_TEMPORAL evidence carries the sale-time statuses.
+select is((select q.product_source || '/' || coalesce(q.product_status_at_sale, '-') || '/'
+                || coalesce(q.assignment_status_at_sale, '-')
+           from public.campaign_matching_qualified_items_for_sale(pg_temp.id('cs_two')) q
+           where q.campaign_version_id = pg_temp.id('cc_snap')), 'SNAPSHOT/-/-',
+  'U9. a frozen-scope campaign returns SNAPSHOT evidence with null sale-time statuses');
+
+select is((select coalesce(string_agg(distinct q.product_source || '/' || q.product_status_at_sale
+                    || '/' || q.assignment_status_at_sale, ','), 'NONE')
+           from public.campaign_matching_qualified_items_for_sale(pg_temp.id('cs_two')) q
+           where q.campaign_version_id = pg_temp.id('cc_ok')),
+  'LIVE_TEMPORAL/ACTIVE/ACTIVE',
+  'U10. an open-scope campaign returns the sale-time product and assignment statuses');
+
+-- Migration 65's live_evidence_paired CHECK is exactly this pairing, so the evidence
+-- writer can insert these rows unchanged.
+select ok((select bool_and((q.product_source = 'LIVE_TEMPORAL') = (q.product_status_at_sale is not null))
+           from public.campaign_matching_qualified_items_for_sale(pg_temp.id('cs_two')) q),
+  'U11. source and evidence are paired exactly as campaign_sale_item_qualifications '
+  'requires');
+
+select is((select count(*)::integer from (
+             select q.campaign_version_id, q.verified_sale_item_id
+             from public.campaign_matching_qualified_items_for_sale(pg_temp.id('cs_two')) q
+             group by 1, 2 having count(*) > 1) d), 0,
+  'U12. no (campaign, item) pair is returned twice');
+
+select ok((select bool_and(q.qualifying_units >= 1)
+           from public.campaign_matching_qualified_items_for_sale(pg_temp.id('cs_two')) q),
+  'U13. every returned item counts at least one unit — no zero rows leak through');
+
+-- The counts the resolver reported ARE the rows this helper returns. If they ever
+-- disagreed, the evidence writer would insert a total that its own items contradict.
+select ok((select bool_and(r.qualifying_item_count = k.n and r.qualifying_units = k.u)
+           from public.campaign_matching_result_for_sale(pg_temp.id('cs_two')) r
+           cross join lateral (
+             select count(*)::integer as n, coalesce(sum(q.qualifying_units), 0)::integer as u
+             from public.campaign_matching_qualified_items_for_sale(pg_temp.id('cs_two')) q
+             where q.campaign_version_id = r.campaign_version_id) k
+           where r.outcome = 'QUALIFIED'),
+  'U14. the resolver''s counts and units reconcile exactly with the item rows');
+
+select ok((select count(*)::integer from information_schema.columns
+           where table_schema = 'public' and table_name = 'x') = 0
+       and (select pg_get_function_result(p.oid) from pg_proc p
+            join pg_namespace n on n.oid = p.pronamespace
+            where n.nspname = 'public' and p.proname = 'campaign_matching_qualified_items_for_sale')
+           !~ 'product_name|product_code|barcode|brand|json|jsonb',
+  'U15. no mutable product display field and no JSON is returned');
+
+
+-- ============================================================================
+-- SECTION V — DETERMINISM AND BOUNDARIES
+-- ============================================================================
+select is(pg_temp.res_order(pg_temp.id('cs_two')),
+  array[pg_temp.id('cx_hi'), pg_temp.id('cx_te'), pg_temp.id('cx_tl'),
+        least(pg_temp.id('cx_ia'), pg_temp.id('cx_ib')),
+        greatest(pg_temp.id('cx_ia'), pg_temp.id('cx_ib')),
+        pg_temp.id('cx_lo'), pg_temp.id('cc_gap'), pg_temp.id('cc_snap'),
+        pg_temp.id('cc_ok')]::uuid[],
+  'V1. campaign results arrive in priority DESC, starts_at ASC, version_id ASC order');
+
+select is(pg_temp.item_products(pg_temp.id('cs_two'), pg_temp.id('cx_te')),
+  array[pg_temp.id('c_p1'), pg_temp.id('c_p2')]::uuid[],
+  'V2. a campaign''s item rows arrive in sale-item line order');
+
+select is(pg_temp.res_digest(pg_temp.id('cs_two')), pg_temp.res_digest(pg_temp.id('cs_two')),
+  'V3. two calls for one sale return byte-equivalent ordered campaign results');
+
+select is(pg_temp.items_digest(pg_temp.id('cs_two')), pg_temp.items_digest(pg_temp.id('cs_two')),
+  'V4. two calls return byte-equivalent ordered item results');
+
+-- Units 66A and 66B are untouched by this unit. If either body changed, that is a
+-- different unit's work and needs its own approval — not a hash quietly refreshed here.
+select is((select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public' and p.proname = 'campaign_versions_matching_sale'),
+  '4e20cce64647395974fa8da490c55c20',
+  'V5. Unit 66A''s body is byte-for-byte what it was when it was approved');
+
+select is((select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public' and p.proname = 'campaign_sale_item_eligible_at'),
+  'bcaf88024d3cc06dbae6dc46670a2906',
+  'V6. Unit 66B''s body is byte-for-byte what it was when it was approved');
+
+-- Nothing was written, by anything, anywhere in this suite.
+select is((select count(*)::integer from public.campaign_sale_evaluations), 0,
+  'V7. no evaluation evidence exists');
+select is((select count(*)::integer from public.campaign_sale_item_qualifications), 0,
+  'V8. no item qualification evidence exists');
+select is((select count(*)::integer from public.campaign_rewards), 0,
+  'V9. no reward evidence exists');
+select is((select count(*)::integer from public.campaign_subject_accumulators), 0,
+  'V10. no accumulator row exists');
+
+select is((select count(*)::integer from information_schema.tables where table_schema='public'
+           and (table_name like '%coin%' or table_name like '%ledger%' or table_name like '%wallet%'
+             or table_name like '%balance%' or table_name like '%payout%' or table_name like '%redemption%')), 0,
+  'V11. still no coin, ledger, wallet, balance, payout or redemption object');
+
+select is((select count(*)::integer from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public' and p.prosrc ~* 'campaign_subject_accumulators'
+             and p.prorettype <> 'trigger'::regtype), 0,
+  'V12. no non-trigger function touches the accumulator table');
+
+-- CURRENT STATE CANNOT MOVE A HISTORICAL RESULT. Deactivating the Retailer, its Sales
+-- Staff member and the trading relationship changes nothing, because none of them is a
+-- temporal source: 66A reads the frozen retailer snapshot and the status timeline, 66B
+-- reads the two product timelines, and 66C reads neither directly.
+insert into pg_temp.snap values
+  ('cs_two_res',   pg_temp.res_digest(pg_temp.id('cs_two'))),
+  ('cs_two_items', pg_temp.items_digest(pg_temp.id('cs_two')));
+
+do $$
+begin
+  update public.organizations set status = 'DEACTIVATED' where id = pg_temp.id('retailer_c');
+  update public.profiles      set status = 'DEACTIVATED' where id = pg_temp.id('staffc');
+  update public.vendor_retailers set status = 'DEACTIVATED'
+   where vendor_organization_id = pg_temp.id('vendor_c')
+     and retailer_organization_id = pg_temp.id('retailer_c');
+end;
+$$;
+
+select is(pg_temp.res_digest(pg_temp.id('cs_two')),
+          (select v from pg_temp.snap where k = 'cs_two_res'),
+  'V13. deactivating the Retailer, the Sales Staff member and the trading relationship '
+  'leaves the campaign result identical');
+
+select is(pg_temp.items_digest(pg_temp.id('cs_two')),
+          (select v from pg_temp.snap where k = 'cs_two_items'),
+  'V14. ...and leaves the qualifying item rows identical');
 
 
 select * from finish();

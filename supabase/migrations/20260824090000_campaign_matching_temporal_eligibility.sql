@@ -7,6 +7,9 @@
 --     1 internal fn   campaign_versions_matching_sale(uuid)
 --   Unit 66B
 --     1 internal fn   campaign_sale_item_eligible_at(uuid, uuid)
+--   Unit 66C
+--     2 internal fns  campaign_matching_result_for_sale(uuid)
+--                     campaign_matching_qualified_items_for_sale(uuid)
 --
 --   0 tables. 0 RPCs. 0 permissions. 0 grants. 0 evidence writes.
 --
@@ -579,3 +582,371 @@ revoke execute on function public.campaign_sale_item_eligible_at(uuid, uuid) fro
 
 comment on function public.campaign_sale_item_eligible_at(uuid, uuid) is
   'Resolves whether one authoritative sale item was eligible for one campaign version, at verified_sales.sale_at. Dispatches on the version''s declared product_eligibility_resolution, never on whether snapshot rows exist: SNAPSHOT reads frozen campaign_eligible_products membership and reports NULL temporal evidence; LIVE_TEMPORAL composes vendor_product_assignment_state_at and vendor_product_status_at directly and requires both ACTIVE. Missing history on either axis yields NOT_EVALUABLE / NO_TEMPORAL_RECORD in preference to an explicit NOT_ELIGIBLE. Derives all lineage from the two ids and raises on contradictory lineage. Performs no writes and resolves no campaign candidacy.';
+
+
+-- ============================================================================
+-- UNIT 66C — COMPLETE CAMPAIGN MATCHING ORCHESTRATION
+-- ============================================================================
+-- 66A answered which campaign versions a sale matched. 66B answered whether one item was
+-- eligible for one of them. Neither decides anything about the sale as a whole. This unit
+-- composes them into the answer an evaluator can actually write down: for one
+-- authoritative verified sale, every candidate campaign with a final outcome, a
+-- qualifying item count and a qualifying unit total.
+--
+-- It COMPOSES. It does not re-derive candidacy, re-read the status timeline, re-resolve
+-- product eligibility or re-check Vendor lineage. Every one of those questions already
+-- has exactly one owner, and giving it a second owner is how two code paths come to
+-- disagree about the same historical sale.
+--
+-- ============================================================================
+-- THE AGGREGATION, AND WHY MISSING HISTORY POISONS THE WHOLE CAMPAIGN
+-- ============================================================================
+-- Per candidate campaign, in this order:
+--
+--   1. 66A already said NOT_EVALUABLE          -> NOT_EVALUABLE / NO_TEMPORAL_RECORD.
+--      The items are NOT evaluated at all. Asking "was this product eligible for that
+--      campaign?" when we cannot establish the campaign was in force is answering a
+--      question whose premise is unknown.
+--
+--   2. ANY item came back NOT_EVALUABLE        -> NOT_EVALUABLE / NO_TEMPORAL_RECORD.
+--      Not "ignore that item and reward the rest". A sale is one commercial event, and a
+--      partial answer over it is a guess wearing a total's clothing: the units we would
+--      pay on are a lower bound of unknown tightness. One unknown item poisons the
+--      campaign's evaluation, deliberately, and re-running it after the history is
+--      backfilled produces the honest number instead of silently correcting a payment.
+--
+--   3. Every item decidable, none eligible     -> NOT_QUALIFIED / NO_QUALIFYING_ITEMS.
+--
+--   4. Otherwise                               -> QUALIFIED, provisionally, counting ONLY
+--      the ELIGIBLE item rows and summing ONLY their units.
+--
+-- An INELIGIBLE item does NOT block its eligible neighbours. A basket holding one
+-- campaign product and one unrelated product qualifies on the campaign product; the
+-- ineligible line simply contributes nothing. That is rule 3, and step 2 is the ONLY
+-- thing that can veto a whole basket.
+--
+-- A sale whose reviewer REJECTED the entire proposed item set has zero authoritative
+-- items. That is a reachable, legitimate state — finalize_claim_receipt_sale_items writes
+-- no rows on REJECTED — and it is NOT broken lineage. It falls out of step 3 vacuously:
+-- no item is eligible, so NO_QUALIFYING_ITEMS. It is not raised, because nothing about it
+-- is contradictory.
+--
+-- ============================================================================
+-- EXCLUSIVITY IS RESOLVED PER SALE, PER KEY, AFTER AGGREGATION
+-- ============================================================================
+-- Only campaigns that are OTHERWISE QUALIFIED enter the contest. A campaign that failed
+-- on its own items never suppresses a rival — losing to a campaign that itself qualifies
+-- for nothing would be a silent, unexplainable zero.
+--
+-- The window ranks EXCLUSIVE rows only. campaign_versions_exclusivity_paired makes
+-- stacking_mode = 'EXCLUSIVE' equivalent to exclusivity_key IS NOT NULL, so every row
+-- inside the window has a key and a NULL key can never form a shared group. STACKABLE
+-- campaigns are not in the window at all: they neither suppress nor are suppressed, and
+-- each keeps its own item set and units.
+--
+-- The tie-break is priority DESC, campaign_starts_at ASC, campaign_version_id ASC —
+-- three keys, the last of which is unique, so the winner is total and reproducible.
+-- REWARD VALUE IS NOT CONSULTED. Neither is qualifying_units, item count, coins per unit,
+-- cap or tier. A campaign does not win by being worth more, and it does not win by
+-- happening to match a bigger basket; it wins because the Vendor ranked it higher. Making
+-- the money decide would mean the winner changed whenever a basket changed, and two sales
+-- of the same campaigns could resolve to different campaigns for no stated reason.
+--
+-- A loser becomes NOT_QUALIFIED / SUPPRESSED_BY_EXCLUSIVITY with zero count and zero
+-- units, and contributes no qualifying items. The row is still RETURNED: "this campaign
+-- matched and lost the key" is evidence worth having, and it is exactly what Migration
+-- 65's partial unique index on (verified_sale_id, exclusivity_key) WHERE outcome =
+-- 'QUALIFIED' expects a writer to have decided before it inserts.
+--
+-- ============================================================================
+-- WHAT THIS UNIT DELIBERATELY DOES NOT DO
+-- ============================================================================
+-- No reward arithmetic, no coins, no cap, no target bonus, no accumulator (Migration 67).
+-- No evidence write of any kind, no audit log, no evaluator lock (Migration 68). No
+-- permission and no browser-facing RPC. No current account, product, assignment, Retailer
+-- or Staff state. It reads, orders, and returns.
+
+
+create function public.campaign_matching_result_for_sale(
+  p_verified_sale_id uuid
+)
+returns table (
+  campaign_id                    uuid,
+  campaign_version_id            uuid,
+  vendor_organization_id         uuid,
+  retailer_organization_id       uuid,
+  retailer_shop_id               uuid,
+  beneficiary_profile_id         uuid,
+  sale_at                        timestamptz,
+  performance_scope              text,
+  reward_recipient_scope         text,
+  product_scope                  text,
+  product_eligibility_resolution text,
+  stacking_mode                  text,
+  exclusivity_key                text,
+  priority                       integer,
+  campaign_starts_at             timestamptz,
+  campaign_ends_at               timestamptz,
+  outcome                        text,
+  non_qualification_reason       text,
+  qualifying_item_count          integer,
+  qualifying_units               integer
+)
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  v_item_count integer;
+  v_row        record;
+begin
+  -- ---- LINEAGE ---------------------------------------------------------------
+  -- Only the two guards this function needs BEFORE it can count items. Everything
+  -- deeper — the receipt, the beneficiary, the Vendor/Retailer/shop contradictions —
+  -- is 66A's, and 66A raises for all of it when it is called below. Duplicating those
+  -- checks here would create a second place for them to drift.
+  if p_verified_sale_id is null then
+    raise exception 'A verified sale id is required'
+      using errcode = 'invalid_parameter_value';
+  end if;
+
+  if not exists (select 1 from public.verified_sales v where v.id = p_verified_sale_id) then
+    raise exception 'That authoritative verified sale does not exist'
+      using errcode = 'foreign_key_violation';
+  end if;
+
+  -- The denominator for the completeness check below. Zero is legitimate (a REJECTED
+  -- item set) and is not an error.
+  select count(*)::integer into v_item_count
+  from public.verified_sale_items i
+  where i.verified_sale_id = p_verified_sale_id;
+
+  -- ---- ONE PASS, ROW BY ROW --------------------------------------------------
+  -- A FOR loop rather than RETURN QUERY so the per-campaign integrity check can RAISE
+  -- without evaluating every item a second time.
+  for v_row in
+    with candidates as (
+      -- Prefixed, because every unprefixed name here collides with an OUT parameter.
+      select m.campaign_id                    as k_campaign_id,
+             m.campaign_version_id            as k_version_id,
+             m.vendor_organization_id         as k_vendor_id,
+             m.retailer_organization_id       as k_retailer_id,
+             m.retailer_shop_id               as k_shop_id,
+             m.beneficiary_profile_id         as k_beneficiary_id,
+             m.sale_at                        as k_sale_at,
+             m.performance_scope              as k_performance,
+             m.reward_recipient_scope         as k_recipient,
+             m.product_scope                  as k_product_scope,
+             m.product_eligibility_resolution as k_resolution,
+             m.stacking_mode                  as k_stacking,
+             m.exclusivity_key                as k_excl_key,
+             m.priority                       as k_priority,
+             m.campaign_starts_at             as k_starts_at,
+             m.campaign_ends_at               as k_ends_at,
+             m.candidate_result               as k_candidate
+      from public.campaign_versions_matching_sale(p_verified_sale_id) m
+    ),
+    judged as (
+      -- Every authoritative item, against every campaign whose candidacy IS known.
+      -- The NOT_EVALUABLE candidates are excluded here, not filtered afterwards: their
+      -- items are never asked about at all.
+      select c.k_version_id                                                          as j_version_id,
+             count(*)                                                                as j_judged,
+             count(distinct e.verified_sale_item_id)                                 as j_distinct,
+             count(*) filter (where e.eligibility_result = 'ELIGIBLE')               as j_eligible,
+             count(*) filter (where e.eligibility_result = 'NOT_EVALUABLE')          as j_unknown,
+             coalesce(sum(e.qualifying_units)
+                        filter (where e.eligibility_result = 'ELIGIBLE'), 0)         as j_units
+      from candidates c
+      join public.verified_sale_items i
+        on i.verified_sale_id = p_verified_sale_id
+      cross join lateral public.campaign_sale_item_eligible_at(c.k_version_id, i.id) e
+      where c.k_candidate = 'CANDIDATE'
+      group by c.k_version_id
+    ),
+    provisional as (
+      select c.*,
+             coalesce(j.j_judged, 0)   as p_judged,
+             coalesce(j.j_distinct, 0) as p_distinct,
+             -- The order of these branches IS the rule. Unknown campaign history first,
+             -- then unknown item history, then nothing eligible, then qualified.
+             case
+               when c.k_candidate = 'NOT_EVALUABLE'   then 'NOT_EVALUABLE'
+               when coalesce(j.j_unknown, 0)  > 0     then 'NOT_EVALUABLE'
+               when coalesce(j.j_eligible, 0) = 0     then 'NOT_QUALIFIED'
+               else                                        'QUALIFIED'
+             end                                as p_outcome,
+             coalesce(j.j_eligible, 0)::integer as p_count,
+             coalesce(j.j_units, 0)::integer    as p_units
+      from candidates c
+      left join judged j on j.j_version_id = c.k_version_id
+    ),
+    contested as (
+      -- ONLY otherwise-qualified EXCLUSIVE campaigns are ranked. Every row here has a
+      -- non-null key by campaign_versions_exclusivity_paired, so the partition never
+      -- gathers NULLs into one accidental group.
+      select p.k_version_id as w_version_id,
+             row_number() over (
+               partition by p.k_excl_key
+               order by p.k_priority   desc,
+                        p.k_starts_at  asc,
+                        p.k_version_id asc
+             ) as w_rank
+      from provisional p
+      where p.p_outcome = 'QUALIFIED'
+        and p.k_stacking = 'EXCLUSIVE'
+    )
+    select p.*,
+           w.w_rank,
+           -- Suppression is the last thing that happens, and it only ever demotes.
+           case when w.w_rank > 1 then 'NOT_QUALIFIED' else p.p_outcome end as f_outcome
+    from provisional p
+    left join contested w on w.w_version_id = p.k_version_id
+    order by p.k_priority desc, p.k_starts_at asc, p.k_version_id asc
+  loop
+    -- ---- INTEGRITY -----------------------------------------------------------
+    -- 66B answers exactly once per (campaign version, item). If it ever returned zero
+    -- rows or more than one, this campaign's counts would be quietly wrong rather than
+    -- visibly broken, and a reward would be paid on them.
+    if v_row.k_candidate = 'CANDIDATE'
+       and (v_row.p_judged <> v_item_count or v_row.p_distinct <> v_item_count) then
+      raise exception 'Item eligibility returned % results over % distinct items for % authoritative items',
+        v_row.p_judged, v_row.p_distinct, v_item_count
+        using errcode = 'check_violation';
+    end if;
+
+    campaign_id                    := v_row.k_campaign_id;
+    campaign_version_id            := v_row.k_version_id;
+    vendor_organization_id         := v_row.k_vendor_id;
+    retailer_organization_id       := v_row.k_retailer_id;
+    retailer_shop_id               := v_row.k_shop_id;
+    beneficiary_profile_id         := v_row.k_beneficiary_id;
+    sale_at                        := v_row.k_sale_at;
+    performance_scope              := v_row.k_performance;
+    reward_recipient_scope         := v_row.k_recipient;
+    product_scope                  := v_row.k_product_scope;
+    product_eligibility_resolution := v_row.k_resolution;
+    stacking_mode                  := v_row.k_stacking;
+    exclusivity_key                := v_row.k_excl_key;
+    priority                       := v_row.k_priority;
+    campaign_starts_at             := v_row.k_starts_at;
+    campaign_ends_at               := v_row.k_ends_at;
+
+    outcome := v_row.f_outcome;
+
+    -- Reason is derived from the FINAL outcome, so the pairing cannot drift from it.
+    non_qualification_reason := case
+      when v_row.f_outcome = 'QUALIFIED'                          then null
+      when v_row.f_outcome = 'NOT_EVALUABLE'                      then 'NO_TEMPORAL_RECORD'
+      when v_row.w_rank > 1                                       then 'SUPPRESSED_BY_EXCLUSIVITY'
+      else                                                             'NO_QUALIFYING_ITEMS'
+    end;
+
+    -- Counts survive ONLY on a final QUALIFIED. A suppressed loser and a poisoned
+    -- evaluation both report zero, so no caller can reward them by reading past the
+    -- outcome column.
+    if v_row.f_outcome = 'QUALIFIED' then
+      qualifying_item_count := v_row.p_count;
+      qualifying_units      := v_row.p_units;
+    else
+      qualifying_item_count := 0;
+      qualifying_units      := 0;
+    end if;
+
+    return next;
+  end loop;
+
+  return;
+end;
+$$;
+
+
+-- The typed item-level companion. Migration 68's evidence writer needs one row per
+-- (campaign, item) it is about to insert into campaign_sale_item_qualifications, with the
+-- sale-time evidence already resolved — so it is returned as a typed row set, never as
+-- JSON a caller would have to re-parse and re-trust.
+--
+-- It calls the result function rather than repeating the aggregation, which means the
+-- QUALIFIED set here is the SAME set, decided once. A suppressed loser, a poisoned
+-- evaluation and a campaign with no qualifying items all contribute nothing, because the
+-- filter is the final outcome and not the provisional one.
+create function public.campaign_matching_qualified_items_for_sale(
+  p_verified_sale_id uuid
+)
+returns table (
+  campaign_id               uuid,
+  campaign_version_id       uuid,
+  verified_sale_id          uuid,
+  verified_sale_item_id     uuid,
+  vendor_product_id         uuid,
+  qualifying_units          integer,
+  product_source            text,
+  product_status_at_sale    text,
+  assignment_status_at_sale text
+)
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+begin
+  -- THE SAME LINEAGE GUARDS AS THE RESOLVER, restated rather than inherited. The query
+  -- below joins verified_sale_items on p_verified_sale_id, so for a null or unknown id
+  -- the planner proves the join empty and never executes the resolver at all — its
+  -- raises never fire, and a broken lineage would come back as a silent, legitimate-
+  -- looking empty result. Rule: broken lineage raises; it is never an absence.
+  if p_verified_sale_id is null then
+    raise exception 'A verified sale id is required'
+      using errcode = 'invalid_parameter_value';
+  end if;
+
+  if not exists (select 1 from public.verified_sales v where v.id = p_verified_sale_id) then
+    raise exception 'That authoritative verified sale does not exist'
+      using errcode = 'foreign_key_violation';
+  end if;
+
+  return query
+  select r.campaign_id,
+         r.campaign_version_id,
+         i.verified_sale_id,
+         e.verified_sale_item_id,
+         e.vendor_product_id,
+         -- 66B's own number, which is the authoritative item quantity. Nothing here
+         -- recomputes it, and no mutable display field of the product is returned.
+         e.qualifying_units,
+         e.product_source,
+         e.product_status_at_sale,
+         e.assignment_status_at_sale
+  from public.campaign_matching_result_for_sale(p_verified_sale_id) r
+  join public.verified_sale_items i
+    on i.verified_sale_id = p_verified_sale_id
+  cross join lateral public.campaign_sale_item_eligible_at(r.campaign_version_id, i.id) e
+  where r.outcome = 'QUALIFIED'
+    and e.eligibility_result = 'ELIGIBLE'
+  -- The campaign keys first, so a caller writing evidence walks campaigns in the same
+  -- order the result function returned them; then the line as the receipt records it.
+  order by r.priority             desc,
+           r.campaign_starts_at   asc,
+           r.campaign_version_id  asc,
+           i.line_number          asc,
+           e.verified_sale_item_id asc;
+end;
+$$;
+
+
+revoke all     on function public.campaign_matching_result_for_sale(uuid) from public;
+revoke execute on function public.campaign_matching_result_for_sale(uuid) from anon;
+revoke execute on function public.campaign_matching_result_for_sale(uuid) from authenticated;
+revoke execute on function public.campaign_matching_result_for_sale(uuid) from service_role;
+
+revoke all     on function public.campaign_matching_qualified_items_for_sale(uuid) from public;
+revoke execute on function public.campaign_matching_qualified_items_for_sale(uuid) from anon;
+revoke execute on function public.campaign_matching_qualified_items_for_sale(uuid) from authenticated;
+revoke execute on function public.campaign_matching_qualified_items_for_sale(uuid) from service_role;
+
+comment on function public.campaign_matching_result_for_sale(uuid) is
+  'Composes campaign_versions_matching_sale and campaign_sale_item_eligible_at into the final campaign matching result for one authoritative verified sale. Per candidate: unknown campaign history or ANY unknown item history yields NOT_EVALUABLE / NO_TEMPORAL_RECORD with zero counts; no eligible item yields NOT_QUALIFIED / NO_QUALIFYING_ITEMS; otherwise QUALIFIED counting only ELIGIBLE items and summing only their units. Ineligible items never block eligible ones. Exclusivity is then resolved per sale per exclusivity_key among otherwise-qualified EXCLUSIVE campaigns by priority DESC, campaign_starts_at ASC, campaign_version_id ASC; losers become NOT_QUALIFIED / SUPPRESSED_BY_EXCLUSIVITY with zero counts. Reward value never affects the winner. Ordered priority DESC, campaign_starts_at ASC, campaign_version_id ASC. Performs no writes and calculates no reward.';
+
+comment on function public.campaign_matching_qualified_items_for_sale(uuid) is
+  'The typed item-level companion to campaign_matching_result_for_sale: one row per ELIGIBLE authoritative sale item of every campaign whose FINAL outcome is QUALIFIED, carrying the sale-time evidence campaign_sale_item_eligible_at resolved. Returns nothing for NO_QUALIFYING_ITEMS, NOT_EVALUABLE or SUPPRESSED_BY_EXCLUSIVITY campaigns. Ordered by campaign priority DESC, campaign_starts_at ASC, campaign_version_id ASC, then sale item line_number ASC and id ASC. Performs no writes.';
