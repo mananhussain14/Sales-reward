@@ -128,12 +128,27 @@ describe("navigation uses client-side Next.js Link, never a full reload", () => 
    *
    *    See docs/claim-reviewer-sale-header-finalization-web.md.
    *
+   * 4. PRODUCT PANEL — the THIRD consumer of the same settlement pattern, added
+   *    by Phase 1D-B. Accepting or rejecting a receipt's whole product list is an
+   *    immutable, audited write on the SAME heavy cross-region route, so its
+   *    action returns the authoritative outcome and revalidates nothing, and the
+   *    panel re-reads the route itself afterwards. Identical justification to (2)
+   *    and (3): a re-attempt of a Server Component read, not navigation and not a
+   *    write. Test 4b below covers all three actions.
+   *
+   *    Its single call site is shared by the post-settlement effect and the manual
+   *    "Check product decision status" button, and is guarded by a ref so at most
+   *    one automatic refresh follows an authoritative result.
+   *
+   *    See docs/claim-reviewer-product-decision-flow.md.
+   *
    * See docs/retailer-manage-staff-shops-web.md § 11.
    */
   const REFRESH_ALLOWED = new Set([
     "app/(retailer)/retailer/staff/manage-shops-dialog.tsx",
     "app/(review)/review/[receiptSubmissionId]/qualification-panel.tsx",
     "app/(review)/review/[receiptSubmissionId]/sale-header-panel.tsx",
+    "app/(review)/review/[receiptSubmissionId]/product-panel.tsx",
   ]);
 
   test("4 & 5. no full-reload navigation or stray router.refresh anywhere", () => {
@@ -169,6 +184,7 @@ describe("navigation uses client-side Next.js Link, never a full reload", () => 
     for (const file of [
       "app/(review)/review/[receiptSubmissionId]/qualification-actions.ts",
       "app/(review)/review/[receiptSubmissionId]/sale-finalization-actions.ts",
+      "app/(review)/review/[receiptSubmissionId]/product-decision-actions.ts",
     ]) {
       const action = stripComments(read(file));
       assert.ok(
