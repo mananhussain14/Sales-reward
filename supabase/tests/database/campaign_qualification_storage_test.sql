@@ -2173,8 +2173,11 @@ select is(
 -- CAMPAIGN_EVALUATION_EXECUTE by approval, taking the catalogue from 32 to 33. The rule
 -- this assertion owns — that MIGRATION 65 minted no permission — is restated exactly
 -- below it, against the two codes that migration would have needed.
-select is((select count(*)::integer from public.permissions), 33,
-  'J4. the permission catalogue is at its approved 33 entries');
+-- Migration 65 minted no permission. STAFF_EARNINGS_VIEW (Migration 70) is the one
+-- approved addition since.
+select is((select count(*)::integer from public.permissions), 34,
+  'J4. the permission catalogue is at 34 — Migration 65 minted none, and the only '
+  'addition since is the approved STAFF_EARNINGS_VIEW');
 select is((select count(*)::integer from public.permissions
            where code in ('CAMPAIGN_QUALIFICATION_EVALUATE','CAMPAIGN_REWARDS_READ')), 0,
   'J5. no evaluation or reward permission was added');

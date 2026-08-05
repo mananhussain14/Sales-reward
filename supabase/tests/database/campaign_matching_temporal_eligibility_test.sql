@@ -906,8 +906,12 @@ select isnt((select obj_description(p.oid, 'pg_proc') from pg_proc p
 select is((select count(*)::integer from information_schema.tables
            where table_schema = 'public' and table_type = 'BASE TABLE'), 47,
   'A7. no table was added — still the 47 from Migration 65');
-select is((select count(*)::integer from public.permissions), 33,
-  'A8. the permission catalogue is unchanged at 32');
+-- Migration 66 minted no permission. The absolute total has since moved twice by
+-- approval — CAMPAIGN_EVALUATION_EXECUTE (68) and STAFF_EARNINGS_VIEW (70) — and both
+-- are named here so an UNAPPROVED thirty-fifth still fails.
+select is((select count(*)::integer from public.permissions), 34,
+  'A8. the permission catalogue is at 34: the 32 before Migration 66, which minted '
+  'none, plus the approved CAMPAIGN_EVALUATION_EXECUTE and STAFF_EARNINGS_VIEW');
 
 
 -- ============================================================================
@@ -1392,8 +1396,8 @@ select is((select count(*)::integer from information_schema.tables
            where table_schema = 'public' and table_type = 'BASE TABLE'), 47,
   'J8. Unit 66B added no table either — still the 47 from Migration 65');
 
-select is((select count(*)::integer from public.permissions), 33,
-  'J9. the permission catalogue is still unchanged at 32');
+select is((select count(*)::integer from public.permissions), 34,
+  'J9. the permission catalogue is still at 34 — Unit 66B minted none either');
 
 
 -- ============================================================================
@@ -1854,8 +1858,8 @@ select ok((select bool_and(obj_description(p.oid, 'pg_proc') is not null) from p
            where n.nspname = 'public' and p.proname like 'campaign_matching_%'),
   'Q10. both are documented');
 
-select is((select count(*)::integer from public.permissions), 33,
-  'Q11. the permission catalogue is still 32 — no new permission was minted');
+select is((select count(*)::integer from public.permissions), 34,
+  'Q11. the permission catalogue is still 34 — Unit 66C minted none either');
 
 -- NARROWED FOR PHASE 2A-D: CAMPAIGN_EVALUATION_EXECUTE was minted by approval in
 -- migration 20260826090000 and granted to CLAIM_REVIEWER alone. The rule this assertion
@@ -1891,15 +1895,15 @@ select ok((select bool_and(p.prosrc !~* '\mnow\s*\(|\mcurrent_timestamp\M|publis
   'Q16. neither reads now() or campaigns.published_version_id');
 
 -- SUPERSEDED IN PART BY PHASES 2A-C, 2A-D AND 2A-E: Migrations 67 (20260825090000),
--- 68 (20260826090000) and 69 (20260827090000) were created by approval and are named
--- exactly. The rule this assertion still owns is that NOTHING beyond them has been
--- applied — a Migration 70 appearing without approval fails here.
+-- 68 (20260826090000), 69 (20260827090000) and 70 (20260828090000) were created by
+-- approval and are named exactly. The rule this assertion still owns is that NOTHING
+-- beyond them has been applied — a Migration 71 appearing without approval fails here.
 select is((select coalesce(string_agg(version, ',' order by version), 'NONE')
            from supabase_migrations.schema_migrations
            where version > '20260824090000'),
-  '20260825090000,20260826090000,20260827090000',
-  'Q17. the only migrations after 20260824090000 are the approved Migrations 67, 68 '
-  'and 69');
+  '20260825090000,20260826090000,20260827090000,20260828090000',
+  'Q17. the only migrations after 20260824090000 are the approved Migrations 67, 68, '
+  '69 and 70');
 
 select is((select count(*)::integer from supabase_migrations.schema_migrations
            where version = '20260824090000'), 1,
@@ -2357,18 +2361,34 @@ select is((select count(*)::integer from information_schema.tables where table_s
              or table_name like '%balance%' or table_name like '%payout%' or table_name like '%redemption%')), 0,
   'V11. still no coin, ledger, wallet, balance, payout or redemption object');
 
--- NARROWED FOR PHASE 2A-C: campaign_apply_reward_for_evaluation was created by approval
--- in migration 20260825090000 and is the ONE function permitted to lock and maintain the
--- accumulator. It is named exactly, so any other function reaching that table — including
--- either of Unit 66C's, which is what this assertion was written to protect — still
--- fails. Its own suite proves the pure calculation does not read the table at all.
+-- NARROWED FOR PHASE 2A-C AND AGAIN FOR PHASE 2B. Two functions may name the
+-- accumulator table, both by approval, and they are named exactly so any THIRD — including
+-- either of Unit 66C's, which is what this assertion was written to protect — still fails:
+--
+--   campaign_apply_reward_for_evaluation  (20260825090000)  locks and MAINTAINS it
+--   get_my_campaign_target_progress       (20260828090000)  READS one subject's units
+--
+-- V12a below keeps the stronger half of the original rule intact: the applier is still the
+-- only function that WRITES the table. Its own suite proves the pure calculation does not
+-- read it at all.
 select is((select coalesce(string_agg(p.proname, ',' order by p.proname), 'NONE')
            from pg_proc p join pg_namespace n on n.oid = p.pronamespace
            where n.nspname = 'public' and p.prosrc ~* 'campaign_subject_accumulators'
              and p.prorettype <> 'trigger'::regtype),
+  'campaign_apply_reward_for_evaluation,get_my_campaign_target_progress',
+  'V12. only the two approved functions — the Migration 67 applier and the Migration 70 '
+  'progress read — name the accumulator table at all');
+
+-- THE STRONGER HALF OF THE RULE, KEPT WHOLE: exactly ONE function writes it.
+select is((select coalesce(string_agg(p.proname, ',' order by p.proname), 'NONE')
+           from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public'
+             and p.prorettype <> 'trigger'::regtype
+             and p.prosrc ~* 'campaign_subject_accumulators'
+             and p.prosrc ~* '(insert\s+into|update)\s+public\.campaign_subject_accumulators'),
   'campaign_apply_reward_for_evaluation',
-  'V12. the approved Migration 67 applier is the only non-trigger function that touches '
-  'the accumulator table');
+  'V12a. and the Migration 67 applier is still the ONLY one that WRITES it — the '
+  'Migration 70 read takes no lock, changes no count and awards nothing');
 
 -- CURRENT STATE CANNOT MOVE A HISTORICAL RESULT. Deactivating the Retailer, its Sales
 -- Staff member and the trading relationship changes nothing, because none of them is a
