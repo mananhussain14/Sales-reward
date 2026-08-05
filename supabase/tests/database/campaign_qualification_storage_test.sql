@@ -2134,16 +2134,26 @@ from unnest(array[
 -- named EXACTLY, not pattern-excluded, so any OTHER campaign_sale_% function — an
 -- aggregator, an evaluator, a reward calculator — still fails this assertion the moment
 -- it appears. Its own suite proves it is pure, internal and non-writing.
+--
+-- NARROWED AGAIN FOR PHASE 2A-C: campaign_reward_calculation_for_evaluation and
+-- campaign_apply_reward_for_evaluation were created by approval in migration
+-- 20260825090000, and campaign_apply_reward% is added to the pattern set so the applier
+-- is COVERED by this guard rather than escaping it on a name that starts differently.
+-- All four are still named exactly, so a fifth function in any of these families — a
+-- posting routine, a ledger writer, a browser-facing evaluator — fails this assertion
+-- the moment it appears.
 select is(
   (select coalesce(string_agg(p.proname, ',' order by p.proname), 'NONE')
    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
    where n.nspname = 'public'
      and (p.proname like 'campaign_sale_%' or p.proname like 'campaign_reward%'
-          or p.proname like 'campaign_subject_%' or p.proname like 'campaign_evaluation_%')
+          or p.proname like 'campaign_subject_%' or p.proname like 'campaign_evaluation_%'
+          or p.proname like 'campaign_apply_reward%')
      and p.prorettype <> 'trigger'::regtype),
-  'campaign_evaluation_has_complete_items,campaign_sale_item_eligible_at',
-  'J2. the only non-trigger functions are the completeness helper and the approved '
-  'Unit 66B resolver');
+  'campaign_apply_reward_for_evaluation,campaign_evaluation_has_complete_items,'
+  'campaign_reward_calculation_for_evaluation,campaign_sale_item_eligible_at',
+  'J2. the only non-trigger functions are the completeness helper, the approved Unit 66B '
+  'resolver and the two approved Migration 67 reward functions');
 
 select is(
   (select count(*)::integer from pg_proc p
