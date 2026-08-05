@@ -20,7 +20,12 @@ import {
   targetStatement,
 } from "@/lib/earnings/earnings-presentation";
 import {
-  formatCoins,
+  // ALIASED DELIBERATELY. The campaign vocabulary's formatCoins ALREADY appends the
+  // unit and pluralises it ("1 coin" / "500 coins"), while formatUnits imported above
+  // from earnings-presentation returns bare grouped digits ("500"). Two functions with
+  // the same name and different contracts is what produced "500 coins coins" here, so
+  // the one that carries its own unit now says so at every call site.
+  formatCoins as formatCoinsWithUnit,
   performanceExplanation,
   performancePlainLabel,
   productResolutionExplanation,
@@ -197,7 +202,7 @@ export default async function StaffCampaignDetailPage({
           {summary !== null && <Fact label="Reward">{summary}</Fact>}
           {campaign.reward.coinsPerUnit !== null && (
             <Fact label="Coins per unit">
-              {formatCoins(campaign.reward.coinsPerUnit)}
+              {formatCoinsWithUnit(campaign.reward.coinsPerUnit)}
             </Fact>
           )}
           {campaign.reward.thresholdUnits !== null && (
@@ -205,14 +210,16 @@ export default async function StaffCampaignDetailPage({
               {formatUnits(campaign.reward.thresholdUnits)} units
             </Fact>
           )}
+          {/* No literal " coins" after these two: the formatter supplies it, and
+              supplying it twice is exactly the defect this fixes. */}
           {campaign.reward.rewardCoins !== null && (
             <Fact label="Target bonus">
-              {formatCoins(campaign.reward.rewardCoins)} coins
+              {formatCoinsWithUnit(campaign.reward.rewardCoins)}
             </Fact>
           )}
           {campaign.reward.maxRewardCoins !== null && (
             <Fact label="Maximum reward">
-              {formatCoins(campaign.reward.maxRewardCoins)} coins
+              {formatCoinsWithUnit(campaign.reward.maxRewardCoins)}
             </Fact>
           )}
           <Fact label="Counts towards">

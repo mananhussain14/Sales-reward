@@ -31,6 +31,9 @@ import {
   normalizeTargetProgress,
   type CampaignRewardEntry,
 } from "./earnings-normalization.ts";
+// The campaign vocabulary's coin formatter, which carries its own pluralised unit —
+// distinct from the bare-digit formatCoins in earnings-presentation below.
+import { formatCoins as vocabularyFormatCoins } from "../campaigns/campaign-vocabulary.ts";
 import {
   CAMPAIGNS_UNAVAILABLE_MESSAGE,
   CURSOR_AWARDED_AT_PARAM,
@@ -511,6 +514,45 @@ describe("3. the Campaign Detail page", () => {
 
   test("35. the database's product order is preserved — nothing re-sorts", () => {
     assert.doesNotMatch(page, /\.sort\(|localeCompare/);
+  });
+
+  test("29a. the target bonus renders ONE coin label, not two", () => {
+    // The defect this guards: campaign-vocabulary's formatCoins already returns
+    // "500 coins", and the page appended a second literal " coins", so the browser
+    // showed "500 coins coins". The value is never hard-coded — the assertion is that
+    // the formatter's output is rendered on its own.
+    assert.match(page, /<Fact label="Target bonus">\s*\{formatCoinsWithUnit\(campaign\.reward\.rewardCoins\)\}\s*<\/Fact>/);
+    assert.doesNotMatch(page, /formatCoinsWithUnit\([^)]*\)\}\s*coins/);
+  });
+
+  test("29b. the same defect is absent from the maximum reward, which also had it", () => {
+    assert.match(page, /<Fact label="Maximum reward">\s*\{formatCoinsWithUnit\(campaign\.reward\.maxRewardCoins\)\}\s*<\/Fact>/);
+  });
+
+  test("29c. formatCoinsWithUnit really does supply the unit, with pluralisation", () => {
+    // Proves the fix renders "500 coins" and not "500": the suffix was removed because
+    // the FORMATTER carries it, so that contract is asserted by calling it.
+    assert.equal(vocabularyFormatCoins(500), "500 coins");
+    assert.equal(vocabularyFormatCoins(1), "1 coin");
+    assert.equal(vocabularyFormatCoins(1234), "1,234 coins");
+    // And the doubled phrase is not producible from it.
+    assert.doesNotMatch(vocabularyFormatCoins(500), /coins coins/);
+  });
+
+  test("29d. NO page renders a doubled unit word from any formatter", () => {
+    // The whole class, across all three pages: a formatter that carries its own unit
+    // must never be followed by a literal one. Bare-digit formatters (earnings
+    // formatCoins / formatUnits) are unaffected and keep their explicit suffixes.
+    for (const path of [CAMPAIGNS_PAGE, CAMPAIGN_DETAIL_PAGE, EARNINGS_PAGE]) {
+      const source = code(path);
+      assert.doesNotMatch(
+        source,
+        /formatCoinsWithUnit\([^)]*\)\}?\s*(coin|coins)\b/,
+        `${path} appends a unit to a formatter that already supplies one`,
+      );
+      // And the literal doubled phrase, however it might arise.
+      assert.doesNotMatch(source, /coins\s+coins|units\s+units/, `${path} doubles a unit word`);
+    }
   });
 
   test("36. no unrelated Vendor catalogue data is displayed", () => {
