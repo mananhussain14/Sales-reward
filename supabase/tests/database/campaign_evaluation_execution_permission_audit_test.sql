@@ -536,12 +536,13 @@ select is((select count(*)::integer from supabase_migrations.schema_migrations
 -- SUPERSEDED IN PART BY PHASE 2A-E: Migration 69 (20260827090000) was created by
 -- approval and is named exactly. It adds three receipt-keyed wrappers that delegate to
 -- this migration's own browser RPCs and change none of them; F5 and the hash
--- assertions in its own suite pin that. The rule this assertion owns is that nothing
--- beyond it has been applied.
+-- assertions in its own suite pin that. Migration 70 (20260828090000) adds Sales Staff
+-- earnings reads and calls no evaluator at all, which G10, G11 and G15 of its own suite
+-- pin. The rule this assertion owns is that nothing beyond them has been applied.
 select is((select coalesce(string_agg(version, ',' order by version), 'NONE')
            from supabase_migrations.schema_migrations
-           where version > '20260826090000'), '20260827090000',
-  'A2. the only migration after 20260826090000 is the approved Migration 69');
+           where version > '20260826090000'), '20260827090000,20260828090000',
+  'A2. the only migrations after 20260826090000 are the approved Migrations 69 and 70');
 
 select has_function('public', 'campaign_execute_evaluation_for_verified_sale', array['uuid'],
   'A3. the private evaluator exists with the exact signature');
@@ -661,8 +662,11 @@ select is((select count(*)::integer from public.permissions
 select is((select module from public.permissions where code = 'CAMPAIGN_EVALUATION_EXECUTE'),
   'CLAIM_REVIEW', 'A20. ...in the CLAIM_REVIEW module the reviewer already works in');
 
-select is((select count(*)::integer from public.permissions), 33,
-  'A21. the catalogue grew by exactly one, from 32 to 33');
+-- Migration 68 grew the catalogue by exactly one, from 32 to 33. STAFF_EARNINGS_VIEW
+-- (Migration 70) is the one approved addition since.
+select is((select count(*)::integer from public.permissions), 34,
+  'A21. the catalogue is at 34 — Migration 68''s one addition, plus the approved '
+  'STAFF_EARNINGS_VIEW');
 
 select is((select coalesce(string_agg(r.code, ',' order by r.code), 'NONE')
            from public.role_permissions rp

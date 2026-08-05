@@ -1556,16 +1556,42 @@ select is(
 -- No contract in this milestone can be asked to compute or return progress, a balance,
 -- a coin credit, a claim or a payout. Asserted against the catalogue so a future function
 -- that added one to this surface fails here.
+--
+-- NARROWED FOR PHASE 2B. Migration 70 (20260828090000) added ONE approved progress read,
+-- get_my_campaign_target_progress, and it is excluded by exact name. Everything this
+-- assertion was written to protect is untouched: the campaign CONFIGURATION surface —
+-- every draft, publish, version, group and assigned-visibility contract in this file —
+-- still returns the OFFER and never what anyone has sold or earned. L3a below re-proves
+-- that for the two staff reads specifically, and a SECOND progress-bearing campaign
+-- function still fails here.
 select is(
   (select count(*)::integer
    from pg_catalog.pg_proc p
    join pg_catalog.pg_namespace n on n.oid = p.pronamespace
    where n.nspname = 'public'
      and (p.proname like '%campaign%' or p.proname like '%retailer_group%')
+     and p.proname <> 'get_my_campaign_target_progress'
      and (pg_catalog.pg_get_function_result(p.oid) ~* '(progress|balance|earned|credited|coins_earned|payout|claim|ledger)'
        or pg_catalog.pg_get_function_arguments(p.oid) ~* '(progress|balance|earned|credited|payout|claim|ledger)')),
   0,
   'L3. NO campaign contract accepts or returns progress, a balance, an earned amount, a claim or a payout'
+);
+
+-- The four assigned-visibility reads are the ones a Retailer Owner and a shop-floor
+-- seller actually call, and they are the ones a progress column would most easily creep
+-- into. They present the OFFER only, and this says so by name rather than by pattern.
+select is(
+  (select coalesce(string_agg(p.proname, ',' order by p.proname), 'NONE')
+   from pg_catalog.pg_proc p
+   join pg_catalog.pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public'
+     and p.proname in ('list_my_staff_campaigns', 'get_my_staff_campaign',
+                       'list_my_staff_campaign_products', 'list_my_retailer_campaigns',
+                       'get_my_retailer_campaign', 'list_my_retailer_campaign_products')
+     and pg_catalog.pg_get_function_result(p.oid) ~* '(progress|balance|earned|credited|payout|claim|ledger)'),
+  'NONE',
+  'L3a. and NO assigned-visibility read returns progress, a balance or an earned amount — '
+  'Migration 70 put that in its own function instead of widening any of these'
 );
 
 select is(

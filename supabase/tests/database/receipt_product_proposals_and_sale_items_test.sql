@@ -603,8 +603,12 @@ select is(
    join public.permissions p on p.id = rp.permission_id
    where r.code = 'SALES_STAFF'),
   array['RECEIPT_EXTRACTION_REVIEW','RECEIPT_PRODUCT_PROPOSE','RECEIPT_PRODUCTS_READ',
-        'RECEIPT_SUBMIT','RETAILER_PORTAL_READ','STAFF_CAMPAIGNS_VIEW'],
-  'E8. the Sales Staff permission set is exactly these six'
+        'RECEIPT_SUBMIT','RETAILER_PORTAL_READ','STAFF_CAMPAIGNS_VIEW',
+        -- Added by approval in Migration 70 (20260828090000): the seller's own
+        -- earnings. It is a READ of rewards already awarded and carries no ability to
+        -- submit, propose, review or evaluate anything.
+        'STAFF_EARNINGS_VIEW'],
+  'E8. the Sales Staff permission set is exactly these seven'
 );
 
 -- No other role picked either permission up.

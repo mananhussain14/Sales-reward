@@ -419,9 +419,14 @@ select is((select count(*)::integer from supabase_migrations.schema_migrations
            where version = '20260827090000'), 1,
   'A1. Migration 69 is recorded exactly once');
 
-select is((select count(*)::integer from supabase_migrations.schema_migrations
-           where version > '20260827090000'), 0,
-  'A2. no migration after 20260827090000 exists — Migration 70 has not begun');
+-- SUPERSEDED IN PART BY PHASE 2B: Migration 70 (20260828090000) was created by approval
+-- and is named exactly. It adds Sales Staff earnings reads and touches none of this
+-- migration's wrappers — G12 to G14 of its own suite pin their source hashes. The rule
+-- this assertion still owns is that nothing beyond it has been applied.
+select is((select coalesce(string_agg(version, ',' order by version), 'NONE')
+           from supabase_migrations.schema_migrations
+           where version > '20260827090000'), '20260828090000',
+  'A2. the only migration after 20260827090000 is the approved Migration 70');
 
 select has_function('public', 'evaluate_receipt_campaigns', array['uuid'],
   'A3. the execution wrapper exists with the exact signature');
@@ -531,10 +536,14 @@ select ok((select bool_and(pg_get_userbyid(p.proowner) = 'postgres')
   'A19. the owner retains execution');
 
 -- ---- NOTHING ELSE WAS ADDED ------------------------------------------------
-select is((select count(*)::integer from public.permissions), 33,
-  'A20. the permission catalogue is unchanged at 33');
-select is((select count(*)::integer from public.role_permissions), 38,
-  'A21. the role-permission catalogue is unchanged at 38');
+-- Migration 69 minted nothing. STAFF_EARNINGS_VIEW and its SALES_STAFF grant
+-- (Migration 70) are the one approved addition to each catalogue since.
+select is((select count(*)::integer from public.permissions), 34,
+  'A20. the permission catalogue is at 34 — Migration 69 minted none, and the only '
+  'addition since is the approved STAFF_EARNINGS_VIEW');
+select is((select count(*)::integer from public.role_permissions), 39,
+  'A21. the role-permission catalogue is at 39 — Migration 69 granted none, and the '
+  'only grant since is the approved STAFF_EARNINGS_VIEW to SALES_STAFF');
 select is((select count(*)::integer from information_schema.tables
            where table_schema = 'public' and table_type = 'BASE TABLE'), 47,
   'A22. Migration 69 added no table — still the 47 from Migration 65');

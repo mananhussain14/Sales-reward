@@ -596,13 +596,17 @@ select is((select count(*)::integer from supabase_migrations.schema_migrations
            where version = '20260825090000'), 1,
   'A1. Migration 67 is recorded exactly once');
 
--- SUPERSEDED IN PART BY PHASES 2A-D AND 2A-E: Migrations 68 (20260826090000) and 69
--- (20260827090000) were created by approval and are named exactly. The rule this
--- assertion owns is that nothing beyond them has been applied.
+-- SUPERSEDED IN PART BY PHASES 2A-D, 2A-E AND 2B: Migrations 68 (20260826090000), 69
+-- (20260827090000) and 70 (20260828090000) were created by approval and are named
+-- exactly. Migration 70 reads rewards and never writes one; G8 and G9 of its own suite
+-- pin this migration's two functions by source hash. The rule this assertion owns is
+-- that nothing beyond them has been applied.
 select is((select coalesce(string_agg(version, ',' order by version), 'NONE')
            from supabase_migrations.schema_migrations
-           where version > '20260825090000'), '20260826090000,20260827090000',
-  'A2. the only migrations after 20260825090000 are the approved Migrations 68 and 69');
+           where version > '20260825090000'),
+  '20260826090000,20260827090000,20260828090000',
+  'A2. the only migrations after 20260825090000 are the approved Migrations 68, 69 '
+  'and 70');
 
 select has_function('public', 'campaign_reward_calculation_for_evaluation', array['uuid'],
   'A3. the pure calculation exists with the exact signature');
@@ -685,8 +689,11 @@ select ok((select bool_and(obj_description(p.oid, 'pg_proc') is not null)
 -- SUPERSEDED IN PART BY PHASE 2A-D: migration 20260826090000 added
 -- CAMPAIGN_EVALUATION_EXECUTE by approval. A15 below still owns the rule this migration
 -- cares about — that no REWARD or COIN permission was minted.
-select is((select count(*)::integer from public.permissions), 33,
-  'A14. the permission catalogue is at its approved 33 entries');
+-- Migration 67 minted no permission. STAFF_EARNINGS_VIEW (Migration 70) is the one
+-- approved addition since, and is named so an unapproved thirty-fifth still fails.
+select is((select count(*)::integer from public.permissions), 34,
+  'A14. the permission catalogue is at 34 — Migration 67 minted none, and the only '
+  'addition since is the approved STAFF_EARNINGS_VIEW');
 
 select is((select count(*)::integer from public.permissions
            where module = 'REWARDS' or code like '%REWARD%' or code like '%COIN%'), 0,
