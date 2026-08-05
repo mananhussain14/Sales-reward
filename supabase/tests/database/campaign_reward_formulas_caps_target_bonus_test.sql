@@ -596,13 +596,13 @@ select is((select count(*)::integer from supabase_migrations.schema_migrations
            where version = '20260825090000'), 1,
   'A1. Migration 67 is recorded exactly once');
 
--- SUPERSEDED IN PART BY PHASE 2A-D: Migration 68 (20260826090000) was created by
--- approval and is named exactly. The rule this assertion owns is that nothing beyond it
--- has been applied.
+-- SUPERSEDED IN PART BY PHASES 2A-D AND 2A-E: Migrations 68 (20260826090000) and 69
+-- (20260827090000) were created by approval and are named exactly. The rule this
+-- assertion owns is that nothing beyond them has been applied.
 select is((select coalesce(string_agg(version, ',' order by version), 'NONE')
            from supabase_migrations.schema_migrations
-           where version > '20260825090000'), '20260826090000',
-  'A2. the only migration after 20260825090000 is the approved Migration 68');
+           where version > '20260825090000'), '20260826090000,20260827090000',
+  'A2. the only migrations after 20260825090000 are the approved Migrations 68 and 69');
 
 select has_function('public', 'campaign_reward_calculation_for_evaluation', array['uuid'],
   'A3. the pure calculation exists with the exact signature');
