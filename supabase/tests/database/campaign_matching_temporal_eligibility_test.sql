@@ -931,10 +931,18 @@ from unnest(array[
   'list_my_staff_rewards'
 ]) as f;
 
-select is((select count(*)::integer from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+-- NARROWED FOR PHASE 2A-C: campaign_apply_reward_for_evaluation was created by approval
+-- in migration 20260825090000 and is the ONE function permitted to write a reward and
+-- maintain the accumulator. It is named exactly, so any other campaign_% function that
+-- starts writing evidence — including either of this migration's own, which is what this
+-- assertion exists to protect — still fails.
+select is((select coalesce(string_agg(p.proname, ',' order by p.proname), 'NONE')
+           from pg_proc p join pg_namespace n on n.oid = p.pronamespace
            where n.nspname = 'public' and p.proname like 'campaign_%'
-             and p.prosrc ~* '(insert|update|delete)\s+(into\s+)?public\.campaign_(sale|reward|subject)'), 0,
-  'B2. no campaign function writes to the Migration 65 evidence tables');
+             and p.prosrc ~* '(insert|update|delete)\s+(into\s+)?public\.campaign_(sale|reward|subject)'),
+  'campaign_apply_reward_for_evaluation',
+  'B2. the approved Migration 67 applier is the only campaign function that writes to '
+  'the Migration 65 evidence tables');
 
 select is((select count(*)::integer from information_schema.tables where table_schema='public'
            and (table_name like '%coin%' or table_name like '%ledger%' or table_name like '%wallet%'
@@ -1421,10 +1429,14 @@ select is(
   'campaign_sale_item_eligible_at,campaign_versions_matching_sale',
   'K2. all four Migration 66 functions exist, and they are the four that were approved');
 
-select is((select count(*)::integer from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+-- NARROWED FOR PHASE 2A-C, for the same reason and by the same exact name as B2.
+select is((select coalesce(string_agg(p.proname, ',' order by p.proname), 'NONE')
+           from pg_proc p join pg_namespace n on n.oid = p.pronamespace
            where n.nspname = 'public' and p.proname like 'campaign_%'
-             and p.prosrc ~* '(insert|update|delete)\s+(into\s+)?public\.campaign_(sale|reward|subject)'), 0,
-  'K3. still no campaign function writes to the Migration 65 evidence tables');
+             and p.prosrc ~* '(insert|update|delete)\s+(into\s+)?public\.campaign_(sale|reward|subject)'),
+  'campaign_apply_reward_for_evaluation',
+  'K3. still the approved Migration 67 applier alone writes to the Migration 65 evidence '
+  'tables');
 
 
 -- ============================================================================
@@ -1870,10 +1882,13 @@ select ok((select bool_and(p.prosrc !~* '\mnow\s*\(|\mcurrent_timestamp\M|publis
            where n.nspname = 'public' and p.proname like 'campaign_matching_%'),
   'Q16. neither reads now() or campaigns.published_version_id');
 
--- No Migration 67 exists, and Migration 66 is still one ledger entry.
-select is((select count(*)::integer from supabase_migrations.schema_migrations
-           where version > '20260824090000'), 0,
-  'Q17. no migration after 20260824090000 has been applied');
+-- SUPERSEDED IN PART BY PHASE 2A-C: Migration 67 (20260825090000) was created by
+-- approval and is named exactly. The rule this assertion still owns is that NOTHING
+-- beyond it has been applied — a Migration 68 appearing without approval fails here.
+select is((select coalesce(string_agg(version, ',' order by version), 'NONE')
+           from supabase_migrations.schema_migrations
+           where version > '20260824090000'), '20260825090000',
+  'Q17. the only migration after 20260824090000 is the approved Migration 67');
 
 select is((select count(*)::integer from supabase_migrations.schema_migrations
            where version = '20260824090000'), 1,
@@ -2331,10 +2346,18 @@ select is((select count(*)::integer from information_schema.tables where table_s
              or table_name like '%balance%' or table_name like '%payout%' or table_name like '%redemption%')), 0,
   'V11. still no coin, ledger, wallet, balance, payout or redemption object');
 
-select is((select count(*)::integer from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+-- NARROWED FOR PHASE 2A-C: campaign_apply_reward_for_evaluation was created by approval
+-- in migration 20260825090000 and is the ONE function permitted to lock and maintain the
+-- accumulator. It is named exactly, so any other function reaching that table — including
+-- either of Unit 66C's, which is what this assertion was written to protect — still
+-- fails. Its own suite proves the pure calculation does not read the table at all.
+select is((select coalesce(string_agg(p.proname, ',' order by p.proname), 'NONE')
+           from pg_proc p join pg_namespace n on n.oid = p.pronamespace
            where n.nspname = 'public' and p.prosrc ~* 'campaign_subject_accumulators'
-             and p.prorettype <> 'trigger'::regtype), 0,
-  'V12. no non-trigger function touches the accumulator table');
+             and p.prorettype <> 'trigger'::regtype),
+  'campaign_apply_reward_for_evaluation',
+  'V12. the approved Migration 67 applier is the only non-trigger function that touches '
+  'the accumulator table');
 
 -- CURRENT STATE CANNOT MOVE A HISTORICAL RESULT. Deactivating the Retailer, its Sales
 -- Staff member and the trading relationship changes nothing, because none of them is a
