@@ -1210,11 +1210,22 @@ describe("7. the security boundary", () => {
       assert.ok(!/create table|alter table|insert into|drop table/i.test(s), `${f} has DDL`);
       assert.ok(!f.endsWith(".sql"));
     }
-    // This milestone adds no migration; 64 remains the total.
+    // SUPERSEDED BY MIGRATIONS 65-69. The original pinned a running total that every
+    // later approved milestone falsifies, and it had been failing since Migration 65
+    // because those units ran only the database suite. What THIS file owns is that its
+    // OWN milestone still contributes exactly what it did, in its original position,
+    // under its original name — so that is pinned, and the total is asserted as a
+    // floor rather than as a number this file has no authority over.
     const files = readdirSync(join(ROOT, "supabase", "migrations"))
       .filter((f) => f.endsWith(".sql"))
       .sort();
-    assert.equal(files.length, 64);
+    assert.ok(files.length >= 64, "migrations are never removed");
+    assert.equal(
+      files.filter((f) => f.includes("receipt_product_proposals_and_sale_items"))
+        .length,
+      1,
+      "Phase 1D-B must contribute exactly one migration",
+    );
     assert.equal(
       files[63],
       "20260822090000_receipt_product_proposals_and_sale_items.sql",

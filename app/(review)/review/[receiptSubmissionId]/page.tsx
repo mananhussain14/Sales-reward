@@ -10,6 +10,9 @@ import { SaleHeaderPanel } from "@/app/(review)/review/[receiptSubmissionId]/sal
 import { getClaimReceiptProductContext } from "@/lib/review/claim-receipt-product-context";
 import { getVerifiedSaleItems } from "@/lib/review/verified-sale-items";
 import { ProductPanel } from "@/app/(review)/review/[receiptSubmissionId]/product-panel";
+import { getReceiptCampaignResults } from "@/lib/review/receipt-campaign-results";
+import { getReceiptCampaignQualifyingItems } from "@/lib/review/receipt-campaign-qualifying-items";
+import { CampaignEvaluationPanel } from "@/app/(review)/review/[receiptSubmissionId]/campaign-evaluation-panel";
 import {
   formatFileSize,
   formatMimeType,
@@ -158,6 +161,51 @@ export default async function ClaimReviewDetailPage({
     saleHeaderResult?.status === "authorized" ? saleHeaderResult.header : null;
   const saleItems =
     saleItemsResult?.status === "authorized" ? saleItemsResult.sale : null;
+
+  // ---- Phase 2A-F. What this sale earned ------------------------------------
+  // Read only once an authoritative sale exists WITH an accepted product list —
+  // campaign evidence cannot exist before then, so an unfinalized receipt costs no
+  // extra round trip. Both are keyed on the RECEIPT id: Migration 69's wrappers
+  // resolve the verified sale internally, and no verified sale id is ever seen here.
+  //
+  // The two run concurrently and are bounded: one read each, no polling.
+  const campaignReadable =
+    saleContext?.alreadyFinalized === true &&
+    productContext?.alreadyAccepted === true;
+
+  const [campaignResultsResult, campaignItemsResult] = await Promise.all([
+    campaignReadable ? getReceiptCampaignResults(d.receiptSubmissionId) : null,
+    campaignReadable
+      ? getReceiptCampaignQualifyingItems(d.receiptSubmissionId)
+      : null,
+  ]);
+
+  // `null` means the read FAILED and the panel says so. It must never be mistaken
+  // for "no campaigns matched" — a zero-row read and an unevaluated sale are
+  // indistinguishable through the reads alone, which is exactly why the panel waits
+  // for an execution result before claiming either.
+  const campaignResults =
+    campaignResultsResult === null
+      ? []
+      : campaignResultsResult.status === "authorized"
+        ? campaignResultsResult.results
+        : null;
+  const campaignItems =
+    campaignItemsResult === null
+      ? []
+      : campaignItemsResult.status === "authorized"
+        ? campaignItemsResult.items
+        : null;
+
+  // Usability only. The database re-checks every one of these under a row lock, and
+  // refuses with a single collapsed error whatever the screen decided to show.
+  const campaignExcluded = qualification?.qualificationState === "QUALIFICATION_EXCLUDED";
+  const canEvaluateCampaigns = campaignReadable && !campaignExcluded;
+  const campaignBlockedReason = campaignExcluded
+    ? ("excluded" as const)
+    : !campaignReadable
+      ? ("no-sale" as const)
+      : null;
 
   const submittedLabel = formatSubmittedAt(d.submittedAt);
   const shopInactive = d.shopStatus !== "ACTIVE";
@@ -360,6 +408,27 @@ export default async function ClaimReviewDetailPage({
               receiptSubmissionId={d.receiptSubmissionId}
               context={productContext}
               sale={saleItems}
+            />
+          ) : null}
+
+          {/* Phase 2A-F. A FIFTH separate question: the decision says the image
+              was verified, the qualification panel says the record is not
+              excluded, the sale panel says when and for how much, the product
+              panel says what was sold, and this says WHAT IT EARNED. Only
+              offered for a VERIFIED receipt, for the same reason the others are.
+              The action never runs on load — a reviewer presses it.
+
+              KEYED ON THE RECEIPT ID so the action state resets when the
+              reviewer navigates to a different receipt, rather than carrying a
+              stale success message across. */}
+          {d.decision === "VERIFIED" ? (
+            <CampaignEvaluationPanel
+              key={d.receiptSubmissionId}
+              receiptSubmissionId={d.receiptSubmissionId}
+              canEvaluate={canEvaluateCampaigns}
+              blockedReason={campaignBlockedReason}
+              results={campaignResults}
+              items={campaignItems}
             />
           ) : null}
         </div>

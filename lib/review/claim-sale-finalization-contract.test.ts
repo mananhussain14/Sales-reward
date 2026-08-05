@@ -779,13 +779,18 @@ describe("9. milestone boundaries", () => {
   test("9.1 the Phase 1D-A migration is unrenamed, and 1D-B's is the only one after it", () => {
     const dir = join(ROOT, "supabase", "migrations");
     const files = readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();
-    assert.equal(files.length, 64);
+    // SUPERSEDED BY MIGRATIONS 65-69. The original pinned a running total that every
+    // later approved milestone falsifies, and it had been failing since Migration 65
+    // because those units ran only the database suite. What THIS file owns is that its
+    // OWN milestone still contributes exactly what it did, in its original position,
+    // under its original name — so that is pinned, and the total is asserted as a
+    // floor rather than as a number this file has no authority over.
+    assert.ok(files.length >= 64, "migrations are never removed");
     assert.equal(files[62], "20260821090000_verified_sale_headers.sql");
     assert.equal(
       files[63],
       "20260822090000_receipt_product_proposals_and_sale_items.sql",
     );
-    assert.ok(!files.some((f) => f > "20260822090000_z"), "no migration 65 exists");
   });
 
   test("9.2 this milestone adds no SQL of its own", () => {
