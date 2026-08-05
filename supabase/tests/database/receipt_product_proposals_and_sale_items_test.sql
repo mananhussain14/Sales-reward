@@ -580,10 +580,12 @@ select is(
    join public.roles r on r.id = rp.role_id
    join public.permissions p on p.id = rp.permission_id
    where r.code = 'CLAIM_REVIEWER'),
-  array['CLAIM_REVIEW_PORTAL_READ','RECEIPT_QUALIFICATION_CLASSIFY',
-        'RECEIPT_REVIEW_DECIDE','RECEIPT_REVIEW_READ','RECEIPT_SALE_HEADER_FINALIZE',
-        'RECEIPT_SALE_ITEMS_FINALIZE'],
-  'E6. the Claim Reviewer permission set is exactly these six'
+  -- SUPERSEDED IN PART BY PHASE 2A-D [20260826090000]: the approved campaign-evaluation
+  -- permission joined the reviewer's set. Still pinned EXACTLY, so an eighth fails here.
+  array['CAMPAIGN_EVALUATION_EXECUTE','CLAIM_REVIEW_PORTAL_READ',
+        'RECEIPT_QUALIFICATION_CLASSIFY','RECEIPT_REVIEW_DECIDE','RECEIPT_REVIEW_READ',
+        'RECEIPT_SALE_HEADER_FINALIZE','RECEIPT_SALE_ITEMS_FINALIZE'],
+  'E6. the Claim Reviewer permission set is exactly these seven'
 );
 
 -- Sales Staff keeps the header-confirmation permission it already had; the new

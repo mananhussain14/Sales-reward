@@ -1078,14 +1078,20 @@ select is(pg_temp.permission_names(pg_temp.role_id('FINANCE_ADMIN')), '{}'::text
 --
 -- Phase 1D-B [20260822090000] added the approved item-finalize permission, so the
 -- expected list grew from five names to six. The set is still pinned exactly.
+--
+-- Phase 2A-D [20260826090000] added the approved campaign-evaluation permission, so the
+-- expected list grew from six names to seven. The set is still pinned exactly, so an
+-- eighth arriving unnoticed fails here.
 select is(pg_temp.permission_names(pg_temp.role_id('CLAIM_REVIEWER')),
   array['Accept or reject a receipt product proposal',
         'Classify a receipt for qualification',
         'Decide a submitted receipt',
+        'Evaluate a sale for campaign qualification',
         'Finalize an authoritative sale header',
         'Open the Claim Review portal',
         'Read the Claim Review queue']::text[],
-  'CLAIM_REVIEWER holds exactly its portal, review, classify and both finalize permissions');
+  'CLAIM_REVIEWER holds exactly its portal, review, classify, both finalize and campaign '
+  'evaluation permissions');
 
 select is(pg_temp.permission_names(pg_temp.role_id('UNDESCRIBED_ROLE')), '{}'::text[],
   'and so does a freshly defined role — a role with no mappings is never defaulted to all permissions');

@@ -309,18 +309,24 @@ select is(
   (select count(*)::integer from public.role_permissions rp
    join public.roles r on r.id = rp.role_id
    where r.code = 'CLAIM_REVIEWER'),
-  6,
+  7,
   -- Phase 1D-B added RECEIPT_SALE_ITEMS_FINALIZE by approval.
-  'A4. CLAIM_REVIEWER now holds exactly six permissions'
+  -- Phase 2A-D [20260826090000] added CAMPAIGN_EVALUATION_EXECUTE by approval.
+  'A4. CLAIM_REVIEWER now holds exactly seven permissions'
 );
 
+-- SUPERSEDED IN PART BY PHASE 2A-D [20260826090000]: the approved campaign-evaluation
+-- permission joined the reviewer's set, taking it from six codes to seven. The set is
+-- still pinned EXACTLY, so an eighth arriving unnoticed fails here.
 select is(
   (select string_agg(p.code, ',' order by p.code)
    from public.role_permissions rp
    join public.roles r on r.id = rp.role_id
    join public.permissions p on p.id = rp.permission_id
    where r.code = 'CLAIM_REVIEWER'),
-  'CLAIM_REVIEW_PORTAL_READ,RECEIPT_QUALIFICATION_CLASSIFY,RECEIPT_REVIEW_DECIDE,RECEIPT_REVIEW_READ,RECEIPT_SALE_HEADER_FINALIZE,RECEIPT_SALE_ITEMS_FINALIZE',
+  'CAMPAIGN_EVALUATION_EXECUTE,CLAIM_REVIEW_PORTAL_READ,RECEIPT_QUALIFICATION_CLASSIFY,'
+  'RECEIPT_REVIEW_DECIDE,RECEIPT_REVIEW_READ,RECEIPT_SALE_HEADER_FINALIZE,'
+  'RECEIPT_SALE_ITEMS_FINALIZE',
   'A5. and they are exactly the portal, review, classify and both finalize permissions'
 );
 

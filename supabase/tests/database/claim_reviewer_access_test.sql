@@ -214,6 +214,9 @@ select is(
 -- role quietly accumulating capability, so the successor pins the exact SET rather than
 -- a number — which is strictly stronger: a fourth permission, or a different third one,
 -- now fails just as loudly, and the failure names what changed.
+-- SUPERSEDED IN PART BY PHASE 2A-D [20260826090000]: the approved campaign-evaluation
+-- permission joined the reviewer's set, taking it from six codes to seven. The set is
+-- still pinned EXACTLY, so an eighth arriving unnoticed fails here.
 select is(
   (select string_agg(p.code, ',' order by p.code)
    from public.role_permissions rp
@@ -221,7 +224,9 @@ select is(
    join public.permissions p on p.id = rp.permission_id
    where r.code = 'CLAIM_REVIEWER'),
   -- Phase 1D-B adds RECEIPT_SALE_ITEMS_FINALIZE by approval.
-  'CLAIM_REVIEW_PORTAL_READ,RECEIPT_QUALIFICATION_CLASSIFY,RECEIPT_REVIEW_DECIDE,RECEIPT_REVIEW_READ,RECEIPT_SALE_HEADER_FINALIZE,RECEIPT_SALE_ITEMS_FINALIZE',
+  'CAMPAIGN_EVALUATION_EXECUTE,CLAIM_REVIEW_PORTAL_READ,RECEIPT_QUALIFICATION_CLASSIFY,'
+  'RECEIPT_REVIEW_DECIDE,RECEIPT_REVIEW_READ,RECEIPT_SALE_HEADER_FINALIZE,'
+  'RECEIPT_SALE_ITEMS_FINALIZE',
   'A7. CLAIM_REVIEWER holds exactly the portal, review, classify and both finalize permissions'
 );
 

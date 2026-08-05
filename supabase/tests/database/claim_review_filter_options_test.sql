@@ -505,6 +505,9 @@ select is(
   'G6. no new permission was added by this migration'
 );
 
+-- SUPERSEDED IN PART BY PHASE 2A-D [20260826090000]: the approved campaign-evaluation
+-- permission joined the reviewer's set, taking it from six codes to seven. The set is
+-- still pinned EXACTLY, so an eighth arriving unnoticed fails here.
 select is(
   (select string_agg(p.code, ',' order by p.code)
    from public.role_permissions rp
@@ -513,7 +516,9 @@ select is(
    where r.code = 'CLAIM_REVIEWER'),
   -- Phase 1D-B adds RECEIPT_SALE_ITEMS_FINALIZE by approval. The exact SET is
   -- still pinned, so a seventh permission still fails loudly and names itself.
-  'CLAIM_REVIEW_PORTAL_READ,RECEIPT_QUALIFICATION_CLASSIFY,RECEIPT_REVIEW_DECIDE,RECEIPT_REVIEW_READ,RECEIPT_SALE_HEADER_FINALIZE,RECEIPT_SALE_ITEMS_FINALIZE',
+  'CAMPAIGN_EVALUATION_EXECUTE,CLAIM_REVIEW_PORTAL_READ,RECEIPT_QUALIFICATION_CLASSIFY,'
+  'RECEIPT_REVIEW_DECIDE,RECEIPT_REVIEW_READ,RECEIPT_SALE_HEADER_FINALIZE,'
+  'RECEIPT_SALE_ITEMS_FINALIZE',
   'G7. and CLAIM_REVIEWER still holds exactly its six permissions'
 );
 
