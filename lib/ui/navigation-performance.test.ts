@@ -142,6 +142,16 @@ describe("navigation uses client-side Next.js Link, never a full reload", () => 
    *
    *    See docs/claim-reviewer-product-decision-flow.md.
    *
+   * 5. CAMPAIGN EVALUATION PANEL — the FOURTH consumer of the same settlement
+   *    pattern, added by Phase 2A-F. Evaluating a sale is an audited write on the
+   *    same heavy cross-region route, so its action returns the authoritative
+   *    outcome and revalidates nothing, and the panel re-reads the route itself
+   *    afterwards. Identical justification to (2), (3) and (4).
+   *
+   *    Its single call site is shared by the post-settlement effect and the manual
+   *    "Check campaign results" button, and is guarded by a ref so at most one
+   *    automatic refresh follows an authoritative result.
+   *
    * See docs/retailer-manage-staff-shops-web.md § 11.
    */
   const REFRESH_ALLOWED = new Set([
@@ -149,6 +159,7 @@ describe("navigation uses client-side Next.js Link, never a full reload", () => 
     "app/(review)/review/[receiptSubmissionId]/qualification-panel.tsx",
     "app/(review)/review/[receiptSubmissionId]/sale-header-panel.tsx",
     "app/(review)/review/[receiptSubmissionId]/product-panel.tsx",
+    "app/(review)/review/[receiptSubmissionId]/campaign-evaluation-panel.tsx",
   ]);
 
   test("4 & 5. no full-reload navigation or stray router.refresh anywhere", () => {

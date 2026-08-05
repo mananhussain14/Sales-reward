@@ -489,7 +489,13 @@ describe("5. migration and milestone boundaries", () => {
     // Phase 1D-B added migration 64 by approval. The running total is pinned in
     // one place; what THIS file owns is that Phase 1D-0 still contributes exactly
     // one migration, in its original position, under its original name.
-    assert.equal(files.length, 64);
+    // SUPERSEDED BY MIGRATIONS 65-69. The original pinned a running total that every
+    // later approved milestone falsifies, and it had been failing since Migration 65
+    // because those units ran only the database suite. What THIS file owns is that its
+    // OWN milestone still contributes exactly what it did, in its original position,
+    // under its original name — so that is pinned, and the total is asserted as a
+    // floor rather than as a number this file has no authority over.
+    assert.ok(files.length >= 64, "migrations are never removed");
     assert.equal(
       files.filter((f) => f.includes("receipt_qualification_exclusions")).length,
       1,
