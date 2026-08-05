@@ -140,14 +140,38 @@ describe("1. routes and role-based navigation", () => {
     }
   });
 
-  test("1.5 the Retailer nav offers Campaigns to the OWNER only", () => {
+  test("1.5 the Retailer nav offers the OWNER's Campaigns entry to the OWNER only", () => {
     const fn = RETAILER_NAV.slice(RETAILER_NAV.indexOf("export function retailerNavItems"));
     // The submitter and reader branches return before the owner list.
     const submitter = fn.slice(fn.indexOf('kind === "submitter"'), fn.indexOf('kind === "reader"'));
     const reader = fn.slice(fn.indexOf('kind === "reader"'), fn.indexOf("return [OVERVIEW_ITEM"));
-    assert.ok(!/CAMPAIGNS_ITEM/.test(submitter), "Sales Staff are offered Campaigns");
-    assert.ok(!/CAMPAIGNS_ITEM/.test(reader), "a Retailer Manager is offered Campaigns");
-    assert.match(fn, /return \[OVERVIEW_ITEM[\s\S]*?CAMPAIGNS_ITEM\]/);
+
+    // NARROWED FOR THE SALES STAFF MILESTONE. The Sales Staff nav gained MY_CAMPAIGNS_ITEM
+    // — a DIFFERENT entry, on a different route, backed by list_my_staff_campaigns() under
+    // STAFF_CAMPAIGNS_VIEW. The boundary this test owns is unchanged and is now asserted
+    // precisely: the OWNER's CAMPAIGNS_ITEM, backed by list_my_retailer_campaigns() under
+    // CAMPAIGNS_VIEW_ASSIGNED, must still reach nobody else. The lookbehind keeps
+    // MY_CAMPAIGNS_ITEM from satisfying a bare substring match in either direction.
+    const OWNER_CAMPAIGNS_ITEM = /(?<![A-Z_])CAMPAIGNS_ITEM/;
+    assert.ok(
+      !OWNER_CAMPAIGNS_ITEM.test(submitter),
+      "Sales Staff are offered the Owner's Campaigns entry",
+    );
+    assert.ok(
+      !OWNER_CAMPAIGNS_ITEM.test(reader),
+      "a Retailer Manager is offered the Owner's Campaigns entry",
+    );
+    assert.match(fn, /return \[OVERVIEW_ITEM[\s\S]*?[^A-Z_]CAMPAIGNS_ITEM\]/);
+
+    // And the Sales Staff entries reach the submitter ALONE.
+    assert.match(submitter, /MY_CAMPAIGNS_ITEM/);
+    assert.match(submitter, /MY_EARNINGS_ITEM/);
+    assert.ok(!/MY_CAMPAIGNS_ITEM|MY_EARNINGS_ITEM/.test(reader), "a Manager is offered staff pages");
+    const owner = fn.slice(fn.indexOf("return [OVERVIEW_ITEM"));
+    assert.ok(
+      !/MY_CAMPAIGNS_ITEM|MY_EARNINGS_ITEM/.test(owner),
+      "an Owner is offered staff pages",
+    );
   });
 });
 
