@@ -332,6 +332,9 @@ select is(
    where p.code = 'RECEIPT_SALE_HEADER_FINALIZE'),
   'CLAIM_REVIEWER', 'A2. and maps to CLAIM_REVIEWER and nothing else');
 
+-- SUPERSEDED IN PART BY PHASE 2A-D [20260826090000]: the approved campaign-evaluation
+-- permission joined the reviewer's set, taking it from six codes to seven. The set is
+-- still pinned EXACTLY, so an eighth arriving unnoticed fails here.
 select is(
   (select string_agg(p.code, ',' order by p.code)
    from public.role_permissions rp
@@ -339,7 +342,9 @@ select is(
    join public.permissions p on p.id = rp.permission_id
    where r.code = 'CLAIM_REVIEWER'),
   -- Phase 1D-B adds RECEIPT_SALE_ITEMS_FINALIZE by approval.
-  'CLAIM_REVIEW_PORTAL_READ,RECEIPT_QUALIFICATION_CLASSIFY,RECEIPT_REVIEW_DECIDE,RECEIPT_REVIEW_READ,RECEIPT_SALE_HEADER_FINALIZE,RECEIPT_SALE_ITEMS_FINALIZE',
+  'CAMPAIGN_EVALUATION_EXECUTE,CLAIM_REVIEW_PORTAL_READ,RECEIPT_QUALIFICATION_CLASSIFY,'
+  'RECEIPT_REVIEW_DECIDE,RECEIPT_REVIEW_READ,RECEIPT_SALE_HEADER_FINALIZE,'
+  'RECEIPT_SALE_ITEMS_FINALIZE',
   'A3. CLAIM_REVIEWER now holds exactly its six approved permissions');
 
 select is(

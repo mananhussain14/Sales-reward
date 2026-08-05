@@ -2139,21 +2139,26 @@ from unnest(array[
 -- campaign_apply_reward_for_evaluation were created by approval in migration
 -- 20260825090000, and campaign_apply_reward% is added to the pattern set so the applier
 -- is COVERED by this guard rather than escaping it on a name that starts differently.
--- All four are still named exactly, so a fifth function in any of these families — a
--- posting routine, a ledger writer, a browser-facing evaluator — fails this assertion
--- the moment it appears.
+-- NARROWED AGAIN FOR PHASE 2A-D: campaign_execute_evaluation_for_verified_sale was
+-- created by approval in migration 20260826090000, and campaign_execute_% joins the
+-- pattern set so the transactional evaluator is COVERED here rather than escaping on a
+-- name that starts differently. All five are still named exactly, so a sixth function in
+-- any of these families — a posting routine, a ledger writer, a correction flow — fails
+-- this assertion the moment it appears.
 select is(
   (select coalesce(string_agg(p.proname, ',' order by p.proname), 'NONE')
    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
    where n.nspname = 'public'
      and (p.proname like 'campaign_sale_%' or p.proname like 'campaign_reward%'
           or p.proname like 'campaign_subject_%' or p.proname like 'campaign_evaluation_%'
-          or p.proname like 'campaign_apply_reward%')
+          or p.proname like 'campaign_apply_reward%' or p.proname like 'campaign_execute_%')
      and p.prorettype <> 'trigger'::regtype),
   'campaign_apply_reward_for_evaluation,campaign_evaluation_has_complete_items,'
+  'campaign_execute_evaluation_for_verified_sale,'
   'campaign_reward_calculation_for_evaluation,campaign_sale_item_eligible_at',
   'J2. the only non-trigger functions are the completeness helper, the approved Unit 66B '
-  'resolver and the two approved Migration 67 reward functions');
+  'resolver, the two approved Migration 67 reward functions and the approved Migration 68 '
+  'evaluator');
 
 select is(
   (select count(*)::integer from pg_proc p
@@ -2164,8 +2169,12 @@ select is(
   'J3. exactly eleven trigger functions: 3 change, 3 truncate, 3 insert assertions, 2 deferred completeness');
 
 -- No permission and no role grant.
-select is((select count(*)::integer from public.permissions), 32,
-  'J4. the permission catalogue is unchanged at 32 entries');
+-- SUPERSEDED IN PART BY PHASE 2A-D: migration 20260826090000 added
+-- CAMPAIGN_EVALUATION_EXECUTE by approval, taking the catalogue from 32 to 33. The rule
+-- this assertion owns — that MIGRATION 65 minted no permission — is restated exactly
+-- below it, against the two codes that migration would have needed.
+select is((select count(*)::integer from public.permissions), 33,
+  'J4. the permission catalogue is at its approved 33 entries');
 select is((select count(*)::integer from public.permissions
            where code in ('CAMPAIGN_QUALIFICATION_EVALUATE','CAMPAIGN_REWARDS_READ')), 0,
   'J5. no evaluation or reward permission was added');

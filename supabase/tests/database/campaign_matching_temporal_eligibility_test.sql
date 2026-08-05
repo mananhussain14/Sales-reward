@@ -906,7 +906,7 @@ select isnt((select obj_description(p.oid, 'pg_proc') from pg_proc p
 select is((select count(*)::integer from information_schema.tables
            where table_schema = 'public' and table_type = 'BASE TABLE'), 47,
   'A7. no table was added — still the 47 from Migration 65');
-select is((select count(*)::integer from public.permissions), 32,
+select is((select count(*)::integer from public.permissions), 33,
   'A8. the permission catalogue is unchanged at 32');
 
 
@@ -940,9 +940,9 @@ select is((select coalesce(string_agg(p.proname, ',' order by p.proname), 'NONE'
            from pg_proc p join pg_namespace n on n.oid = p.pronamespace
            where n.nspname = 'public' and p.proname like 'campaign_%'
              and p.prosrc ~* '(insert|update|delete)\s+(into\s+)?public\.campaign_(sale|reward|subject)'),
-  'campaign_apply_reward_for_evaluation',
-  'B2. the approved Migration 67 applier is the only campaign function that writes to '
-  'the Migration 65 evidence tables');
+  'campaign_apply_reward_for_evaluation,campaign_execute_evaluation_for_verified_sale',
+  'B2. the approved Migration 67 applier and Migration 68 evaluator are the only campaign '
+  'functions that write to the Migration 65 evidence tables');
 
 select is((select count(*)::integer from information_schema.tables where table_schema='public'
            and (table_name like '%coin%' or table_name like '%ledger%' or table_name like '%wallet%'
@@ -1392,7 +1392,7 @@ select is((select count(*)::integer from information_schema.tables
            where table_schema = 'public' and table_type = 'BASE TABLE'), 47,
   'J8. Unit 66B added no table either — still the 47 from Migration 65');
 
-select is((select count(*)::integer from public.permissions), 32,
+select is((select count(*)::integer from public.permissions), 33,
   'J9. the permission catalogue is still unchanged at 32');
 
 
@@ -1434,9 +1434,9 @@ select is((select coalesce(string_agg(p.proname, ',' order by p.proname), 'NONE'
            from pg_proc p join pg_namespace n on n.oid = p.pronamespace
            where n.nspname = 'public' and p.proname like 'campaign_%'
              and p.prosrc ~* '(insert|update|delete)\s+(into\s+)?public\.campaign_(sale|reward|subject)'),
-  'campaign_apply_reward_for_evaluation',
-  'K3. still the approved Migration 67 applier alone writes to the Migration 65 evidence '
-  'tables');
+  'campaign_apply_reward_for_evaluation,campaign_execute_evaluation_for_verified_sale',
+  'K3. still only the approved Migration 67 applier and Migration 68 evaluator write to '
+  'the Migration 65 evidence tables');
 
 
 -- ============================================================================
@@ -1854,13 +1854,21 @@ select ok((select bool_and(obj_description(p.oid, 'pg_proc') is not null) from p
            where n.nspname = 'public' and p.proname like 'campaign_matching_%'),
   'Q10. both are documented');
 
-select is((select count(*)::integer from public.permissions), 32,
+select is((select count(*)::integer from public.permissions), 33,
   'Q11. the permission catalogue is still 32 — no new permission was minted');
 
-select is((select count(*)::integer from public.role_permissions rp
+-- NARROWED FOR PHASE 2A-D: CAMPAIGN_EVALUATION_EXECUTE was minted by approval in
+-- migration 20260826090000 and granted to CLAIM_REVIEWER alone. The rule this assertion
+-- owns — that MIGRATION 66 granted nothing, and that no MATCHING permission exists at
+-- all — is intact and stated exactly.
+select is((select coalesce(string_agg(r.code || '/' || pm.code, ',' order by r.code, pm.code), 'NONE')
+           from public.role_permissions rp
            join public.permissions pm on pm.id = rp.permission_id
-           where pm.code like '%CAMPAIGN_MATCH%' or pm.code like '%EVALUAT%'), 0,
-  'Q12. no role was granted a matching or evaluation permission');
+           join public.roles r on r.id = rp.role_id
+           where pm.code like '%CAMPAIGN_MATCH%' or pm.code like '%EVALUAT%'),
+  'CLAIM_REVIEWER/CAMPAIGN_EVALUATION_EXECUTE',
+  'Q12. the only evaluation permission is the approved one, held by CLAIM_REVIEWER alone, '
+  'and no matching permission exists');
 
 select is((select count(*)::integer from information_schema.tables
            where table_schema = 'public' and table_type = 'BASE TABLE'), 47,
@@ -1882,13 +1890,14 @@ select ok((select bool_and(p.prosrc !~* '\mnow\s*\(|\mcurrent_timestamp\M|publis
            where n.nspname = 'public' and p.proname like 'campaign_matching_%'),
   'Q16. neither reads now() or campaigns.published_version_id');
 
--- SUPERSEDED IN PART BY PHASE 2A-C: Migration 67 (20260825090000) was created by
--- approval and is named exactly. The rule this assertion still owns is that NOTHING
--- beyond it has been applied — a Migration 68 appearing without approval fails here.
+-- SUPERSEDED IN PART BY PHASES 2A-C AND 2A-D: Migrations 67 (20260825090000) and 68
+-- (20260826090000) were created by approval and are named exactly. The rule this
+-- assertion still owns is that NOTHING beyond them has been applied — a Migration 69
+-- appearing without approval fails here.
 select is((select coalesce(string_agg(version, ',' order by version), 'NONE')
            from supabase_migrations.schema_migrations
-           where version > '20260824090000'), '20260825090000',
-  'Q17. the only migration after 20260824090000 is the approved Migration 67');
+           where version > '20260824090000'), '20260825090000,20260826090000',
+  'Q17. the only migrations after 20260824090000 are the approved Migrations 67 and 68');
 
 select is((select count(*)::integer from supabase_migrations.schema_migrations
            where version = '20260824090000'), 1,
