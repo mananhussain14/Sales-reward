@@ -533,9 +533,15 @@ select is((select count(*)::integer from supabase_migrations.schema_migrations
            where version = '20260826090000'), 1,
   'A1. Migration 68 is recorded exactly once');
 
-select is((select count(*)::integer from supabase_migrations.schema_migrations
-           where version > '20260826090000'), 0,
-  'A2. no migration after 20260826090000 exists — Migration 69 has not begun');
+-- SUPERSEDED IN PART BY PHASE 2A-E: Migration 69 (20260827090000) was created by
+-- approval and is named exactly. It adds three receipt-keyed wrappers that delegate to
+-- this migration's own browser RPCs and change none of them; F5 and the hash
+-- assertions in its own suite pin that. The rule this assertion owns is that nothing
+-- beyond it has been applied.
+select is((select coalesce(string_agg(version, ',' order by version), 'NONE')
+           from supabase_migrations.schema_migrations
+           where version > '20260826090000'), '20260827090000',
+  'A2. the only migration after 20260826090000 is the approved Migration 69');
 
 select has_function('public', 'campaign_execute_evaluation_for_verified_sale', array['uuid'],
   'A3. the private evaluator exists with the exact signature');

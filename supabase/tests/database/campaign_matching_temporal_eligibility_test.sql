@@ -1890,14 +1890,16 @@ select ok((select bool_and(p.prosrc !~* '\mnow\s*\(|\mcurrent_timestamp\M|publis
            where n.nspname = 'public' and p.proname like 'campaign_matching_%'),
   'Q16. neither reads now() or campaigns.published_version_id');
 
--- SUPERSEDED IN PART BY PHASES 2A-C AND 2A-D: Migrations 67 (20260825090000) and 68
--- (20260826090000) were created by approval and are named exactly. The rule this
--- assertion still owns is that NOTHING beyond them has been applied — a Migration 69
--- appearing without approval fails here.
+-- SUPERSEDED IN PART BY PHASES 2A-C, 2A-D AND 2A-E: Migrations 67 (20260825090000),
+-- 68 (20260826090000) and 69 (20260827090000) were created by approval and are named
+-- exactly. The rule this assertion still owns is that NOTHING beyond them has been
+-- applied — a Migration 70 appearing without approval fails here.
 select is((select coalesce(string_agg(version, ',' order by version), 'NONE')
            from supabase_migrations.schema_migrations
-           where version > '20260824090000'), '20260825090000,20260826090000',
-  'Q17. the only migrations after 20260824090000 are the approved Migrations 67 and 68');
+           where version > '20260824090000'),
+  '20260825090000,20260826090000,20260827090000',
+  'Q17. the only migrations after 20260824090000 are the approved Migrations 67, 68 '
+  'and 69');
 
 select is((select count(*)::integer from supabase_migrations.schema_migrations
            where version = '20260824090000'), 1,
