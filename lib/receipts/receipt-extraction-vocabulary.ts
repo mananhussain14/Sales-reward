@@ -51,7 +51,7 @@ export const MAX_EXTRACTION_ATTEMPTS = 3;
  * function at any privilege level writes this column; changing it is a deliberate operator
  * UPDATE. See receipt-extraction-mode.ts for the second, independent Edge gate.
  */
-export const EXTRACTION_RUNTIME_MODES = ["DISABLED", "FAKE"] as const;
+export const EXTRACTION_RUNTIME_MODES = ["DISABLED", "FAKE", "AZURE"] as const;
 export type ExtractionRuntimeMode = (typeof EXTRACTION_RUNTIME_MODES)[number];
 
 /* ---------------------------------------------------------------------------

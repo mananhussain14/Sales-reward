@@ -84,69 +84,149 @@ const PACKAGE = JSON.parse(read("package.json")) as {
   scripts: Record<string, string>;
 };
 
-describe("1. no real provider anywhere in Milestone A", () => {
-  const FORBIDDEN = [
-    /azure/i,
-    /cognitiveservices/i,
-    /formrecognizer/i,
-    /form-recognizer/i,
-    /documentintelligence/i,
-    /document-intelligence/i,
-    /Ocp-Apim/i,
-    // Word-bounded: "ClientExtractionFailureCode" contains the letters t-E-x-t-r-a-c-t and
-    // is not a reference to any provider.
-    /(?<![A-Za-z])textract(?![A-Za-z])/i,
-    /vision\.googleapis/i,
-  ];
+describe("1. Azure provider access is isolated and fail-closed", () => {
+  const AZURE_CONFIG =
+    "lib/receipts/receipt-extraction-azure-config.ts";
+  const AZURE_ADAPTER =
+    "lib/receipts/receipt-extraction-azure-provider.ts";
+  const PROVIDER_SELECTOR =
+    "lib/receipts/receipt-extraction-provider-selection.ts";
+  const AZURE_READINESS =
+    "supabase/migrations/20260828210000_receipt_extraction_azure_readiness.sql";
 
-  test("not in any Edge Function", () => {
+  test("no Edge Function opens a provider network connection directly", () => {
     for (const path of EDGE_FUNCTIONS) {
       const code = stripTsComments(read(path));
-      for (const pattern of FORBIDDEN) {
-        assert.ok(!pattern.test(code), `${path} matches ${pattern}`);
-      }
+
+      assert.ok(
+        !/\bfetch\s*\(/.test(code),
+        `${path} calls fetch directly`,
+      );
+      assert.ok(
+        !/new\s+WebSocket\b/.test(code),
+        `${path} opens a WebSocket`,
+      );
+      assert.ok(
+        !/\bXMLHttpRequest\b/.test(code),
+        `${path} creates XMLHttpRequest`,
+      );
     }
   });
 
-  test("not in any shared module", () => {
-    for (const path of LIB_MODULES) {
-      const code = stripTsComments(read(path));
-      for (const pattern of FORBIDDEN) {
-        assert.ok(!pattern.test(code), `${path} matches ${pattern}`);
-      }
-    }
-  });
+  test("Azure construction is delegated through the shared selector", () => {
+    const selector = stripTsComments(
+      read(PROVIDER_SELECTOR),
+    );
 
-  test("not in any migration", () => {
-    for (const path of MIGRATIONS) {
-      const sql = stripSqlComments(read(path));
-      for (const pattern of FORBIDDEN) {
-        assert.ok(!pattern.test(sql), `${path} matches ${pattern}`);
-      }
-    }
-  });
-
-  test("no provider configuration is declared in supabase/config.toml", () => {
-    const config = CONFIG.replace(/^\s*#.*$/gm, "");
-    for (const pattern of FORBIDDEN) {
-      assert.ok(!pattern.test(config), `config.toml matches ${pattern}`);
-    }
-  });
-
-  test("the provider column is pinned to one literal in SQL", () => {
-    const foundation = read(MIGRATIONS[1]);
     assert.match(
-      foundation,
-      /check \(provider is null or provider = 'FAKE'\)/,
-      "the no-real-provider invariant is missing",
+      selector,
+      /createAzureDocumentIntelligenceProvider/,
+    );
+
+    // Only the request and polling functions execute OCR work.
+    // receipt-image-preview only issues a short-lived signed URL and must
+    // remain independent of provider selection.
+    for (const path of [REQUEST_FN, GET_FN]) {
+      const code = stripTsComments(read(path));
+
+      assert.match(
+        code,
+        /receipt-extraction-provider-selection\.ts/,
+        `${path} does not import the provider selector`,
+      );
+      assert.ok(
+        !/createAzureDocumentIntelligenceProvider/.test(code),
+        `${path} constructs Azure directly`,
+      );
+    }
+  });
+
+  test("Azure configuration modules read no environment themselves", () => {
+    for (const modulePath of [
+      AZURE_CONFIG,
+      AZURE_ADAPTER,
+      PROVIDER_SELECTOR,
+    ]) {
+      const code = stripTsComments(read(modulePath));
+
+      assert.ok(
+        !/\bDeno\.env\b/.test(code),
+        `${modulePath} reads Deno.env`,
+      );
+      assert.ok(
+        !/\bprocess\.env\b/.test(code),
+        `${modulePath} reads process.env`,
+      );
+    }
+  });
+
+  test("the Azure adapter cannot log secrets or raw responses", () => {
+    const code = stripTsComments(read(AZURE_ADAPTER));
+
+    assert.ok(!/\bconsole\./.test(code));
+    assert.ok(!/\blogFailure\s*\(/.test(code));
+  });
+
+  test("provider secrets are absent from config.toml", () => {
+    const config = CONFIG.replace(/^\s*#.*$/gm, "");
+
+    for (const secretName of [
+      "AZURE_DI_ENDPOINT",
+      "AZURE_DI_KEY",
+      "AZURE_DI_API_VERSION",
+      "AZURE_DI_MODEL",
+    ]) {
+      assert.ok(
+        !config.includes(secretName),
+        `config.toml declares ${secretName}`,
+      );
+    }
+  });
+
+  test("the database admits only the approved provider/model pairs", () => {
+    const sql = stripSqlComments(read(AZURE_READINESS));
+
+    assert.match(
+      sql,
+      /receipt_extractions_provider_allowed/,
+    );
+    assert.match(sql, /'FAKE'/);
+    assert.match(
+      sql,
+      /'AZURE_DOCUMENT_INTELLIGENCE'/,
+    );
+
+    assert.match(
+      sql,
+      /receipt_extractions_provider_model_pair_allowed/,
+    );
+    assert.match(sql, /'fake-receipt-v1'/);
+    assert.match(sql, /'prebuilt-receipt'/);
+    assert.match(sql, /'prebuilt-invoice'/);
+  });
+
+  test("the Azure readiness migration does not enable extraction", () => {
+    const sql = stripSqlComments(read(AZURE_READINESS));
+
+    assert.ok(
+      !/update\s+public\.receipt_extraction_runtime[\s\S]*?set\s+mode\s*=\s*'AZURE'/i
+        .test(sql),
+      "the migration enables Azure mode",
+    );
+
+    assert.ok(
+      !/update\s+public\.receipt_extraction_runtime[\s\S]*?set\s+mode\s*=\s*'FAKE'/i
+        .test(sql),
+      "the migration enables fake mode",
     );
   });
 
-  test("no Edge Function opens a network connection of its own", () => {
-    for (const path of EDGE_FUNCTIONS) {
-      const code = stripTsComments(read(path));
-      assert.ok(!/\bfetch\s*\(/.test(code), `${path} calls fetch directly`);
-      assert.ok(!/new\s+WebSocket/.test(code), `${path} opens a WebSocket`);
+  test("no Azure SDK dependency was introduced", () => {
+    for (const dependency of Object.keys(PACKAGE.dependencies)) {
+      assert.ok(
+        !/^@azure\//i.test(dependency),
+        `Azure SDK dependency found: ${dependency}`,
+      );
     }
   });
 });
@@ -201,21 +281,34 @@ describe("2. no raw provider payload is stored", () => {
   });
 });
 
-describe("3. fake mode cannot be enabled by a client", () => {
-  test("the gate reads ONLY the environment variable", () => {
+describe("3. extraction mode cannot be enabled by a client", () => {
+  test("the runtime mode is read only from the environment", () => {
     for (const path of [REQUEST_FN, GET_FN]) {
       const code = stripTsComments(read(path));
-      // One level of nesting, because the only permitted argument is itself a call.
-      const calls = [...code.matchAll(/isFakeExtractionEnabled\(((?:[^()]|\([^()]*\))*)\)/g)];
-      assert.ok(calls.length > 0, `${path} never evaluates the gate`);
-      for (const call of calls) {
-        assert.equal(
-          call[1].trim(),
-          "Deno.env.get(RECEIPT_EXTRACTION_MODE_ENV)",
-          `${path} passes something other than the environment to the gate`,
-        );
-      }
+
+      const reads =
+        code.match(
+          /Deno\.env\.get\(RECEIPT_EXTRACTION_MODE_ENV\)/g,
+        ) ?? [];
+
+      assert.equal(
+        reads.length,
+        1,
+        `${path} must read the mode exactly once`,
+      );
     }
+
+    const requestCode = stripTsComments(read(REQUEST_FN));
+    assert.match(
+      requestCode,
+      /resolveReceiptExtractionRequestProvider\(\{[\s\S]*?mode:\s*Deno\.env\.get\(RECEIPT_EXTRACTION_MODE_ENV\)/,
+    );
+
+    const getCode = stripTsComments(read(GET_FN));
+    assert.match(
+      getCode,
+      /const edgeMode\s*=\s*Deno\.env\.get\(RECEIPT_EXTRACTION_MODE_ENV\)/,
+    );
   });
 
   test("the request body allowlist has exactly one key", () => {
@@ -237,14 +330,15 @@ describe("3. fake mode cannot be enabled by a client", () => {
     }
   });
 
-  test("the fixture selector is read only from the environment", () => {
+  test("fake fixture configuration is environment-only", () => {
     for (const path of [REQUEST_FN, GET_FN]) {
       const code = stripTsComments(read(path));
-      const calls = [...code.matchAll(/fixtureEnv:\s*([^,]+),/g)];
-      assert.ok(calls.length > 0, `${path} never selects a fixture`);
-      for (const call of calls) {
-        assert.equal(call[1].trim(), "Deno.env.get(RECEIPT_EXTRACTION_FIXTURE_ENV)", path);
-      }
+
+      assert.match(
+        code,
+        /fakeFixture:\s*Deno\.env\.get\(RECEIPT_EXTRACTION_FIXTURE_ENV\)/,
+        `${path} does not source the fake fixture from Deno.env`,
+      );
     }
   });
 
@@ -504,7 +598,9 @@ describe("9. the environment gate is evaluated only after auth, parsing and auth
       const getUserAt = code.indexOf("auth.getUser(accessToken)");
       const parseAt = code.indexOf("parseExtractionRequest(rawBody)");
       const accessAt = code.indexOf("ACCESS_RPC, { p_submission_id");
-      const gateAt = code.indexOf("isFakeExtractionEnabled(");
+      const gateAt = code.indexOf(
+        "Deno.env.get(RECEIPT_EXTRACTION_MODE_ENV)",
+      );
 
       assert.ok(getUserAt > 0, "no token revalidation");
       assert.ok(parseAt > getUserAt, "the body is parsed before the token is revalidated");

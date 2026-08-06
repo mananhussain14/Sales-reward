@@ -46,7 +46,9 @@
 //   consumed here and appear in no response body, no header and no log line. The response is
 //   built by RE-READING through the caller's own RPC, never by echoing a service-role result.
 //
-// NO AZURE. No endpoint, credential, SDK, region or service name appears in this file.
+// PROVIDER NETWORK IS ISOLATED. This function reads server-only configuration and
+// delegates provider construction to the shared selector. It never calls fetch directly,
+// logs a credential, or includes provider configuration in a client response.
 
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2.110.6";
 
@@ -59,24 +61,23 @@ import {
   type ExtractionResponseStatus,
 } from "../../../lib/receipts/receipt-extraction-request-contract.ts";
 import {
-  isFakeExtractionEnabled,
+  AZURE_DI_API_VERSION_ENV,
+  AZURE_DI_ENDPOINT_ENV,
+  AZURE_DI_KEY_ENV,
+  AZURE_DI_MODEL_ENV,
+} from "../../../lib/receipts/receipt-extraction-azure-config.ts";
+import {
   RECEIPT_EXTRACTION_FIXTURE_ENV,
   RECEIPT_EXTRACTION_FAKE_PENDING_MS_ENV,
   RECEIPT_EXTRACTION_MODE_ENV,
-  resolveFakePendingMs,
 } from "../../../lib/receipts/receipt-extraction-mode.ts";
 import {
-  createFakeProviderForKey,
-  resolveFakeFixtureKey,
-} from "../../../lib/receipts/receipt-extraction-fake-provider.ts";
+  resolveReceiptExtractionRequestProvider,
+} from "../../../lib/receipts/receipt-extraction-provider-selection.ts";
 import {
   runExtractionRequestFlow,
   type ExtractionRequestPorts,
 } from "../../../lib/receipts/receipt-extraction-flow.ts";
-import {
-  FAKE_PROVIDER_MODEL,
-  FAKE_PROVIDER_NAME,
-} from "../../../lib/receipts/receipt-extraction-vocabulary.ts";
 
 /** The RPCs this function calls, and the privilege level each runs at. */
 const ACCESS_RPC = "assert_my_receipt_extraction_access" as const; // caller's own token
@@ -135,7 +136,7 @@ function readPublishableKey(): string | null {
  */
 function safeExtractionPayload(
   row: Record<string, unknown>,
-  edgeFakeEnabled: boolean,
+  edgeEnabled: boolean,
 ): Record<string, unknown> {
   return {
     submission_id: row.submission_id,
@@ -144,7 +145,7 @@ function safeExtractionPayload(
     attempt_number: row.attempt_number,
     attempts_used: row.attempts_used,
     attempts_remaining: row.attempts_remaining,
-    retry_allowed: row.retry_allowed === true && edgeFakeEnabled,
+    retry_allowed: row.retry_allowed === true && edgeEnabled,
     manual_confirmation_allowed: row.manual_confirmation_allowed,
     confirmation_exists: row.confirmation_exists,
     failure_code: row.failure_code,
@@ -190,13 +191,13 @@ function stateResponse(
     manualConfirmationAllowed: boolean;
   },
   extraction: Record<string, unknown> | null,
-  edgeFakeEnabled: boolean,
+  edgeEnabled: boolean,
 ): Response {
   return json("ok", 200, {
     outcome,
     attempts_used: counters.attemptsUsed,
     attempts_remaining: counters.attemptsRemaining,
-    retry_allowed: counters.retryAllowed && edgeFakeEnabled,
+    retry_allowed: counters.retryAllowed && edgeEnabled,
     manual_confirmation_allowed: counters.manualConfirmationAllowed,
     extraction,
   });
@@ -360,7 +361,25 @@ async function handleRequest(request: Request): Promise<Response> {
   // ---- 12. Report existing state, WITHOUT consulting either gate --------------
   // These outcomes create nothing and are identical whether extraction is enabled or not,
   // so answering them while a gate is shut leaks no configuration.
-  const edgeFakeEnabled = isFakeExtractionEnabled(Deno.env.get(RECEIPT_EXTRACTION_MODE_ENV));
+  // Provider selection is server-environment-only and performs no network work.
+  // A malformed mode, fixture or Azure configuration resolves to null.
+  const provider = resolveReceiptExtractionRequestProvider({
+    mode: Deno.env.get(RECEIPT_EXTRACTION_MODE_ENV),
+    fakeFixture:
+      Deno.env.get(RECEIPT_EXTRACTION_FIXTURE_ENV),
+    fakePendingMs:
+      Deno.env.get(RECEIPT_EXTRACTION_FAKE_PENDING_MS_ENV),
+    azureEndpoint:
+      Deno.env.get(AZURE_DI_ENDPOINT_ENV),
+    azureKey:
+      Deno.env.get(AZURE_DI_KEY_ENV),
+    azureApiVersion:
+      Deno.env.get(AZURE_DI_API_VERSION_ENV),
+    azureModel:
+      Deno.env.get(AZURE_DI_MODEL_ENV),
+  });
+
+  const edgeEnabled = provider !== null;
 
   if (extractionRow !== null) {
     const status = extractionRow.status;
@@ -373,7 +392,7 @@ async function handleRequest(request: Request): Promise<Response> {
         attempts_remaining: asInteger(extractionRow.attempts_remaining, 0),
         retry_allowed: false,
         manual_confirmation_allowed: false,
-        extraction: safeExtractionPayload(extractionRow, edgeFakeEnabled),
+        extraction: safeExtractionPayload(extractionRow, edgeEnabled),
       });
     }
     if (status === "SUCCEEDED" || status === "QUEUED" || status === "PROCESSING") {
@@ -383,7 +402,7 @@ async function handleRequest(request: Request): Promise<Response> {
         attempts_remaining: asInteger(extractionRow.attempts_remaining, 0),
         retry_allowed: false,
         manual_confirmation_allowed: extractionRow.manual_confirmation_allowed === true,
-        extraction: safeExtractionPayload(extractionRow, edgeFakeEnabled),
+        extraction: safeExtractionPayload(extractionRow, edgeEnabled),
       });
     }
     if (attemptsUsed >= 3) {
@@ -393,14 +412,14 @@ async function handleRequest(request: Request): Promise<Response> {
         attempts_remaining: 0,
         retry_allowed: false,
         manual_confirmation_allowed: true,
-        extraction: safeExtractionPayload(extractionRow, edgeFakeEnabled),
+        extraction: safeExtractionPayload(extractionRow, edgeEnabled),
       });
     }
   }
 
   // ---- 13/14. The Edge gate, guarding creation and provider work only ---------
-  if (!edgeFakeEnabled) {
-    logFailure("extraction mode disabled");
+  if (provider === null) {
+    logFailure("extraction mode or provider configuration disabled");
     const attemptsUsed = extractionRow === null ? 0 : asInteger(extractionRow.attempts_used, 0);
     return stateResponse(
       "EXTRACTION_UNAVAILABLE",
@@ -445,34 +464,15 @@ async function handleRequest(request: Request): Promise<Response> {
       return json("unavailable", 503);
     }
 
-    // SELECTION IS SERVER-SIDE AND ENV-ONLY IN MILESTONE A. The named-fixture variable is
-    // the selector; the file hash is deliberately NOT plumbed through to the worker, so the
-    // hash-bucket fallback in resolveFakeFixtureKey is inactive here and the default fixture
-    // is used when the variable is unset. Wiring the hash would mean carrying it into the
-    // claim's return for a local-demo nicety, and a hash is not something this path needs.
-    const fixture = resolveFakeFixtureKey({
-      fixtureEnv: Deno.env.get(RECEIPT_EXTRACTION_FIXTURE_ENV),
-      fileSha256: null,
-    });
-
-    if (fixture.status !== "ok") {
-      // A deployment named a fixture that does not exist. FAIL CLOSED — never fall back.
-      logFailure("configured fixture is unknown");
-      return json("unavailable", 503);
-    }
-
-    const provider = createFakeProviderForKey(
-      fixture.key,
-      resolveFakePendingMs(Deno.env.get(RECEIPT_EXTRACTION_FAKE_PENDING_MS_ENV)),
-    );
-
+    // The provider was selected before the first mutation. Its name and model
+    // are persisted by the database claim before any receipt bytes are transmitted.
     const ports: ExtractionRequestPorts = {
       async claim({ extractionId: id }) {
         const result = await asService
           .rpc(CLAIM_RPC, {
             p_extraction_id: id,
-            p_provider: FAKE_PROVIDER_NAME,
-            p_provider_model: FAKE_PROVIDER_MODEL,
+            p_provider: provider.name,
+            p_provider_model: provider.model,
           })
           .abortSignal(AbortSignal.timeout(RPC_TIMEOUT_MS))
           .then((r) => r, () => null);
@@ -584,9 +584,9 @@ async function handleRequest(request: Request): Promise<Response> {
     outcome: requestRow.outcome,
     attempts_used: attemptsUsed,
     attempts_remaining: Math.max(0, 3 - attemptsUsed),
-    retry_allowed: requestRow.retry_allowed === true && edgeFakeEnabled,
+    retry_allowed: requestRow.retry_allowed === true && edgeEnabled,
     manual_confirmation_allowed: requestRow.manual_confirmation_allowed === true,
-    extraction: finalRow === null ? null : safeExtractionPayload(finalRow, edgeFakeEnabled),
+    extraction: finalRow === null ? null : safeExtractionPayload(finalRow, edgeEnabled),
   });
 }
 

@@ -36,8 +36,18 @@
  *   decision. receipt-extraction-safety.test.ts asserts the call sites.
  */
 
-/** The exact and only value that enables fake extraction. Lower case, no whitespace. */
+/**
+ * Exact Edge-runtime values. Lower case and without surrounding whitespace.
+ *
+ * Unknown, absent, padded or mis-cased values resolve to DISABLED.
+ */
 export const RECEIPT_EXTRACTION_MODE_FAKE = "fake" as const;
+export const RECEIPT_EXTRACTION_MODE_AZURE = "azure" as const;
+
+export type ReceiptExtractionEdgeMode =
+  | "disabled"
+  | typeof RECEIPT_EXTRACTION_MODE_FAKE
+  | typeof RECEIPT_EXTRACTION_MODE_AZURE;
 
 /** The environment variable name. Declared once so the safety test has a single anchor. */
 export const RECEIPT_EXTRACTION_MODE_ENV = "RECEIPT_EXTRACTION_MODE" as const;
@@ -69,8 +79,42 @@ export const MAX_FAKE_PENDING_MS = 60_000;
  * returns `string | undefined`, but typing the parameter loosely means no caller can
  * accidentally satisfy the signature by coercing something else first.
  */
+/**
+ * Resolves the server-only Edge mode by exact literal comparison.
+ *
+ * There is intentionally no trimming, case folding or truthy parsing. A malformed
+ * deployment value must disable provider work rather than guessing what was intended.
+ */
+export function resolveReceiptExtractionEdgeMode(
+  rawValue: unknown,
+): ReceiptExtractionEdgeMode {
+  if (rawValue === RECEIPT_EXTRACTION_MODE_FAKE) {
+    return RECEIPT_EXTRACTION_MODE_FAKE;
+  }
+
+  if (rawValue === RECEIPT_EXTRACTION_MODE_AZURE) {
+    return RECEIPT_EXTRACTION_MODE_AZURE;
+  }
+
+  return "disabled";
+}
+
 export function isFakeExtractionEnabled(rawValue: unknown): boolean {
-  return rawValue === RECEIPT_EXTRACTION_MODE_FAKE;
+  return (
+    resolveReceiptExtractionEdgeMode(rawValue) ===
+    RECEIPT_EXTRACTION_MODE_FAKE
+  );
+}
+
+export function isAzureExtractionEnabled(rawValue: unknown): boolean {
+  return (
+    resolveReceiptExtractionEdgeMode(rawValue) ===
+    RECEIPT_EXTRACTION_MODE_AZURE
+  );
+}
+
+export function isReceiptExtractionEnabled(rawValue: unknown): boolean {
+  return resolveReceiptExtractionEdgeMode(rawValue) !== "disabled";
 }
 
 /**

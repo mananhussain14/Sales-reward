@@ -267,10 +267,17 @@ select isnt(
 );
 
 select throws_ok(
-  format($q$select public.claim_receipt_extraction_job(%L, 'AZURE', 'x')$q$,
-         (select id from t_ids where label='ext1')),
-  '23514', null,
-  'a provider other than FAKE is refused before anything is written'
+  format(
+    $q$select public.claim_receipt_extraction_job(
+      %L,
+      'AZURE',
+      'prebuilt-invoice'
+    )$q$,
+    (select id from t_ids where label='ext1')
+  ),
+  '23514',
+  null,
+  'an unrecognized provider literal is refused before anything is written'
 );
 
 -- ============================================================================
@@ -401,9 +408,9 @@ select is(
 select is(
   pg_temp.failure_sqlstate((select id from t_ids where label='ext_pre'),
                            pg_temp.token_of((select id from t_ids where label='ext_pre')),
-                           null, 'PROVIDER_TIMEOUT'),
+                           null, 'PROVIDER_REJECTED_DOCUMENT'),
   '23514',
-  'a POST-provider code with no registered operation is refused'
+  'a result-dependent code with no registered operation is refused'
 );
 
 select is(

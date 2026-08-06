@@ -537,12 +537,12 @@ select is((select count(*)::integer from supabase_migrations.schema_migrations
 -- approval and is named exactly. It adds three receipt-keyed wrappers that delegate to
 -- this migration's own browser RPCs and change none of them; F5 and the hash
 -- assertions in its own suite pin that. Migration 70 (20260828090000) adds Sales Staff
--- earnings reads and calls no evaluator at all, which G10, G11 and G15 of its own suite
--- pin. The rule this assertion owns is that nothing beyond them has been applied.
+-- earnings reads and calls no evaluator at all. Migration 71 (20260828210000) adds Azure receipt-extraction readiness and likewise touches no campaign evaluator. The rule this assertion owns is that nothing beyond them exists.
 select is((select coalesce(string_agg(version, ',' order by version), 'NONE')
            from supabase_migrations.schema_migrations
-           where version > '20260826090000'), '20260827090000,20260828090000',
-  'A2. the only migrations after 20260826090000 are the approved Migrations 69 and 70');
+           where version > '20260826090000'),
+  '20260827090000,20260828090000,20260828210000',
+  'A2. the only migrations after 20260826090000 are approved Migrations 69, 70 and 71');
 
 select has_function('public', 'campaign_execute_evaluation_for_verified_sale', array['uuid'],
   'A3. the private evaluator exists with the exact signature');

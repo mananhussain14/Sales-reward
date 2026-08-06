@@ -194,11 +194,22 @@ describe("the request path", () => {
 });
 
 function pollPorts(
-  state: { status: string; claimToken: string | null; providerOperationId: string | null; startedAtMs: number | null },
+  state: {
+    status: string;
+    providerName: string | null;
+    providerModel: string | null;
+    claimToken: string | null;
+    providerOperationId: string | null;
+    startedAtMs: number | null;
+  },
   overrides: Partial<ExtractionPollPorts> = {},
 ): { ports: ExtractionPollPorts; calls: Call[] } {
   const calls: Call[] = [];
-  const provider = createFakeProviderForKey("CLEAN_AED_2", 1500, () => UUID);
+  const provider = createFakeProviderForKey(
+    "CLEAN_AED_2",
+    1500,
+    () => UUID,
+  );
 
   const ports: ExtractionPollPorts = {
     workerState: async (args) => {
@@ -213,16 +224,22 @@ function pollPorts(
       calls.push({ port: "recordFailure", args });
       return { status: "ok" };
     },
-    provider,
+    resolveProvider: (args) => {
+      calls.push({ port: "resolveProvider", args });
+      return provider;
+    },
     nowMs: 100_000,
     ...overrides,
   };
+
   return { ports, calls };
 }
 
 describe("the poll path", () => {
   const PROCESSING = {
     status: "PROCESSING",
+    providerName: "FAKE",
+    providerModel: "fake-receipt-v1",
     claimToken: CLAIM_TOKEN,
     providerOperationId: OPERATION_ID,
     startedAtMs: 0,
@@ -249,7 +266,12 @@ describe("the poll path", () => {
 
   test("a provider failure is recorded as a POST-provider failure", async () => {
     const { ports, calls } = pollPorts(PROCESSING, {
-      provider: createFakeProviderForKey("REJECTED_DOCUMENT", 0, () => UUID),
+      resolveProvider: () =>
+        createFakeProviderForKey(
+          "REJECTED_DOCUMENT",
+          0,
+          () => UUID,
+        ),
     });
     const outcome = await runExtractionPollFlow({ extractionId: EXTRACTION_ID }, ports);
 
@@ -271,6 +293,8 @@ describe("the poll path", () => {
   test("a QUEUED attempt is not pollable", async () => {
     const { ports } = pollPorts({
       status: "QUEUED",
+      providerName: null,
+      providerModel: null,
       claimToken: null,
       providerOperationId: null,
       startedAtMs: null,
@@ -302,12 +326,107 @@ describe("the poll path", () => {
     assert.ok(!calls.some((c) => c.port === "recordSuccess" || c.port === "recordFailure"));
   });
 
+  test("provider selection uses the attempt's stored provider and model", async () => {
+    const { ports, calls } = pollPorts(PROCESSING);
+
+    await runExtractionPollFlow(
+      { extractionId: EXTRACTION_ID },
+      ports,
+    );
+
+    const resolution = calls.find(
+      (call) => call.port === "resolveProvider",
+    );
+
+    assert.deepEqual(resolution?.args, {
+      providerName: "FAKE",
+      providerModel: "fake-receipt-v1",
+    });
+  });
+
+  test("an unavailable stored provider leaves the attempt unchanged", async () => {
+    let resolutions = 0;
+
+    const { ports, calls } = pollPorts(
+      {
+        ...PROCESSING,
+        providerName: "AZURE_DOCUMENT_INTELLIGENCE",
+        providerModel: "prebuilt-invoice",
+      },
+      {
+        resolveProvider: () => {
+          resolutions += 1;
+          return null;
+        },
+      },
+    );
+
+    const outcome = await runExtractionPollFlow(
+      { extractionId: EXTRACTION_ID },
+      ports,
+    );
+
+    assert.equal(outcome.status, "unavailable");
+    assert.equal(resolutions, 1);
+    assert.ok(
+      !calls.some(
+        (call) =>
+          call.port === "recordSuccess" ||
+          call.port === "recordFailure",
+      ),
+    );
+  });
+
+  test("a mismatched resolved provider is refused before polling", async () => {
+    let polls = 0;
+
+    const fake = createFakeProviderForKey(
+      "CLEAN_AED_2",
+      0,
+      () => UUID,
+    );
+
+    const { ports, calls } = pollPorts(
+      {
+        ...PROCESSING,
+        providerName: "AZURE_DOCUMENT_INTELLIGENCE",
+        providerModel: "prebuilt-invoice",
+      },
+      {
+        resolveProvider: () => ({
+          name: fake.name,
+          model: fake.model,
+          submit: fake.submit,
+          poll: async (input) => {
+            polls += 1;
+            return fake.poll(input);
+          },
+        }),
+      },
+    );
+
+    const outcome = await runExtractionPollFlow(
+      { extractionId: EXTRACTION_ID },
+      ports,
+    );
+
+    assert.equal(outcome.status, "unavailable");
+    assert.equal(polls, 0);
+    assert.ok(
+      !calls.some(
+        (call) =>
+          call.port === "recordSuccess" ||
+          call.port === "recordFailure",
+      ),
+    );
+  });
+
   test("the provider is polled exactly ONCE, never in a loop", async () => {
     let polls = 0;
     const inner = createFakeProviderForKey("CLEAN_AED_2", 1500, () => UUID);
     const { ports } = pollPorts(PROCESSING, {
       nowMs: 500,
-      provider: {
+      resolveProvider: () => ({
         name: inner.name,
         model: inner.model,
         submit: inner.submit,
@@ -315,7 +434,7 @@ describe("the poll path", () => {
           polls += 1;
           return inner.poll(input);
         },
-      },
+      }),
     });
     await runExtractionPollFlow({ extractionId: EXTRACTION_ID }, ports);
     assert.equal(polls, 1);
