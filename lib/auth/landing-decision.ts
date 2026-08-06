@@ -30,6 +30,9 @@
  *                 because that page requires the RETAILER_OWNER role.
  *   salesStaff    receipt submission and personal history — the only portal page a
  *                 Sales Staff member may reach.
+ *   claimReviewer the Claim Review portal. Reached ONLY by a caller who qualifies
+ *                 for no other experience — see the precedence note on
+ *                 selectLanding below.
  *   accessDenied  the established generic authenticated-denial route for a user
  *                 who holds neither supported authorization. NOT
  *                 /retailer-access-denied — that is the portal's own direct-route
@@ -45,6 +48,8 @@ export const LANDING_ROUTES = {
   retailerStaff: "/retailer/staff",
   /** A Sales Staff member's landing: receipt submission and their own history. */
   salesStaff: "/retailer/receipts",
+  /** The Claim Review portal. */
+  claimReviewer: "/review",
   accessDenied: "/access-denied",
   login: "/login",
 } as const;
@@ -96,9 +101,22 @@ export type LandingDecision =
   | { kind: "retailer"; destination: typeof LANDING_ROUTES.retailer }
   | { kind: "retailerStaff"; destination: typeof LANDING_ROUTES.retailerStaff }
   | { kind: "salesStaff"; destination: typeof LANDING_ROUTES.salesStaff }
+  | { kind: "claimReviewer"; destination: typeof LANDING_ROUTES.claimReviewer }
   | { kind: "unauthorized"; destination: typeof LANDING_ROUTES.accessDenied }
   | { kind: "unauthenticated"; destination: typeof LANDING_ROUTES.login }
   | { kind: "unavailable" };
+
+/**
+ * The Claim Reviewer resolver's four states. Like the Retailer portal resolver and
+ * unlike the Vendor one, it distinguishes an operational failure ("unavailable")
+ * from an authorization denial ("unauthorized"), and this decision preserves that
+ * distinction rather than collapsing one into the other.
+ */
+export type ClaimReviewerAccessStatus =
+  | "authorized"
+  | "unauthenticated"
+  | "unauthorized"
+  | "unavailable";
 
 /**
  * Resolve the landing decision from the two authorization statuses.
@@ -115,15 +133,34 @@ export type LandingDecision =
  *        submitter       -> /retailer/receipts   (Sales Staff receipt submission)
  *        unavailable     -> unavailable (operational, NOT a denial)
  *        unauthenticated -> /login (defensive; the token said no session)
+ *        unauthorized    -> consult the Claim Reviewer resolver (step 4)
+ *   4. Neither Vendor nor Retailer -> consult the Claim Reviewer resolver:
+ *        authorized      -> /review
+ *        unavailable     -> unavailable (operational, NOT a denial)
+ *        unauthenticated -> /login (defensive)
  *        unauthorized    -> generic /access-denied
  *
- * OPERATIONAL vs DENIAL: only the Retailer "unavailable" status yields the
- * "unavailable" kind. Nothing here converts a failure into a denial or a denial
- * into a failure.
+ * THE REVIEWER IS CONSULTED LAST, AND THAT ORDERING IS THE WHOLE POINT.
+ * It makes adding this branch provably zero-regression: the only callers whose
+ * destination can change are those who would previously have landed on
+ * /access-denied. A Vendor Super Admin still lands at "/", including one who ALSO
+ * holds CLAIM_REVIEWER — they are never silently moved out of Vendor Admin, and
+ * /review stays directly reachable. A Retailer Owner, Manager or Sales Staff member
+ * keeps their existing landing unchanged.
+ *
+ * `reviewer` DEFAULTS to "unauthorized" so every pre-existing call site and test
+ * continues to describe exactly the same behaviour it did before. That default is
+ * not a shortcut: it is what lets the existing landing tests stand unmodified as a
+ * regression proof.
+ *
+ * OPERATIONAL vs DENIAL: the Retailer and Claim Reviewer "unavailable" statuses each
+ * yield the "unavailable" kind. Nothing here converts a failure into a denial or a
+ * denial into a failure.
  */
 export function selectLanding(
   vendor: VendorAccessStatus,
   retailer: RetailerAccessStatus,
+  reviewer: ClaimReviewerAccessStatus = "unauthorized",
 ): LandingDecision {
   if (vendor === "authorized") {
     return { kind: "vendor", destination: LANDING_ROUTES.vendor };
@@ -144,11 +181,34 @@ export function selectLanding(
     case "submitter":
       return { kind: "salesStaff", destination: LANDING_ROUTES.salesStaff };
     case "unavailable":
+      // The Retailer answer is unknown, so the caller may yet be a Retailer. Do NOT
+      // fall through to the reviewer check — that would hand a Retailer the wrong
+      // portal during an outage.
       return { kind: "unavailable" };
     case "unauthenticated":
       return { kind: "unauthenticated", destination: LANDING_ROUTES.login };
     case "unauthorized":
     default:
-      return { kind: "unauthorized", destination: LANDING_ROUTES.accessDenied };
+      // Neither a Vendor nor a Retailer. This is the branch that previously ended
+      // at /access-denied, and the only branch the reviewer check can change.
+      switch (reviewer) {
+        case "authorized":
+          return {
+            kind: "claimReviewer",
+            destination: LANDING_ROUTES.claimReviewer,
+          };
+        case "unavailable":
+          // We do not know whether they are a reviewer. Denying them here would
+          // turn a transient outage into a refusal they cannot act on.
+          return { kind: "unavailable" };
+        case "unauthenticated":
+          return { kind: "unauthenticated", destination: LANDING_ROUTES.login };
+        case "unauthorized":
+        default:
+          return {
+            kind: "unauthorized",
+            destination: LANDING_ROUTES.accessDenied,
+          };
+      }
   }
 }

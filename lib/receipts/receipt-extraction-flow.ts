@@ -172,6 +172,10 @@ export async function runExtractionRequestFlow(
 
 export type WorkerState = {
   readonly status: string;
+  /** Immutable provider identity recorded when the attempt was claimed. */
+  readonly providerName: string | null;
+  /** Immutable provider model recorded alongside the provider identity. */
+  readonly providerModel: string | null;
   readonly claimToken: string | null;
   readonly providerOperationId: string | null;
   readonly startedAtMs: number | null;
@@ -196,7 +200,17 @@ export type ExtractionPollPorts = {
     readonly providerOperationId: string;
     readonly failureCode: ExtractionFailureCode;
   }): Promise<AcknowledgeResult>;
-  readonly provider: ReceiptExtractionProvider;
+  /**
+   * Resolves the provider from immutable metadata read from the attempt.
+   *
+   * Returning null means the stored provider/model cannot safely be serviced by
+   * this deployment. The attempt is left unchanged for the reaper or a correctly
+   * configured worker.
+   */
+  resolveProvider(input: {
+    readonly providerName: string;
+    readonly providerModel: string;
+  }): ReceiptExtractionProvider | null;
   /** Injected so this module reads no clock of its own. */
   readonly nowMs: number;
 };
@@ -230,6 +244,8 @@ export async function runExtractionPollFlow(
   // attempt has no operation; a terminal attempt is finished and immutable.
   if (
     state.status !== "PROCESSING" ||
+    state.providerName === null ||
+    state.providerModel === null ||
     state.claimToken === null ||
     state.providerOperationId === null ||
     state.startedAtMs === null
@@ -237,7 +253,24 @@ export async function runExtractionPollFlow(
     return { status: "not-pollable" };
   }
 
-  const polled: ExtractionPollResult = await ports.provider.poll({
+  const provider = ports.resolveProvider({
+    providerName: state.providerName,
+    providerModel: state.providerModel,
+  });
+
+  // Fail closed when this deployment cannot resolve the stored provider, or when
+  // the resolver returns a provider whose identity does not exactly match the row.
+  // The latter check prevents a resolver defect from polling an Azure operation
+  // through the fake provider, or vice versa.
+  if (
+    provider === null ||
+    provider.name !== state.providerName ||
+    provider.model !== state.providerModel
+  ) {
+    return { status: "unavailable" };
+  }
+
+  const polled: ExtractionPollResult = await provider.poll({
     providerOperationId: state.providerOperationId,
     startedAtMs: state.startedAtMs,
     nowMs: ports.nowMs,

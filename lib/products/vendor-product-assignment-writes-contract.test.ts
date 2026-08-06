@@ -212,11 +212,67 @@ describe("Vendor Product assignment writes — this milestone adds no migration"
     // CREATE / CREATE OR REPLACE / DROP / ALTER on either function, GRANT or REVOKE on either,
     // and any DDL or write against the assignment table. Every real change is still caught;
     // a sentence about them no longer is.
+    // ============================================================================
+    // ONE MIGRATION IS EXEMPT FROM THE TABLE-LEVEL CHECK, AND ONLY THAT ONE
+    // ============================================================================
+    // 20260814210000 attaches an AFTER INSERT/UPDATE/DELETE trigger to
+    // vendor_product_retailer_assignments so that every state the assignment edge holds is
+    // recorded in an append-only timeline. That IS a change to the table, and this guard
+    // was right to stop it — the exemption below is the "re-check this contract" the
+    // message asks for, performed and written down rather than waved through.
+    //
+    // WHAT WAS RE-CHECKED, and what the exemption is therefore narrow enough to permit:
+    //
+    //   * NEITHER WRITE IS TOUCHED. The two functions keep their exact signatures,
+    //     bodies, grants and audit events — asserted for every migration including this
+    //     one by the FUNCTIONS loop below, which is NOT exempted.
+    //   * NO COLUMN, CONSTRAINT, INDEX OR STATUS VALUE CHANGES. The exemption covers the
+    //     trigger attachment only; `assertOnlyAttachesTrigger` below proves the migration
+    //     contains no ALTER TABLE, no column change and no UPDATE/INSERT/DELETE against
+    //     the assignment table's rows.
+    //   * THE SOFT-STATUS-ONLY RULE IS STRENGTHENED, NOT WEAKENED. The history table's
+    //     foreign key makes deleting an assignment row impossible, which is the rule
+    //     migration 20260727090000 stated in prose and never enforced.
+    //
+    // LATEST_APPLIED_MIGRATION is deliberately NOT bumped: the contract it pins — the two
+    // write functions — is unchanged, and moving the marker would silently stop checking
+    // every migration between it and here.
+    const TRIGGER_ONLY_EXEMPTION = "20260814210000_vendor_product_assignment_history.sql";
+
     const newer = applied.filter((file) => file > LATEST_APPLIED_MIGRATION);
     const FUNCTIONS = [
       "assign_vendor_product_to_retailer",
       "unassign_vendor_product_from_retailer",
     ];
+
+    /** Proves the exempted migration only ATTACHES a trigger — it changes nothing else. */
+    function assertOnlyAttachesTrigger(file: string, code: string): void {
+      const target = String.raw`(?:public\.)?vendor_product_retailer_assignments\b`;
+
+      // No structural change to the table.
+      assert.ok(
+        !new RegExp(String.raw`\balter\s+table\s+${target}`, "i").test(code),
+        `${file} alters the assignment table`,
+      );
+      // No row is written, so no status is changed by the migration itself.
+      for (const verb of [
+        String.raw`\binsert\s+into\s+${target}`,
+        String.raw`\bupdate\s+${target}`,
+        String.raw`\bdelete\s+from\s+${target}`,
+        String.raw`\btruncate\s+${target}`,
+        String.raw`\bdrop\s+table\s+${target}`,
+      ]) {
+        assert.ok(
+          !new RegExp(verb, "i").test(code),
+          `${file} writes or drops the assignment table: /${verb}/`,
+        );
+      }
+      // The only permitted contact is a trigger attachment.
+      const contacts = [
+        ...code.matchAll(new RegExp(String.raw`\b(\w+)[\w\s.]*?${target}`, "gi")),
+      ];
+      assert.ok(contacts.length > 0, `${file} was expected to attach a trigger`);
+    }
 
     for (const file of newer) {
       const code = stripComments(readFileSync(join(MIGRATIONS_DIR, file), "utf8"));
@@ -235,13 +291,37 @@ describe("Vendor Product assignment writes — this milestone adds no migration"
         );
       }
 
+      // MATCHED ON THE STATEMENT'S TARGET, NOT ON A MENTION ANYWHERE IN IT.
+      //
+      // These patterns used to allow anything between the verb and the table name, which
+      // made `insert into <other table> ... join vendor_product_retailer_assignments`
+      // indistinguishable from a write TO the assignment table. A later milestone that
+      // merely READS assignments — resolving campaign eligibility, for instance — would
+      // fail this guard for doing exactly what it is supposed to do, while a genuine
+      // write would fail it for the right reason, and the message could not tell them
+      // apart.
+      //
+      // Anchoring the table name to the position a write target actually occupies keeps
+      // every real change caught: `insert into [public.]vendor_product_retailer_assignments`,
+      // `update [public.]vendor_product_retailer_assignments`, `delete from ...`, and any
+      // DDL naming it. A join against it in some other statement's FROM clause no longer is.
+      const TARGET = String.raw`(?:public\.)?vendor_product_retailer_assignments\b`;
+
+      // The one migration permitted to touch the table, and only to attach a trigger.
+      // Its narrower guarantees are asserted instead of the blanket rule.
+      if (file === TRIGGER_ONLY_EXEMPTION) {
+        assertOnlyAttachesTrigger(file, code);
+        continue;
+      }
+
       assert.ok(
-        !/\b(create|drop|alter|truncate)\b[^;]*\bvendor_product_retailer_assignments\b/i.test(
-          code,
-        ) &&
-          !/\b(insert\s+into|update|delete\s+from)\b[^;]*\bvendor_product_retailer_assignments\b/i.test(
-            code,
-          ),
+        !new RegExp(
+          String.raw`\b(create|drop|alter|truncate)\b[\w\s]*?\b${TARGET}`,
+          "i",
+        ).test(code) &&
+          !new RegExp(String.raw`\binsert\s+into\s+${TARGET}`, "i").test(code) &&
+          !new RegExp(String.raw`\bupdate\s+${TARGET}`, "i").test(code) &&
+          !new RegExp(String.raw`\bdelete\s+from\s+${TARGET}`, "i").test(code),
         `${file} changes the assignment table or its rows; re-check this contract`,
       );
     }

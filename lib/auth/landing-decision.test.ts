@@ -235,3 +235,89 @@ describe("selectLanding — every role lands where it is actually authorized", (
     }
   });
 });
+
+/* ===========================================================================
+ * Claim Reviewer — added last, so nothing above it can move
+ * ======================================================================== */
+describe("selectLanding — Claim Reviewer, appended without moving anything", () => {
+  test("C1. a reviewer-only user lands on /review", () => {
+    // Previously this exact caller — verified, no Vendor, no Retailer — landed on
+    // /access-denied. It is the ONLY combination whose destination this milestone
+    // changes.
+    const decision = selectLanding("unauthorized", "unauthorized", "authorized");
+    assert.equal(decision.kind, "claimReviewer");
+    assert.equal(destinationOf(decision), LANDING_ROUTES.claimReviewer);
+    assert.equal(destinationOf(decision), "/review");
+  });
+
+  test("C2. a dual Vendor Super Admin + reviewer still lands on /", () => {
+    // Vendor-first precedence is preserved: a dual-role user is never silently moved
+    // out of Vendor Admin, and /review stays reachable directly.
+    const decision = selectLanding("authorized", "unauthorized", "authorized");
+    assert.equal(decision.kind, "vendor");
+    assert.equal(destinationOf(decision), LANDING_ROUTES.vendor);
+  });
+
+  test("C3. every existing Retailer landing is unchanged when a reviewer status is present", () => {
+    // Proves the reviewer branch is unreachable for anyone who already qualified.
+    const cases = [
+      ["owner", LANDING_ROUTES.retailer],
+      ["reader", LANDING_ROUTES.retailerStaff],
+      ["submitter", LANDING_ROUTES.salesStaff],
+    ] as const;
+
+    for (const [retailer, expected] of cases) {
+      assert.equal(
+        destinationOf(selectLanding("unauthorized", retailer, "authorized")),
+        expected,
+        `${retailer} must keep its landing even when also a reviewer`,
+      );
+    }
+  });
+
+  test("C4. omitting the reviewer argument reproduces the pre-Phase-1B behaviour exactly", () => {
+    // The default is what lets every pre-existing call site and test above stand
+    // unmodified as a regression proof. Asserted here rather than assumed.
+    const statuses = ["owner", "reader", "submitter", "unauthenticated", "unauthorized", "unavailable"] as const;
+
+    for (const vendor of ["authorized", "unauthenticated", "unauthorized"] as const) {
+      for (const retailer of statuses) {
+        assert.deepEqual(
+          selectLanding(vendor, retailer),
+          selectLanding(vendor, retailer, "unauthorized"),
+          `${vendor}/${retailer} must be identical with and without the default`,
+        );
+      }
+    }
+  });
+
+  test("C5. a reviewer-unavailable result is operational, never a denial", () => {
+    const decision = selectLanding("unauthorized", "unauthorized", "unavailable");
+    assert.equal(decision.kind, "unavailable");
+    assert.ok(!("destination" in decision), "unavailable carries no destination");
+  });
+
+  test("C6. a non-reviewer with no other access still lands on /access-denied", () => {
+    assert.equal(
+      destinationOf(selectLanding("unauthorized", "unauthorized", "unauthorized")),
+      LANDING_ROUTES.accessDenied,
+    );
+  });
+
+  test("C7. a Retailer-unavailable result is NOT overridden by reviewer access", () => {
+    // The caller may still be a Retailer; handing them the reviewer portal during an
+    // outage would be the wrong portal rather than a safe fallback.
+    assert.equal(
+      selectLanding("unauthorized", "unavailable", "authorized").kind,
+      "unavailable",
+    );
+  });
+
+  test("C8. /review is a fixed literal, so no reviewer path can open-redirect", () => {
+    for (const route of Object.values(LANDING_ROUTES)) {
+      assert.ok(route.startsWith("/"), `${route} must be a same-origin absolute path`);
+      assert.ok(!route.startsWith("//"), `${route} must not be protocol-relative`);
+      assert.ok(!/^[a-z]+:/i.test(route), `${route} must carry no scheme`);
+    }
+  });
+});

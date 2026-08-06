@@ -40,8 +40,8 @@ describe("the lifecycle vocabularies", () => {
     assert.deepEqual([...EXTRACTION_STATUSES], ["QUEUED", "PROCESSING", "SUCCEEDED", "FAILED"]);
   });
 
-  test("two runtime modes, and the safe one is first", () => {
-    assert.deepEqual([...EXTRACTION_RUNTIME_MODES], ["DISABLED", "FAKE"]);
+  test("three runtime modes, and the safe one is first", () => {
+    assert.deepEqual([...EXTRACTION_RUNTIME_MODES], ["DISABLED", "FAKE", "AZURE"]);
   });
 
   test("three attempts", () => {

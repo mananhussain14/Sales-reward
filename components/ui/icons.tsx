@@ -319,6 +319,28 @@ export function StoreIcon(props: IconProps) {
 }
 
 /** A small animated spinner. Motion is suppressed under reduced-motion. */
+/**
+ * The megaphone the Vendor Admin nav already uses for Campaigns, exposed as a component
+ * so empty states and page headers show the same mark as the sidebar entry. The `<path>`
+ * is byte-identical to the one in @/components/admin/nav-items.
+ */
+export function CampaignsIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M10.34 15.84c-.688-.06-1.386-.09-2.09-.09H7.5a4.5 4.5 0 110-9h.75c.704 0 1.402-.03 2.09-.09m0 9.18c.253.962.584 1.892.985 2.783.247.55.06 1.21-.463 1.511l-.657.38c-.551.318-1.24.117-1.526-.421a20.75 20.75 0 01-1.44-3.685m4.101-.585a20.85 20.85 0 018.834 2.535M10.34 6.66a20.85 20.85 0 008.834-2.535M18.75 4.971c.487.147.982.28 1.486.396a24.5 24.5 0 010 9.266c-.504.115-.999.249-1.486.396m0-10.058a20.83 20.83 0 01.42 5.03c0 1.716-.146 3.395-.42 5.028" />
+    </Icon>
+  );
+}
+
+/** A stack of layers — used for the Retailer group surfaces. */
+export function GroupsIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M6.429 9.75L2.25 12l4.179 2.25m0-4.5l5.571 3 5.571-3m-11.142 0L2.25 7.5 12 2.25l9.75 5.25-4.179 2.25m0 0L21.75 12l-4.179 2.25m0 0l4.179 2.25L12 21.75 2.25 16.5l4.179-2.25m11.142 0l-5.571 3-5.571-3" />
+    </Icon>
+  );
+}
+
 export function SpinnerIcon(props: IconProps) {
   return (
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>

@@ -43,6 +43,7 @@ import { InfoPanel } from "@/components/ui/form-section";
 import { getVendorRetailerManageCapability } from "@/lib/retailers/vendor-retailer-manage-capability";
 import { isVendorRetailerLifecycleControlOffered } from "@/lib/retailers/vendor-retailer-lifecycle-input";
 import { RetailerLifecycleDialog } from "@/app/(admin)/retailers/[relationshipId]/retailer-lifecycle-dialog";
+import { ShopTimeZoneControl } from "@/app/(admin)/retailers/[relationshipId]/shops/shop-timezone-control";
 
 /**
  * Static, and deliberately generic. Naming the Retailer in the title would mean
@@ -226,7 +227,13 @@ function RetailerLifecycleCard({
 }
 
 /** Wide-screen shop presentation. Hidden below `md`, where the cards take over. */
-function ShopTable({ shops }: { shops: VendorRetailerShopDetail[] }) {
+function ShopTable({
+  shops,
+  relationshipId,
+}: {
+  shops: VendorRetailerShopDetail[];
+  relationshipId: string;
+}) {
   return (
     <div className="hidden overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-card md:block">
       <table className="w-full border-collapse text-left text-sm">
@@ -245,21 +252,22 @@ function ShopTable({ shops }: { shops: VendorRetailerShopDetail[] }) {
               Country
             </th>
             <th scope="col" className="px-4 py-3 font-semibold">
+              Time zone
+            </th>
+            <th scope="col" className="px-4 py-3 font-semibold">
               Status
             </th>
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-100">
-          {shops.map((shop, index) => (
-            // The shop payload deliberately carries no id, and two shops may
-            // legitimately share every visible field — name, code, city, country,
-            // and status alike — so a key built from those fields could collide
-            // and would silently break rendering the moment it did. The index is
-            // safe here for the same reason it was in the directory before
-            // relationship ids arrived: this list is server-rendered once, in the
-            // loader's fixed alphabetical order, and is never reordered,
-            // filtered, paginated, or mutated on the client.
-            <tr key={index} className="transition-colors hover:bg-slate-50">
+          {shops.map((shop) => (
+            // Keyed by the shop's own id now that the payload carries one. This
+            // replaces the previous index key, which was a workaround for the
+            // absence of an id: two shops may legitimately share every visible
+            // field — name, code, city, country and status alike — so a key built
+            // from those could collide, and an index key would have re-associated
+            // the wrong open time-zone form if the list order ever changed.
+            <tr key={shop.shopId} className="transition-colors hover:bg-slate-50">
               <td className="px-4 py-3 font-medium text-slate-900">{shop.name}</td>
               <td className="px-4 py-3 text-slate-600">
                 <OptionalValue value={shop.code} />
@@ -269,6 +277,14 @@ function ShopTable({ shops }: { shops: VendorRetailerShopDetail[] }) {
               </td>
               <td className="px-4 py-3 text-slate-600">
                 <OptionalValue value={shop.countryCode} />
+              </td>
+              <td className="px-4 py-3 align-top">
+                <ShopTimeZoneControl
+                  shopId={shop.shopId}
+                  shopName={shop.name}
+                  relationshipId={relationshipId}
+                  timezoneName={shop.timezoneName}
+                />
               </td>
               <td className="px-4 py-3">
                 <StatusBadge status={shop.status} />
@@ -287,14 +303,18 @@ function ShopTable({ shops }: { shops: VendorRetailerShopDetail[] }) {
  * scrolling row. The card carries its own labels because it has no column
  * headers to inherit them from.
  */
-function ShopCards({ shops }: { shops: VendorRetailerShopDetail[] }) {
+function ShopCards({
+  shops,
+  relationshipId,
+}: {
+  shops: VendorRetailerShopDetail[];
+  relationshipId: string;
+}) {
   return (
     <ul className="space-y-3 md:hidden">
-      {shops.map((shop, index) => (
-        // Index key for the same reason as the table above: the payload has no
-        // id, the visible fields are not guaranteed unique, and the order is
-        // fixed and server-rendered.
-        <li key={index} className={cardClasses("standard", "p-4")}>
+      {shops.map((shop) => (
+        // Keyed by the shop's own id, for the same reason as the table above.
+        <li key={shop.shopId} className={cardClasses("standard", "p-4")}>
           <div className="flex items-start justify-between gap-3">
             <div className="flex min-w-0 items-start gap-3">
               <span
@@ -324,6 +344,17 @@ function ShopCards({ shops }: { shops: VendorRetailerShopDetail[] }) {
               <dt className="text-slate-500">Country</dt>
               <dd className="text-slate-700">
                 <OptionalValue value={shop.countryCode} />
+              </dd>
+            </div>
+            <div className="space-y-1.5 pt-1">
+              <dt className="text-slate-500">Time zone</dt>
+              <dd>
+                <ShopTimeZoneControl
+                  shopId={shop.shopId}
+                  shopName={shop.name}
+                  relationshipId={relationshipId}
+                  timezoneName={shop.timezoneName}
+                />
               </dd>
             </div>
           </dl>
@@ -959,8 +990,8 @@ export default async function RetailerDetailPage({
           />
         ) : (
           <>
-            <ShopTable shops={retailer.shops} />
-            <ShopCards shops={retailer.shops} />
+            <ShopTable shops={retailer.shops} relationshipId={relationshipId} />
+            <ShopCards shops={retailer.shops} relationshipId={relationshipId} />
           </>
         )}
       </section>

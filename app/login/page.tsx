@@ -12,6 +12,15 @@ export const metadata: Metadata = {
 };
 
 /**
+ * The single recognised `?notice=` value, set by the generic account-setup action
+ * after it signs a newly invited person out.
+ *
+ * Compared as an exact literal and never echoed, so the query string can select this
+ * one message and nothing else.
+ */
+const ACCOUNT_READY_NOTICE = "account-ready";
+
+/**
  * The UNIVERSAL sign-in page — one route for every role.
  *
  * Vendor Super Admins, Retailer Owners, Retailer Managers and Sales Staff all sign in
@@ -45,10 +54,19 @@ export default async function LoginPage({
   // unsafe (external URL, scheme, control chars) collapses to null. Used both to
   // route an already-authenticated visitor and, via a hidden field, to tell the
   // sign-in action where to return an authenticating one.
-  const { next: rawNext } = await searchParams;
+  const { next: rawNext, notice: rawNotice } = await searchParams;
   const nextParam = Array.isArray(rawNext) ? rawNext[0] : rawNext;
   const safeNext =
     typeof nextParam === "string" ? resolveSafeNextPath(nextParam) : null;
+
+  // A one-of-a-kind post-setup notice, matched against a single exact literal.
+  //
+  // The parameter's VALUE is never rendered — it only selects a message authored in
+  // this file. A caller who invents any other value gets no notice at all, so this
+  // cannot be turned into a way to display arbitrary text on the sign-in page, and
+  // it discloses nothing: anyone can append it to the URL themselves.
+  const noticeParam = Array.isArray(rawNotice) ? rawNotice[0] : rawNotice;
+  const showAccountReadyNotice = noticeParam === ACCOUNT_READY_NOTICE;
 
   // Same verified check the admin layout performs, in the opposite direction:
   // an already-authenticated user has no business seeing the login form.
@@ -74,6 +92,16 @@ export default async function LoginPage({
           <div className="mb-8 lg:hidden">
             <BrandLockup size={40} idSuffix="-login-mobile" />
           </div>
+
+          {showAccountReadyNotice ? (
+            <div
+              role="status"
+              className="mb-6 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800 ring-1 ring-emerald-100"
+            >
+              Your account has been confirmed. An administrator must finish
+              setting up your access before you can sign in to SalesReward.
+            </div>
+          ) : null}
 
           <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-card sm:p-8 lg:border-0 lg:p-0 lg:shadow-none">
             <div className="mb-6">

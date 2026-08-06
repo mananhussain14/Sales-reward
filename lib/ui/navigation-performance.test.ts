@@ -91,22 +91,76 @@ describe("navigation uses client-side Next.js Link, never a full reload", () => 
   });
 
   /**
-   * The ONE file permitted to call router.refresh(), and why.
+   * The files permitted to call router.refresh(), and why.
    *
-   * The Manage Shops editor's shop picker is populated by a read that can fail
-   * independently of the roster (list_retailer_staff_assignable_shops). When it does, the
-   * brief requires a READ-ONLY RETRY inside the dialog rather than a page error — and a
-   * retry of a Server Component read is exactly what router.refresh() is for.
+   * 1. MANAGE SHOPS DIALOG — the shop picker is populated by a read that can fail
+   *    independently of the roster (list_retailer_staff_assignable_shops). When it does, the
+   *    brief requires a READ-ONLY RETRY inside the dialog rather than a page error — and a
+   *    retry of a Server Component read is exactly what router.refresh() is for.
    *
-   * It is not navigation, it is not automatic, and it is not a write: it is a button the
-   * operator presses to re-attempt one failed read. Everything else this rule forbids —
-   * full reloads, location assignment, and refresh used as a navigation or
-   * post-mutation-sync mechanism — stays forbidden everywhere, including in that same
-   * file's success path, which uses revalidatePath from the Server Action instead.
+   * 2. QUALIFICATION PANEL — added by the Phase 1D-0 settlement correction.
+   *
+   *    The original rule said post-mutation sync should use revalidatePath from the Server
+   *    Action instead. A controlled hosted classification disproved that for THIS route:
+   *    Next.js completes "the mutation, the cache invalidation, and the page re-render ...
+   *    in a single roundtrip", so revalidating the path the reviewer is already viewing
+   *    held the action's reply until the receipt-detail route had re-rendered — layout auth
+   *    checks, get_claim_review_detail and get_claim_receipt_qualification, each a separate
+   *    cross-region round trip. The immutable event had committed and been audited, and the
+   *    reviewer still saw "Recording…" indefinitely.
+   *
+   *    So the qualification action now returns its outcome and nothing else, and the panel
+   *    re-reads the route itself AFTER that outcome is on screen. This is not navigation and
+   *    not a write: it is a re-attempt of a Server Component read, the same justification
+   *    as (1). The rule is unchanged everywhere else, the per-file cap still applies, and
+   *    the assertion below additionally pins that the qualification action may never
+   *    reintroduce the same-route revalidation that caused the hang.
+   *
+   *    See docs/server-action-authoritative-settlement.md.
+   *
+   * 3. SALE-HEADER PANEL — the SECOND consumer of the same settlement pattern,
+   *    added by Phase 1D-A. Finalizing a sale header is an immutable, audited
+   *    financial write on the SAME heavy cross-region route that produced the
+   *    original hang, so its action returns the authoritative outcome and
+   *    revalidates nothing, and the panel re-reads the route itself afterwards.
+   *    Identical justification to (2): a re-attempt of a Server Component read,
+   *    not navigation and not a write. Test 4b below covers both actions.
+   *
+   *    See docs/claim-reviewer-sale-header-finalization-web.md.
+   *
+   * 4. PRODUCT PANEL — the THIRD consumer of the same settlement pattern, added
+   *    by Phase 1D-B. Accepting or rejecting a receipt's whole product list is an
+   *    immutable, audited write on the SAME heavy cross-region route, so its
+   *    action returns the authoritative outcome and revalidates nothing, and the
+   *    panel re-reads the route itself afterwards. Identical justification to (2)
+   *    and (3): a re-attempt of a Server Component read, not navigation and not a
+   *    write. Test 4b below covers all three actions.
+   *
+   *    Its single call site is shared by the post-settlement effect and the manual
+   *    "Check product decision status" button, and is guarded by a ref so at most
+   *    one automatic refresh follows an authoritative result.
+   *
+   *    See docs/claim-reviewer-product-decision-flow.md.
+   *
+   * 5. CAMPAIGN EVALUATION PANEL — the FOURTH consumer of the same settlement
+   *    pattern, added by Phase 2A-F. Evaluating a sale is an audited write on the
+   *    same heavy cross-region route, so its action returns the authoritative
+   *    outcome and revalidates nothing, and the panel re-reads the route itself
+   *    afterwards. Identical justification to (2), (3) and (4).
+   *
+   *    Its single call site is shared by the post-settlement effect and the manual
+   *    "Check campaign results" button, and is guarded by a ref so at most one
+   *    automatic refresh follows an authoritative result.
    *
    * See docs/retailer-manage-staff-shops-web.md § 11.
    */
-  const REFRESH_ALLOWED = "app/(retailer)/retailer/staff/manage-shops-dialog.tsx";
+  const REFRESH_ALLOWED = new Set([
+    "app/(retailer)/retailer/staff/manage-shops-dialog.tsx",
+    "app/(review)/review/[receiptSubmissionId]/qualification-panel.tsx",
+    "app/(review)/review/[receiptSubmissionId]/sale-header-panel.tsx",
+    "app/(review)/review/[receiptSubmissionId]/product-panel.tsx",
+    "app/(review)/review/[receiptSubmissionId]/campaign-evaluation-panel.tsx",
+  ]);
 
   test("4 & 5. no full-reload navigation or stray router.refresh anywhere", () => {
     const files = [...walk("app"), ...walk("components")];
@@ -115,18 +169,44 @@ describe("navigation uses client-side Next.js Link, never a full reload", () => 
       assert.ok(!/window\.location/.test(src), `${file} uses window.location`);
       assert.ok(!/location\.(href|assign|replace)\s*=/.test(src), `${file} assigns location`);
 
-      if (file === REFRESH_ALLOWED) {
+      if (REFRESH_ALLOWED.has(file)) {
         // Narrow the allowance to a single call, so the exception cannot quietly grow into
-        // a habit inside the one file that holds it.
+        // a habit inside the files that hold it.
         assert.equal(
-          (src.match(/router\.refresh\(/g) ?? []).length,
+          (stripComments(src).match(/router\.refresh\(/g) ?? []).length,
           1,
-          `${file} may call router.refresh() exactly once — the shop-picker retry`,
+          `${file} may call router.refresh() exactly once`,
         );
         continue;
       }
 
       assert.ok(!/router\.refresh\(/.test(src), `${file} calls router.refresh()`);
+    }
+  });
+
+  /**
+   * The regression this correction exists to prevent.
+   *
+   * Re-adding revalidatePath to the qualification action would restore the exact hang a
+   * reviewer hit while classifying a receipt as TEST_DATA, so it is pinned here rather
+   * than left to code review.
+   */
+  test("4b. no immutable-write action revalidates the route it answers from", () => {
+    for (const file of [
+      "app/(review)/review/[receiptSubmissionId]/qualification-actions.ts",
+      "app/(review)/review/[receiptSubmissionId]/sale-finalization-actions.ts",
+      "app/(review)/review/[receiptSubmissionId]/product-decision-actions.ts",
+    ]) {
+      const action = stripComments(read(file));
+      assert.ok(
+        !/revalidatePath/.test(action),
+        `${file} revalidates its own route again — this is the Recording… hang`,
+      );
+      assert.ok(
+        !/from "next\/cache"/.test(action),
+        `${file} imports next/cache again`,
+      );
+      assert.ok(!/redirect\(/.test(action), `${file} redirects`);
     }
   });
 });
