@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useRef, useState } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 import { unstable_rethrow } from "next/navigation";
 import { submitReceiptAction } from "@/app/(retailer)/retailer/receipts/actions";
 import {
@@ -20,7 +20,7 @@ import type { AssignedReceiptShop } from "@/lib/receipts/receipt-normalization";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Label, selectClasses, SelectChevron } from "@/components/ui/field";
-import { UploadIcon, XIcon } from "@/components/ui/icons";
+import { CheckCircleIcon, UploadIcon, XIcon } from "@/components/ui/icons";
 
 /**
  * The receipt submission form.
@@ -161,6 +161,33 @@ export function SubmitReceiptForm({ shops }: SubmitReceiptFormProps) {
   const [chosen, setChosen] = useState<{ name: string; size: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  /** Whether a file is currently being dragged over the drop target. Cosmetic only. */
+  const [dragging, setDragging] = useState(false);
+
+  /**
+   * A local object URL for the chosen image, so the person can SEE what they picked
+   * before they send it — the single most useful check against submitting a blurred or
+   * wrong photograph.
+   *
+   * Created from the File the browser already holds and revoked when it changes. Nothing
+   * is read, hashed, re-encoded or transmitted here: the browser submits the File itself
+   * with the form, and the server derives the real type from its own bytes regardless.
+   */
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    const file = fileInputRef.current?.files?.[0] ?? null;
+    if (chosen === null || file === null) {
+      setPreviewUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    setPreviewUrl(url);
+    // Revoked on every change and on unmount, so a long session cannot accumulate
+    // object URLs for photographs the person has already replaced.
+    return () => URL.revokeObjectURL(url);
+  }, [chosen]);
+
   const maxMegabytes = MAX_RECEIPT_FILE_MEGABYTES;
   const disabled = pending || shops.length === 0;
 
@@ -180,7 +207,30 @@ export function SubmitReceiptForm({ shops }: SubmitReceiptFormProps) {
   // touches no server state and posts nothing.
   function clearChosen() {
     setChosen(null);
+    setDragging(false);
     if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  /**
+   * Accepts a dropped file by handing it to the REAL input.
+   *
+   * The dropped `FileList` is assigned to the file input itself rather than kept in
+   * component state, so the form submits exactly the same way it does after a click:
+   * one `<input type="file" name="receipt">`, submitted by the browser. There is no
+   * second upload path, no fetch, and nothing here posts anything.
+   *
+   * Only the FIRST file is taken. The input is single-file, and silently uploading one
+   * of several dropped images would be a guess.
+   */
+  function acceptDroppedFiles(files: FileList) {
+    const input = fileInputRef.current;
+    const file = files.item(0);
+    if (input === null || file === null || disabled) return;
+
+    const transfer = new DataTransfer();
+    transfer.items.add(file);
+    input.files = transfer.files;
+    setChosen({ name: file.name, size: file.size });
   }
 
   return (
@@ -199,9 +249,24 @@ export function SubmitReceiptForm({ shops }: SubmitReceiptFormProps) {
       {state.formError && <Alert tone="error">{state.formError}</Alert>}
 
       {state.successMessage && (
-        <Alert tone="success" className="sr-animate-fade-in">
-          {state.successMessage}
-        </Alert>
+        <div
+          role="status"
+          className="sr-animate-fade-in flex items-start gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-4"
+        >
+          <span className="sr-animate-pop flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white text-emerald-600">
+            <CheckCircleIcon className="h-5 w-5" />
+          </span>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-emerald-900">
+              {state.successMessage}
+            </p>
+            {/* What happens next, stated as a process rather than as a result. It
+                never promises the sale qualified, or that anything follows from it. */}
+            <p className="mt-0.5 text-sm text-emerald-800">
+              It appears in your submissions below, and goes to a reviewer next.
+            </p>
+          </div>
+        </div>
       )}
 
       <div className="space-y-2">
@@ -265,9 +330,22 @@ export function SubmitReceiptForm({ shops }: SubmitReceiptFormProps) {
 
         {chosen ? (
           <div className="flex items-center gap-3 rounded-2xl border border-indigo-200 bg-indigo-50/60 p-4 peer-focus-visible:ring-2 peer-focus-visible:ring-indigo-500 peer-focus-visible:ring-offset-2">
-            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white text-indigo-600 shadow-sm">
-              <UploadIcon className="h-5 w-5" />
-            </span>
+            {previewUrl !== null ? (
+              /* A local preview of the file already in the picker. `alt` is empty and
+                 the image is decorative: the file name beside it is the accessible
+                 description, and a receipt photograph has no text this page could
+                 truthfully describe. */
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={previewUrl}
+                alt=""
+                className="h-14 w-14 shrink-0 rounded-xl border border-indigo-200 bg-white object-cover"
+              />
+            ) : (
+              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white text-indigo-600 shadow-sm">
+                <UploadIcon className="h-5 w-5" />
+              </span>
+            )}
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-medium text-slate-900" aria-live="polite">
                 {chosen.name}
@@ -293,15 +371,36 @@ export function SubmitReceiptForm({ shops }: SubmitReceiptFormProps) {
             </div>
           </div>
         ) : (
+          /* Drag-and-drop is ADDITIVE: the label still wraps the real file input, so
+             a click, a tap and the keyboard all behave exactly as before. Dropping is
+             an extra way to reach the same input, never a second upload path. */
           <label
             htmlFor="receipt"
-            className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 px-6 py-8 text-center transition-colors hover:border-indigo-400 hover:bg-indigo-50/50 peer-focus-visible:border-indigo-500 peer-focus-visible:ring-2 peer-focus-visible:ring-indigo-500 peer-focus-visible:ring-offset-2 peer-disabled:cursor-not-allowed peer-disabled:opacity-60"
+            onDragOver={(event) => {
+              // Required for a drop to fire at all — the default is to refuse it.
+              event.preventDefault();
+              if (!disabled) setDragging(true);
+            }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={(event) => {
+              event.preventDefault();
+              setDragging(false);
+              acceptDroppedFiles(event.dataTransfer.files);
+            }}
+            className={`flex cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed px-6 py-8 text-center transition-colors peer-focus-visible:border-indigo-500 peer-focus-visible:ring-2 peer-focus-visible:ring-indigo-500 peer-focus-visible:ring-offset-2 peer-disabled:cursor-not-allowed peer-disabled:opacity-60 ${
+              dragging
+                ? "border-indigo-500 bg-indigo-50"
+                : "border-slate-300 bg-slate-50 hover:border-indigo-400 hover:bg-indigo-50/50"
+            }`}
           >
             <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600">
               <UploadIcon className="h-6 w-6" />
             </span>
             <span className="text-sm font-semibold text-slate-900">
-              Tap to upload a receipt
+              {dragging ? "Drop the image to attach it" : "Add a receipt photo"}
+            </span>
+            <span className="text-xs text-slate-500">
+              Tap to choose a file, or drag one here
             </span>
             <span className="text-xs text-slate-500">
               One JPEG, PNG or WebP image, up to {maxMegabytes} MB

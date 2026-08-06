@@ -341,6 +341,106 @@ export function GroupsIcon(props: IconProps) {
   );
 }
 
+/**
+ * The glyphs the Sales Staff experience adds.
+ *
+ * Same 24x24 grid, same 1.75 stroke and same round caps as every icon above — the
+ * uniformity is a large part of what makes the product read as one application, and a
+ * borrowed filled glyph would break it immediately.
+ */
+
+/** A target with a centre. The face of an INDIVIDUAL_STAFF target campaign. */
+export function TargetIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M12 21a9 9 0 100-18 9 9 0 000 18zm0-4.5a4.5 4.5 0 100-9 4.5 4.5 0 000 9zm0-3a1.5 1.5 0 100-3 1.5 1.5 0 000 3z" />
+    </Icon>
+  );
+}
+
+/** A bolt. The face of a PER_UNIT_COINS campaign — a rate, paid on every unit. */
+export function BoltIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
+    </Icon>
+  );
+}
+
+/** A trophy. Shown only where `target_reached` is true. */
+export function TrophyIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M16.5 18.75h-9m9 0a3 3 0 013 3h-15a3 3 0 013-3m9 0v-3.375c0-.621-.503-1.125-1.125-1.125h-.871M7.5 18.75v-3.375c0-.621.504-1.125 1.125-1.125h.872m5.007 0H9.497m5.007 0a7.454 7.454 0 01-.982-3.172M9.497 14.25a7.454 7.454 0 00.981-3.172M5.25 4.236c-.982.143-1.954.317-2.916.52A6.003 6.003 0 007.73 9.728M5.25 4.236V4.5c0 2.108.966 3.99 2.48 5.228M5.25 4.236V2.721C7.456 2.41 9.71 2.25 12 2.25c2.291 0 4.545.16 6.75.47v1.516M7.73 9.728a6.726 6.726 0 002.748 1.35m8.272-6.842V4.5c0 2.108-.966 3.99-2.48 5.228m2.48-5.492a46.32 46.32 0 012.916.52 6.003 6.003 0 01-5.395 4.972m0 0a6.726 6.726 0 01-2.749 1.35m0 0a6.772 6.772 0 01-3.044 0" />
+    </Icon>
+  );
+}
+
+/** A gauge. The campaign maximum — a ceiling the stored reward was capped to. */
+export function GaugeIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M12 6v6l3.75 2.25M3.75 12a8.25 8.25 0 1116.5 0 8.25 8.25 0 01-16.5 0z" />
+    </Icon>
+  );
+}
+
+/** A closed padlock. An EXCLUSIVE campaign, which cannot reward alongside another. */
+export function LockIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a1.5 1.5 0 001.5-1.5v-7.5a1.5 1.5 0 00-1.5-1.5H6.75a1.5 1.5 0 00-1.5 1.5v7.5a1.5 1.5 0 001.5 1.5z" />
+    </Icon>
+  );
+}
+
+/** Two layers. A STACKABLE campaign, which may combine with others that also allow it. */
+export function LayersIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M6.429 9.75L2.25 12l4.179 2.25m0-4.5l5.571 3 5.571-3m-11.142 0L2.25 7.5 12 2.25l9.75 5.25-4.179 2.25m0 0L21.75 12l-4.179 2.25m0 0l4.179 2.25L12 21.75 2.25 16.5l4.179-2.25m11.142 0l-5.571 3-5.571-3" />
+    </Icon>
+  );
+}
+
+/** A camera with a plus. The Add receipt action. */
+export function CameraPlusIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M6.827 6.175A2.31 2.31 0 015.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 00-1.134-.175 2.31 2.31 0 01-1.64-1.055l-.822-1.316a2.192 2.192 0 00-1.736-1.039 48.774 48.774 0 00-5.232 0 2.192 2.192 0 00-1.736 1.039l-.821 1.316z" />
+      <path d="M9.75 13.5h4.5M12 11.25v4.5" />
+    </Icon>
+  );
+}
+
+/** A sparkle. The hero's eyebrow glyph before a target has been reached. */
+export function SparkleIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z" />
+    </Icon>
+  );
+}
+
+/** A clock with an arrow. LIVE_TEMPORAL eligibility, checked at sale time. */
+export function LiveClockIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M16.023 9.348h4.992V4.356m-4.992 4.992l3.181-3.183a8.25 8.25 0 00-13.803 3.7M2.985 19.644V14.65m0 0h4.992m-4.993 0l3.182 3.182a8.25 8.25 0 0013.803-3.7" />
+    </Icon>
+  );
+}
+
+/** A padlocked clock. SNAPSHOT eligibility, frozen when the campaign was published. */
+export function SnapshotIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+      <path d="M9 12h6" />
+    </Icon>
+  );
+}
+
 export function SpinnerIcon(props: IconProps) {
   return (
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>

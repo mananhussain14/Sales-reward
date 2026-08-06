@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getRetailerPortalAccess } from "@/lib/staff/retailer-staff-access";
 import { listMyStaffCampaigns } from "@/lib/campaigns/staff-campaigns";
@@ -9,35 +8,17 @@ import type { CampaignTargetProgress } from "@/lib/earnings/earnings-normalizati
 import {
   CAMPAIGNS_UNAVAILABLE_MESSAGE,
   NO_CAMPAIGNS_MESSAGE,
-  formatCoins,
-  formatEarningsDate,
-  formatUnits,
-  progressAriaLabel,
   progressByCampaignId,
-  progressPercent,
-  progressScopeExplanation,
-  progressScopeLabel,
-  targetStatement,
 } from "@/lib/earnings/earnings-presentation";
-import {
-  performanceExplanation,
-  productResolutionLabel,
-  rewardSummary,
-  stackingLabel,
-} from "@/lib/campaigns/campaign-vocabulary";
-import { CampaignStateBadge } from "@/components/campaigns/campaign-state-badge";
+import { buildOpportunities } from "@/lib/sales-staff/home-presentation";
+import { CampaignListCard } from "@/components/sales-staff/campaign-list-card";
+import { AddReceiptAction } from "@/components/sales-staff/add-receipt";
 import { Alert } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
-import { cardClasses } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
-import { ProgressBar } from "@/components/ui/progress-bar";
-import {
-  CalendarIcon,
-  CampaignsIcon,
-  ChevronRightIcon,
-  ProductsIcon,
-} from "@/components/ui/icons";
+import { IconDisc, Reveal, SoftBackdrop } from "@/components/ui/surfaces";
+import { CalendarIcon, CampaignsIcon } from "@/components/ui/icons";
+import type { SurfaceTone } from "@/components/ui/surfaces";
 
 export const metadata: Metadata = {
   title: "Current campaigns · Retailer Portal",
@@ -78,156 +59,62 @@ export const metadata: Metadata = {
  * There is no "ended" section: the RPC does not return ended, paused or cancelled
  * campaigns to a seller, and inventing a permanently-empty heading would advertise a
  * history this contract does not provide.
+ *
+ * Each section leads with the SAME tinted disc and tone its cards' status pills carry, a
+ * count, and a line saying what belonging to the group means for a sale. Three channels —
+ * a glyph, a hue and a sentence — and the hue is never a necessary one.
  */
 const SECTIONS: {
   key: string;
   title: string;
   description: string;
+  tone: SurfaceTone;
   states: AssignedCampaign["derivedState"][];
 }[] = [
   {
     key: "active",
     title: "Running now",
     description: "Qualifying sales you make today count towards these.",
+    tone: "emerald",
     states: ["ACTIVE"],
   },
   {
     key: "upcoming",
     title: "Starting soon",
-    description: "These have been published but have not started yet.",
+    description:
+      "These have been published but have not started yet. Eligible sales will count from their start date.",
+    tone: "blue",
     states: ["SCHEDULED"],
   },
 ];
 
-function CampaignDates({ campaign }: { campaign: AssignedCampaign }) {
-  const starts = formatEarningsDate(campaign.startsAt);
-  const ends = formatEarningsDate(campaign.endsAt);
-  if (starts === null && ends === null) return null;
-
-  return (
-    <span className="inline-flex items-center gap-1.5 text-sm text-slate-500">
-      <CalendarIcon className="h-4 w-4 shrink-0" aria-hidden="true" />
-      <span>
-        {starts ?? "—"} to {ends ?? "—"}
-      </span>
-    </span>
-  );
-}
-
-/**
- * The target block for one campaign, or nothing at all.
- *
- * A campaign with no progress row is a PER_UNIT_COINS campaign — it has no threshold to
- * track — and renders no bar, per the contract that only TARGET_BONUS campaigns appear
- * in get_my_campaign_target_progress().
- */
-function TargetProgressBlock({ progress }: { progress: CampaignTargetProgress }) {
-  const statement = targetStatement(progress);
-  const percent = progressPercent(progress);
-
-  return (
-    <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/70 p-4">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <span className="text-sm font-semibold text-slate-700">
-          {progressScopeLabel(progress.performanceScope)}
-        </span>
-        <span className="text-sm tabular-nums text-slate-600">
-          {formatUnits(progress.progressUnits)} of{" "}
-          {formatUnits(progress.targetUnits)} units
-        </span>
-      </div>
-
-      <ProgressBar
-        className="mt-2"
-        percent={percent}
-        label={progressAriaLabel(progress)}
-        valueNow={progress.progressUnits}
-        valueMax={progress.targetUnits}
-        tone={statement.tone}
-      />
-
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <Badge tone={statement.tone}>{statement.label}</Badge>
-      </div>
-
-      {/* The status in words, never colour alone — and the sentence that keeps a team
-          figure from reading as a personal one. */}
-      <p className="mt-2 text-sm text-slate-600">{statement.detail}</p>
-      <p className="mt-1 text-xs text-slate-500">
-        {progressScopeExplanation(progress.performanceScope)}
-      </p>
-    </div>
-  );
-}
-
-function CampaignCard({
-  campaign,
-  progress,
+/** The section heading: a disc, the title, the count, and what the group means. */
+function SectionHeading({
+  title,
+  description,
+  tone,
+  count,
+  icon,
 }: {
-  campaign: AssignedCampaign;
-  progress: CampaignTargetProgress | undefined;
+  title: string;
+  description: string;
+  tone: SurfaceTone;
+  count: number;
+  icon: React.ReactNode;
 }) {
-  const summary = rewardSummary(campaign.reward);
-
   return (
-    <li className={cardClasses("standard", "relative overflow-hidden")}>
-      <div className="p-5">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            {/* break-words so a long campaign name wraps instead of overflowing. */}
-            <h3 className="text-base font-semibold break-words text-slate-900">
-              <Link
-                href={`/retailer/my-campaigns/${campaign.campaignId}`}
-                className="rounded outline-none after:absolute after:inset-0 hover:text-indigo-700 focus-visible:ring-2 focus-visible:ring-indigo-500"
-              >
-                {campaign.campaignName}
-              </Link>
-            </h3>
-            {campaign.description !== null && (
-              <p className="mt-1 text-sm break-words text-slate-600">
-                {campaign.description}
-              </p>
-            )}
-          </div>
-          <CampaignStateBadge state={campaign.derivedState} />
-        </div>
-
-        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
-          <CampaignDates campaign={campaign} />
-          <span className="inline-flex items-center gap-1.5 text-sm text-slate-500">
-            <ProductsIcon className="h-4 w-4 shrink-0" aria-hidden="true" />
-            {campaign.eligibleProductCount === 1
-              ? "1 eligible product"
-              : `${formatCoins(campaign.eligibleProductCount)} eligible products`}
+    <div className="flex items-start gap-3">
+      <IconDisc tone={tone} size={44} icon={icon} />
+      <div className="min-w-0">
+        <h2 className="text-lg font-semibold tracking-tight text-slate-900">
+          {title}{" "}
+          <span className="text-sm font-medium tabular-nums text-slate-500">
+            ({count})
           </span>
-        </div>
-
-        {/* The OFFER. rewardSummary is the shared vocabulary the Vendor and Retailer
-            surfaces already use, so one campaign reads identically everywhere. It
-            returns null when the rule is absent or incomplete, and a missing offer is
-            simply not stated rather than rendered as an empty line. */}
-        {summary !== null && (
-          <p className="mt-4 text-sm font-medium text-slate-800">{summary}</p>
-        )}
-        <p className="mt-1 text-sm text-slate-600">
-          {performanceExplanation(campaign.performanceScope)}
-        </p>
-
-        <div className="mt-3 flex flex-wrap gap-2">
-          <Badge tone="slate">{productResolutionLabel(campaign.productEligibilityResolution)}</Badge>
-          <Badge tone="slate">{stackingLabel(campaign.stackingMode)}</Badge>
-        </div>
-
-        {progress !== undefined && <TargetProgressBlock progress={progress} />}
+        </h2>
+        <p className="text-sm text-slate-600">{description}</p>
       </div>
-
-      <div className="flex items-center justify-between border-t border-slate-200 bg-slate-50/70 px-5 py-3">
-        <span className="text-sm font-medium text-indigo-700">
-          View campaign and eligible products
-        </span>
-        <ChevronRightIcon className="h-4 w-4 text-indigo-700" aria-hidden="true" />
-      </div>
-    </li>
+    </div>
   );
 }
 
@@ -263,6 +150,7 @@ export default async function StaffCampaignsPage() {
       eyebrow="Campaigns"
       title="Current campaigns"
       description="Campaigns running at your shop now, and the ones starting soon."
+      actions={<AddReceiptAction compact />}
     />
   );
 
@@ -280,57 +168,79 @@ export default async function StaffCampaignsPage() {
   const { campaigns } = campaignsResult;
 
   // A FAILED PROGRESS READ DOES NOT HIDE THE CAMPAIGNS. The offer is still true and
-  // still worth showing; only the bars are missing, and the notice below says so.
+  // still worth showing; only the gauges are missing, and the notice below says so.
   const progressById =
     progressResult.status === "ok"
       ? progressByCampaignId(progressResult.progress)
       : new Map<string, CampaignTargetProgress>();
 
+  const opportunities = buildOpportunities(campaigns, progressById);
+
   const sections = SECTIONS.map((section) => ({
     ...section,
-    campaigns: campaigns.filter((campaign) =>
-      section.states.includes(campaign.derivedState),
+    opportunities: opportunities.filter((opportunity) =>
+      section.states.includes(opportunity.campaign.derivedState),
     ),
-  })).filter((section) => section.campaigns.length > 0);
+  })).filter((section) => section.opportunities.length > 0);
 
   return (
-    <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
-      {header}
+    <SoftBackdrop>
+      <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
+        <Reveal>{header}</Reveal>
 
-      {progressResult.status === "unavailable" && (
-        <Alert tone="warning" role="status" title="Target progress unavailable">
-          Campaign details are shown below, but progress towards targets could not be
-          loaded. Try again in a moment.
-        </Alert>
-      )}
+        {progressResult.status === "unavailable" && (
+          <Alert tone="warning" role="status" title="Target progress unavailable">
+            Campaign details are shown below, but progress towards targets could not be
+            loaded. Try again in a moment.
+          </Alert>
+        )}
 
-      {campaigns.length === 0 ? (
-        <EmptyState
-          icon={<CampaignsIcon className="h-6 w-6" />}
-          title="No campaigns right now"
-          description={NO_CAMPAIGNS_MESSAGE}
-        />
-      ) : (
-        sections.map((section) => (
-          <section key={section.key} className="flex flex-col gap-3">
-            <div>
-              <h2 className="text-lg font-semibold tracking-tight text-slate-900">
-                {section.title}
-              </h2>
-              <p className="text-sm text-slate-600">{section.description}</p>
-            </div>
-            <ul className="grid gap-4 sm:grid-cols-2">
-              {section.campaigns.map((campaign) => (
-                <CampaignCard
-                  key={campaign.campaignId}
-                  campaign={campaign}
-                  progress={progressById.get(campaign.campaignId)}
+        {campaigns.length === 0 ? (
+          <Reveal index={1}>
+            <EmptyState
+              icon={<CampaignsIcon className="h-6 w-6" />}
+              title="No campaigns right now"
+              description={NO_CAMPAIGNS_MESSAGE}
+              action={<AddReceiptAction compact />}
+            />
+          </Reveal>
+        ) : (
+          sections.map((section, sectionIndex) => (
+            <section key={section.key} className="flex flex-col gap-4">
+              <Reveal index={sectionIndex}>
+                <SectionHeading
+                  title={section.title}
+                  description={section.description}
+                  tone={section.tone}
+                  count={section.opportunities.length}
+                  icon={
+                    section.key === "upcoming" ? (
+                      <CalendarIcon className="h-5 w-5" />
+                    ) : (
+                      <CampaignsIcon className="h-5 w-5" />
+                    )
+                  }
                 />
-              ))}
-            </ul>
-          </section>
-        ))
-      )}
-    </div>
+              </Reveal>
+
+              {/* One column on a phone, two from `md` up. A third column would make
+                  each card too narrow for a gauge and its facts side by side. */}
+              <ul className="grid gap-4 md:grid-cols-2">
+                {section.opportunities.map((opportunity, index) => (
+                  <Reveal
+                    as="li"
+                    key={opportunity.campaign.campaignId}
+                    index={index}
+                    className="flex"
+                  >
+                    <CampaignListCard opportunity={opportunity} />
+                  </Reveal>
+                ))}
+              </ul>
+            </section>
+          ))
+        )}
+      </div>
+    </SoftBackdrop>
   );
 }

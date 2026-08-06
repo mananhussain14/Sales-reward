@@ -139,7 +139,7 @@ export async function signIn(
   //   * Retailer Owner          -> "/retailer"          (portal overview)
   //   * Retailer Manager        -> "/retailer/staff"    (the roster they may read;
   //                                                      /retailer would bounce them)
-  //   * Sales Staff             -> "/retailer/receipts" (submission + own history)
+  //   * Sales Staff             -> "/retailer/home" (campaigns, progress, add receipt)
   //   * authenticated, none of the above -> "/access-denied" (the generic denial
   //                                                      route; NOT
   //                                                      /retailer-access-denied)

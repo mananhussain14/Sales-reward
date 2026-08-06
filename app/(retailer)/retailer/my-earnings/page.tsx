@@ -23,12 +23,20 @@ import {
   rewardCursorHref,
   rewardRuleLabel,
 } from "@/lib/earnings/earnings-presentation";
+import { AddReceiptAction } from "@/components/sales-staff/add-receipt";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { cardClasses } from "@/components/ui/card";
-import { DetailStat } from "@/components/ui/detail-stat";
+import { CountUp } from "@/components/ui/count-up";
 import { EmptyState } from "@/components/ui/empty-state";
-import { PageHeader, SectionHeader } from "@/components/ui/page-header";
+import { SectionHeader } from "@/components/ui/page-header";
+import {
+  FeatureCard,
+  IconDisc,
+  Reveal,
+  SoftBackdrop,
+  StatPill,
+} from "@/components/ui/surfaces";
 import {
   CalendarIcon,
   CampaignsIcon,
@@ -302,78 +310,85 @@ export default async function StaffEarningsPage({
       ? nextRewardCursor(rewardsResult.rewards, REWARDS_PAGE_SIZE)
       : null;
 
-  return (
-    <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
-      <PageHeader
-        eyebrow="Earnings"
-        title="My campaign earnings"
-        description="Campaign rewards earned from verified sales. Wallet and redemption features are not available yet."
-      />
+  const summary = summaryResult.status === "ok" ? summaryResult.summary : null;
 
-      {/* ---- Summary ------------------------------------------------------- */}
-      {summaryResult.status === "unavailable" ? (
+  return (
+    <SoftBackdrop>
+    <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
+      {/* ---- Reward hero ---------------------------------------------------
+          ONE panel for the total, with the supporting figures as pills beside
+          it and the qualifying notice on the panel itself — so nobody reads a
+          coin total before learning there is nowhere to spend it yet. */}
+      {summaryResult.status === "unavailable" || summary === null ? (
         <Alert tone="warning" role="alert" title="Earnings summary unavailable">
           {EARNINGS_UNAVAILABLE_MESSAGE}
         </Alert>
       ) : (
-        <>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {/* "Coins earned", never "balance". A seller with no rewards sees 0. */}
-            <DetailStat
-              icon={<RewardIcon className="h-5 w-5" />}
-              tone="indigo"
-              label="Total campaign coins earned"
-              value={
-                <span className="tabular-nums">
-                  {formatCoins(summaryResult.summary.totalRewardCoins)}
-                </span>
-              }
-            />
-            <DetailStat
-              icon={<TrendingUpIcon className="h-5 w-5" />}
-              tone="emerald"
-              label="Coins earned this month"
-              value={
-                <span className="tabular-nums">
-                  {formatCoins(summaryResult.summary.currentMonthRewardCoins)}
-                </span>
-              }
-            />
-            <DetailStat
-              icon={<ReceiptIcon className="h-5 w-5" />}
-              tone="slate"
-              label="Rewarded sales"
-              value={
-                <span className="tabular-nums">
-                  {formatUnits(summaryResult.summary.rewardedSaleCount)}
-                </span>
-              }
-            />
-            <DetailStat
-              icon={<CampaignsIcon className="h-5 w-5" />}
-              tone="slate"
-              label="Rewarded campaigns"
-              value={
-                <span className="tabular-nums">
-                  {formatUnits(summaryResult.summary.rewardedCampaignCount)}
-                </span>
-              }
-            />
-            <DetailStat
-              icon={<CalendarIcon className="h-5 w-5" />}
-              tone="slate"
-              label="Latest reward date"
-              value={
-                formatEarningsDate(summaryResult.summary.latestRewardAt) ?? "—"
-              }
-            />
-          </div>
+        <Reveal>
+          <FeatureCard tone="indigo" className="p-6 sm:p-8">
+            <p className="text-xs font-semibold uppercase tracking-wide text-indigo-600">
+              Earnings
+            </p>
 
-          <Alert tone="info" role="status" title="About these figures">
-            {NOT_A_WALLET_NOTICE}
-          </Alert>
-        </>
+            {/* The approved page heading. NOT "Wallet", "Balance" or "Available
+                coins" — no such object exists in the deployed schema, and a heading
+                is the first promise a screen makes. */}
+            <h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">
+              My campaign earnings
+            </h1>
+
+            <div className="mt-5 flex items-center gap-4">
+              <IconDisc
+                tone="indigo"
+                size={56}
+                icon={<RewardIcon className="h-6 w-6" />}
+              />
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-slate-500">
+                  Total campaign coins earned
+                </p>
+                {/* One accessible utterance: a count-up announced frame by frame
+                    would read out a dozen numbers on the way to the real one. */}
+                <p className="text-3xl font-semibold tabular-nums tracking-tight text-slate-900">
+                  <span className="sr-only">
+                    Total campaign coins earned: {formatCoins(summary.totalRewardCoins)}
+                  </span>
+                  <span aria-hidden="true">
+                    <CountUp value={summary.totalRewardCoins} />
+                  </span>
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-6 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+              <StatPill
+                label="Coins earned this month"
+                value={formatCoins(summary.currentMonthRewardCoins)}
+                tone="emerald"
+                icon={<TrendingUpIcon className="h-3.5 w-3.5" />}
+              />
+              <StatPill
+                label="Rewarded sales"
+                value={formatUnits(summary.rewardedSaleCount)}
+                icon={<ReceiptIcon className="h-3.5 w-3.5" />}
+              />
+              <StatPill
+                label="Rewarded campaigns"
+                value={formatUnits(summary.rewardedCampaignCount)}
+                icon={<CampaignsIcon className="h-3.5 w-3.5" />}
+              />
+              <StatPill
+                label="Latest reward date"
+                value={formatEarningsDate(summary.latestRewardAt) ?? "No rewards yet"}
+                icon={<CalendarIcon className="h-3.5 w-3.5" />}
+              />
+            </div>
+
+            <p className="mt-4 text-xs text-slate-500">{NOT_A_WALLET_NOTICE}</p>
+          </FeatureCard>
+        </Reveal>
       )}
+
 
       {/* ---- History ------------------------------------------------------- */}
       <section className="flex flex-col gap-3">
@@ -392,11 +407,15 @@ export default async function StaffEarningsPage({
             title={cursor === null ? "No rewards yet" : "No older rewards"}
             description={
               cursor === null
-                ? NO_REWARDS_MESSAGE
+                ? `${NO_REWARDS_MESSAGE} Rewards appear here after an eligible sale is verified and the campaign is evaluated. Not every receipt qualifies.`
                 : "You have reached the end of your reward history."
             }
             action={
-              cursor === null ? undefined : (
+              cursor === null ? (
+                /* The ordinary submission flow, and nothing new. It never promises
+                   the next receipt will earn anything. */
+                <AddReceiptAction compact />
+              ) : (
                 <Link
                   href="/retailer/my-earnings"
                   className="rounded-lg px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-50 focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none"
@@ -437,5 +456,6 @@ export default async function StaffEarningsPage({
         )}
       </section>
     </div>
+    </SoftBackdrop>
   );
 }

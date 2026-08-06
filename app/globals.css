@@ -177,6 +177,54 @@ body {
   animation: sr-fade-in 220ms ease-out both;
 }
 
+/*
+  Sales Staff experience motion.
+
+  Two one-shot animations, both driven entirely by CSS so a Server Component can
+  emit them without shipping a byte of JavaScript. Neither loops, and neither
+  moves anything that is already in flow — the rise is a transform, so it cannot
+  shift the layout around it.
+*/
+
+/* Content arriving: a 220ms fade with an 8px rise, staggered by --sr-delay. */
+@keyframes sr-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.sr-animate-rise {
+  animation: sr-rise 220ms ease-out both;
+  animation-delay: var(--sr-delay, 0ms);
+}
+
+/*
+  The progress ring's one-shot sweep.
+
+  `both` is load-bearing: it holds the final frame, so the arc rests at its real
+  value rather than snapping back to zero. Under the reduced-motion rule below
+  the duration and the delay both collapse, which lands the arc on
+  --sr-ring-offset — the settled end — on the very first frame. Reduced motion
+  removes the movement, never the state.
+*/
+@keyframes sr-ring-sweep {
+  from {
+    stroke-dashoffset: var(--sr-ring-circumference);
+  }
+  to {
+    stroke-dashoffset: var(--sr-ring-offset);
+  }
+}
+
+.sr-ring-sweep {
+  animation: sr-ring-sweep 900ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
 .sr-animate-pop {
   animation: sr-pop 280ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
 }
@@ -214,6 +262,10 @@ body {
   *::after {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
+    /* Without this a staggered entrance would leave content INVISIBLE for the
+       length of its delay — the one way a reduced-motion screen could end up
+       worse than an animated one. */
+    animation-delay: 0ms !important;
     transition-duration: 0.001ms !important;
     scroll-behavior: auto !important;
   }

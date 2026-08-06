@@ -257,7 +257,7 @@ describe("role landings come from the server resolver", () => {
   test("15. Manager and Sales Staff landings are the canonical routes", () => {
     const landing = stripComments(read("lib/auth/landing-decision.ts"));
     assert.ok(landing.includes('retailerStaff: "/retailer/staff"'), "Manager landing wrong");
-    assert.ok(landing.includes('salesStaff: "/retailer/receipts"'), "Sales Staff landing wrong");
+    assert.ok(landing.includes('salesStaff: "/retailer/home"'), "Sales Staff landing wrong");
   });
 });
 

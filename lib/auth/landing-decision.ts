@@ -28,8 +28,8 @@
  *   retailerStaff the staff roster — the only portal page a Retailer Manager may
  *                 read. Sending them to /retailer instead would bounce them off it,
  *                 because that page requires the RETAILER_OWNER role.
- *   salesStaff    receipt submission and personal history — the only portal page a
- *                 Sales Staff member may reach.
+ *   salesStaff    the Sales Staff Home — campaigns, target progress, coins earned and
+ *                 the way into receipt submission.
  *   claimReviewer the Claim Review portal. Reached ONLY by a caller who qualifies
  *                 for no other experience — see the precedence note on
  *                 selectLanding below.
@@ -46,8 +46,16 @@ export const LANDING_ROUTES = {
   retailer: "/retailer",
   /** A Retailer Manager's permitted landing: the staff roster they may read. */
   retailerStaff: "/retailer/staff",
-  /** A Sales Staff member's landing: receipt submission and their own history. */
-  salesStaff: "/retailer/receipts",
+  /**
+   * A Sales Staff member's landing: the Home dashboard.
+   *
+   * NOT /retailer/receipts any more. That route is unchanged and still carries the
+   * submission form and the personal history — it simply is not the landing, because a
+   * landing whose primary call to action opens the submission flow cannot itself BE the
+   * submission flow. Both routes are gated on the same RECEIPT_SUBMIT mapping, so this
+   * moves a destination and changes no authorization.
+   */
+  salesStaff: "/retailer/home",
   /** The Claim Review portal. */
   claimReviewer: "/review",
   accessDenied: "/access-denied",
@@ -130,7 +138,7 @@ export type ClaimReviewerAccessStatus =
  *   3. Vendor unauthorized    -> consult the Retailer portal resolver:
  *        owner           -> /retailer            (Retailer Owner portal overview)
  *        reader          -> /retailer/staff      (Retailer Manager roster, read-only)
- *        submitter       -> /retailer/receipts   (Sales Staff receipt submission)
+ *        submitter       -> /retailer/home       (Sales Staff Home)
  *        unavailable     -> unavailable (operational, NOT a denial)
  *        unauthenticated -> /login (defensive; the token said no session)
  *        unauthorized    -> consult the Claim Reviewer resolver (step 4)
