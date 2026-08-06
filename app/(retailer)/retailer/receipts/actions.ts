@@ -5,10 +5,14 @@ import { redirect } from "next/navigation";
 import { getRetailerPortalAccess } from "@/lib/staff/retailer-staff-access";
 import { getMyAssignedReceiptShops } from "@/lib/receipts/receipt-data";
 import { submitReceipt } from "@/lib/receipts/receipt-submissions";
+import { requestReceiptExtraction } from "@/lib/receipts/receipt-extraction-request";
+import { runReceiptSubmissionOutcome } from "@/lib/receipts/receipt-submission-extraction-flow";
 import { validateReceiptFile } from "@/lib/receipts/receipt-file";
 import { MAX_RECEIPT_FILE_BYTES } from "@/lib/uploads/upload-policy";
 import {
   RECEIPT_DUPLICATE_ERROR,
+  RECEIPT_EXTRACTION_NOT_STARTED_MESSAGE,
+  RECEIPT_EXTRACTION_UNSUPPORTED_IMAGE_MESSAGE,
   RECEIPT_FILE_MESSAGES,
   RECEIPT_GENERIC_ERROR,
   RECEIPT_UPLOAD_FAILED_ERROR,
@@ -18,9 +22,17 @@ import {
 /**
  * Server Action for submitting one customer receipt.
  *
- * NO TABLE IS WRITTEN HERE AND NO STORAGE CALL IS MADE HERE. Every effect is delegated
- * to @/lib/receipts/receipt-submissions, which runs the reserve → upload → finalize
- * sequence. `.from(` and `.storage` appear nowhere in this module.
+ * NO TABLE IS WRITTEN HERE AND NO STORAGE CALL IS MADE HERE. Both effects are delegated:
+ * @/lib/receipts/receipt-submissions runs the reserve → upload → finalize sequence, and
+ * @/lib/receipts/receipt-extraction-request asks the shared Edge Function that a stored
+ * receipt be read. `.from(` and `.storage` appear nowhere in this module, no service-role
+ * client is constructed anywhere on this path, and the extraction tables are named in no
+ * file of the web application.
+ *
+ * STORING AND READING ARE SEPARATE OPERATIONS, and this action reports them separately. A
+ * receipt that was stored is never re-reported as an upload failure because the reading
+ * could not be started, and it is never deleted or rolled back for that reason either —
+ * see @/lib/receipts/receipt-submission-extraction-flow, which owns that decision.
  *
  * A SERVER ACTION IS A PUBLIC ENDPOINT. It is reachable by a hand-crafted POST from any
  * client, regardless of which page rendered the form or whether that page rendered at
@@ -187,10 +199,13 @@ export async function submitReceiptAction(
   // ---------------------------------------------------------------------------
   // 4. Delegate
   // ---------------------------------------------------------------------------
-  // The service returns a closed union of plain statuses — no submission id, no path,
-  // no bucket, no hash, no provider code. Everything below maps those to this
+  // The service returns a closed union of plain statuses plus, on success alone, the
+  // submission id the reservation generated — no path, no bucket, no hash, no provider
+  // code. That id is SERVER-SIDE MATERIAL: it is handed to the extraction request below
+  // and goes no further. It is not returned from this action, not placed in
+  // SubmitReceiptState, and not rendered. Everything below maps statuses to this
   // codebase's own strings; nothing from Storage or PostgreSQL is rendered.
-  const result = await submitReceipt(
+  const submission = await submitReceipt(
     {
       shopId: selectedShopId,
       fileName: validation.file.fileName,
@@ -201,9 +216,30 @@ export async function submitReceiptAction(
     bytes,
   );
 
-  // The history changes on success AND on a recorded upload failure, so the page is
-  // revalidated for every outcome that reached the database.
-  if (result.status === "submitted" || result.status === "upload-failed") {
+  // ---------------------------------------------------------------------------
+  // 5. Ask that the stored receipt be read
+  // ---------------------------------------------------------------------------
+  // THE RECEIPT IS ALREADY COMMITTED at this point, and nothing below may undo that. The
+  // decision — whether to ask at all, and with which id — lives in the pure flow module
+  // so it can be tested; this line supplies the one real effect.
+  //
+  // IT IS AWAITED, and that is load-bearing rather than stylistic: a promise left running
+  // when a Server Action returns its response may be abandoned by the framework, which
+  // would produce exactly the symptom this milestone exists to fix — a receipt that
+  // uploads and a reading that never begins. There is no retry: asking again can consume
+  // one of the three attempts a receipt gets in its lifetime.
+  const result = await runReceiptSubmissionOutcome(
+    submission,
+    {
+      mimeType: validation.file.mimeType,
+      sizeBytes: validation.file.sizeBytes,
+    },
+    { requestExtraction: ({ submissionId }) => requestReceiptExtraction(submissionId) },
+  );
+
+  // The history changes on every stored receipt AND on a recorded upload failure, so the
+  // page is revalidated for every outcome that reached the database.
+  if (result.status.startsWith("submitted") || result.status === "upload-failed") {
     revalidatePath(RECEIPTS_PATH);
   }
 
@@ -214,6 +250,24 @@ export async function submitReceiptAction(
         formError: null,
         successMessage: `Receipt submitted from ${validation.file.fileName}.`,
         // Cleared so the next submission starts from a blank form.
+        selectedShopId: "",
+      };
+    // BOTH OF THE NEXT TWO ARE SUCCESSES. The receipt is stored in each of them, so
+    // neither may be reported as a failure and neither clears anything the person would
+    // have to redo. They differ from the case above in one respect only: they do not
+    // claim the automatic reading began, because it did not.
+    case "submitted-extraction-unstarted":
+      return {
+        fieldErrors: {},
+        formError: null,
+        successMessage: RECEIPT_EXTRACTION_NOT_STARTED_MESSAGE,
+        selectedShopId: "",
+      };
+    case "submitted-extraction-skipped":
+      return {
+        fieldErrors: {},
+        formError: null,
+        successMessage: RECEIPT_EXTRACTION_UNSUPPORTED_IMAGE_MESSAGE,
         selectedShopId: "",
       };
     case "duplicate":

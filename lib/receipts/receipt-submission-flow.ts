@@ -27,9 +27,25 @@
  * said so, and finalize only says so when the object is where the reservation said it
  * would be.
  *
- * NOTHING SECRET ESCAPES. The object path and the file hash are consumed inside this
- * sequence and appear in no result variant, so nothing this returns can carry them
- * toward a browser.
+ * NOTHING SECRET ESCAPES. The object path, the bucket name and the file hash are consumed
+ * inside this sequence and appear in no result variant, so nothing this returns can carry
+ * them toward a browser.
+ *
+ * THE ONE VALUE THAT DOES LEAVE, AND WHY. The `submitted` variant — and only that variant
+ * — carries the submission id the RESERVATION generated. It exists so the caller can ask
+ * that this receipt be read, an operation that identifies the receipt by that id and
+ * re-derives every authorization fact from auth.uid() in PostgreSQL. Three properties
+ * make it safe to hand back here and they are asserted, not assumed
+ * (./receipt-submission-flow.test.ts):
+ *
+ *   * it is the DATABASE's id, so no caller can substitute one and aim a later operation
+ *     at somebody else's receipt;
+ *   * it appears on NO failure variant, so nothing that was not stored is addressable;
+ *   * it is server-side material. It reaches the Server Action, which passes it to the
+ *     extraction request and drops it. It is never placed in SubmitReceiptState and never
+ *     rendered — app/(retailer)/retailer/receipts/submit-receipt-state.ts has no field it
+ *     could occupy, and lib/receipts/receipt-submission-extraction-wiring.test.ts fails
+ *     the build if one appears.
  */
 
 /** Everything the reservation needs. Already validated by the file layer. */
@@ -76,9 +92,16 @@ export type ReceiptSubmissionPorts = {
   recordFailure(input: { submissionId: string; sha256: string }): Promise<void>;
 };
 
-/** The closed set of outcomes. No id, path, hash, bucket, or provider detail. */
+/** The closed set of outcomes. No path, hash, bucket, or provider detail. */
 export type ReceiptSubmissionResult =
-  | { status: "submitted" }
+  | {
+      status: "submitted";
+      /**
+       * The reservation's own id. Server-side material: see the module header. It is on
+       * this variant alone, so no outcome that failed can be addressed.
+       */
+      submissionId: string;
+    }
   /** Reserved, but the object did not land — or could not be confirmed. Retryable. */
   | { status: "upload-failed" }
   | { status: "duplicate" }
@@ -142,5 +165,7 @@ export async function runReceiptSubmissionFlow(
     return { status: "upload-failed" };
   }
 
-  return { status: "submitted" };
+  // The id comes from the RESERVATION, which is the only place it is ever produced, and
+  // not from the input or from anything finalize returned.
+  return { status: "submitted", submissionId: reserved.submissionId };
 }

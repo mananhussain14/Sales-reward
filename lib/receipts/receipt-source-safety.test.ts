@@ -117,22 +117,29 @@ describe("no path, bucket, hash or error detail is ever logged", () => {
   );
 
   test("5. logging is funnelled through exactly one helper per I/O module", () => {
-    // Both modules that talk to the database or Storage own a single `log…Failure`
-    // helper and every call site goes through it, so there are exactly two `console`
-    // lines in the whole feature. Asserting the count keeps the rules below
-    // non-vacuous AND locks the chokepoint: a new direct console call anywhere in the
-    // feature fails here before the content rules even run.
+    // Every module that talks to the database, to Storage or to an Edge Function owns a
+    // single `log…Failure` helper and every call site goes through it, so there is exactly
+    // one `console` line per such module and none anywhere else. Asserting the count keeps
+    // the rules below non-vacuous AND locks the chokepoint: a new direct console call
+    // anywhere in the feature fails here before the content rules even run.
+    //
+    // THE THIRD ENTRY is the extraction request module, added when the web application
+    // began initiating a reading. It performs one outbound call and reports it under the
+    // same discipline as the other two: a fixed category, never a body, a token or an id.
+    const IO_MODULES = [
+      "lib/receipts/receipt-data.ts",
+      "lib/receipts/receipt-extraction-request.ts",
+      "lib/receipts/receipt-submissions.ts",
+    ];
+
     assert.equal(
       consoleLines.length,
-      2,
+      IO_MODULES.length,
       `expected one logging chokepoint in each I/O module, found ${consoleLines.length}: ${consoleLines
         .map((line) => `${line.file}:${line.number}`)
         .join(", ")}`,
     );
-    assert.deepEqual(
-      consoleLines.map((line) => line.file).sort(),
-      ["lib/receipts/receipt-data.ts", "lib/receipts/receipt-submissions.ts"],
-    );
+    assert.deepEqual(consoleLines.map((line) => line.file).sort(), IO_MODULES);
   });
 
   test("6. every logged value is a fixed literal or a sanitized category", () => {
@@ -177,6 +184,7 @@ describe("client components stay client-safe", () => {
     "@/lib/supabase/server",
     "@/lib/receipts/receipt-data",
     "@/lib/receipts/receipt-submissions",
+    "@/lib/receipts/receipt-extraction-request",
     "@/lib/staff/retailer-staff-access",
     "next/headers",
     "node:crypto",

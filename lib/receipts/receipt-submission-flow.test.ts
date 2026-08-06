@@ -11,8 +11,13 @@
  *   reserve -> upload -> finalize -> removeObject -> recordFailure  (finalize failed)
  *
  * plus: nothing is uploaded when the reservation is refused, no result ever carries the
- * object path, bucket, hash or submission id, and a failure NEVER leaves a row that
- * would read as submitted.
+ * object path, bucket, hash or filename, and a failure NEVER leaves a row that would read
+ * as submitted.
+ *
+ * THE ONE VALUE A RESULT DOES CARRY is the submission id, on the `submitted` variant
+ * alone. It exists so the caller can ask that the stored receipt be read. Three cases
+ * below pin exactly that: it is the id the RESERVATION returned, it is absent from every
+ * failure variant, and it is the only field besides the status.
  *
  * SUPABASE STORAGE IS MOCKED. The `upload` and `removeObject` ports are fakes; the real
  * Storage client is not imported here at all, so no network call of any kind occurs.
@@ -88,7 +93,7 @@ describe("runReceiptSubmissionFlow — the happy path", () => {
     const fake = makePorts();
     const result = await runReceiptSubmissionFlow(INPUT, fake.ports);
 
-    assert.deepEqual(result, { status: "submitted" });
+    assert.deepEqual(result, { status: "submitted", submissionId: SUBMISSION_ID });
     assert.deepEqual(fake.order(), ["reserve", "upload", "finalize"]);
   });
 
@@ -224,7 +229,7 @@ describe("runReceiptSubmissionFlow — a failed finalize also cleans up", () => 
 });
 
 describe("runReceiptSubmissionFlow — nothing secret escapes in the result", () => {
-  test("13. no outcome carries the path, bucket, hash, submission id or filename", async () => {
+  test("13. no outcome carries the path, bucket, hash or filename", async () => {
     const outcomes: FakeOptions[] = [
       {},
       { reserve: { status: "duplicate" } },
@@ -240,16 +245,48 @@ describe("runReceiptSubmissionFlow — nothing secret escapes in the result", ()
       const result = await runReceiptSubmissionFlow(INPUT, fake.ports);
       const serialized = JSON.stringify(result);
 
-      assert.deepEqual(
-        Object.keys(result),
-        ["status"],
-        `result must carry only a status, got ${serialized}`,
-      );
       assert.ok(!serialized.includes(OBJECT_PATH), serialized);
-      assert.ok(!serialized.includes(SUBMISSION_ID), serialized);
       assert.ok(!serialized.includes(SHA), serialized);
       assert.ok(!serialized.includes("receipts"), serialized);
       assert.ok(!serialized.includes("till.jpg"), serialized);
+    }
+  });
+
+  test("13a. only the stored outcome carries an id, and it is the RESERVATION's", async () => {
+    const stored = await runReceiptSubmissionFlow(INPUT, makePorts().ports);
+
+    assert.deepEqual(
+      Object.keys(stored).sort(),
+      ["status", "submissionId"],
+      `the stored result must carry a status and an id only, got ${JSON.stringify(stored)}`,
+    );
+    assert.equal(
+      stored.status === "submitted" ? stored.submissionId : null,
+      SUBMISSION_ID,
+      "the id is not the one the reservation returned",
+    );
+  });
+
+  test("13b. no failure outcome carries an id at all", async () => {
+    const failures: FakeOptions[] = [
+      { reserve: { status: "duplicate" } },
+      { reserve: { status: "denied" } },
+      { reserve: { status: "invalid" } },
+      { reserve: { status: "unavailable" } },
+      { upload: { status: "failed" } },
+      { finalize: { status: "failed" } },
+    ];
+
+    for (const options of failures) {
+      const result = await runReceiptSubmissionFlow(INPUT, makePorts(options).ports);
+      const serialized = JSON.stringify(result);
+
+      assert.deepEqual(
+        Object.keys(result),
+        ["status"],
+        `a failure must carry only a status, got ${serialized}`,
+      );
+      assert.ok(!serialized.includes(SUBMISSION_ID), serialized);
     }
   });
 

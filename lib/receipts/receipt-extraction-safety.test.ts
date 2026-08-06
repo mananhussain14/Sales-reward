@@ -630,6 +630,24 @@ describe("9. the environment gate is evaluated only after auth, parsing and auth
 });
 
 describe("10. the existing receipt contract is byte-unchanged", () => {
+  /**
+   * WHY TWO OF THESE MOVED, AND WHAT REPLACED THE PIN.
+   *
+   * This guard was written when reading a receipt had no client at all, and a byte pin was
+   * the right instrument: nothing in the submission path had any business changing. That
+   * assumption expired the moment the web application had to INITIATE a reading, because
+   * initiating one requires the id of the receipt that was stored — and that id is
+   * produced by the reservation, inside the sequence these two files own.
+   *
+   * So the pin is not bypassed and it is not weakened by omission: for
+   * receipt-submission-flow.ts and receipt-submissions.ts it is replaced, below, by
+   * assertions about the properties it was protecting — no direct table access, no
+   * service-role client anywhere a browser can reach, no storage path, bucket or hash in
+   * anything returned, no provider payload, and no raw error. Those are the reasons the
+   * pin existed; a digest was only ever a proxy for them.
+   *
+   * THE OTHER EIGHT STAY PINNED. Nothing in this milestone needs them to move.
+   */
   const UNCHANGED = [
     "supabase/migrations/20260726090000_receipt_submission_storage_foundation.sql",
     "supabase/migrations/20260726210000_receipt_submission_operations.sql",
@@ -637,15 +655,94 @@ describe("10. the existing receipt contract is byte-unchanged", () => {
     "supabase/functions/submit-receipt/index.ts",
     "lib/receipts/receipt-cors.ts",
     "lib/receipts/receipt-file.ts",
-    "lib/receipts/receipt-submission-flow.ts",
-    "lib/receipts/receipt-submissions.ts",
     "lib/receipts/receipt-data.ts",
     "lib/receipts/receipt-normalization.ts",
   ];
 
+  /** The two files the pin no longer covers, and the properties that must still hold. */
+  const SUBMISSION_PATH = [
+    "lib/receipts/receipt-submission-flow.ts",
+    "lib/receipts/receipt-submissions.ts",
+  ];
+
   test("every protected path still exists", () => {
-    for (const path of UNCHANGED) {
+    for (const path of [...UNCHANGED, ...SUBMISSION_PATH]) {
       assert.ok(existsSync(join(ROOT, path)), `${path} is missing`);
+    }
+  });
+
+  test("the submission path still reaches the database only through RPCs", () => {
+    for (const path of SUBMISSION_PATH) {
+      const code = stripTsComments(read(path));
+      assert.ok(!/\.from\s*\(\s*["'`]/.test(code), `${path} reads a table directly`);
+      assert.ok(
+        !/\b(insert\s+into|update\s+public\.|delete\s+from)\b/i.test(code),
+        `${path} writes raw SQL`,
+      );
+    }
+  });
+
+  test("the service-role client stays in the one server module that always held it", () => {
+    // receipt-submissions.ts is server-only and imports `next/headers` transitively, so it
+    // cannot be reached from a Client Component; the pure flow module must not name the
+    // privileged surface at all.
+    const flow = stripTsComments(read("lib/receipts/receipt-submission-flow.ts"));
+    for (const forbidden of ["createAdminClient", "SUPABASE_SERVICE_ROLE_KEY", "supabase"]) {
+      assert.ok(!flow.includes(forbidden), `the pure flow names ${forbidden}`);
+    }
+    const submissions = stripTsComments(read("lib/receipts/receipt-submissions.ts"));
+    assert.ok(!submissions.includes("NEXT_PUBLIC_"), "the submission module inlines a var");
+    assert.ok(
+      !/"use client"/.test(submissions),
+      "the module holding the service-role client became a Client Component",
+    );
+  });
+
+  test("no path, bucket, hash or provider payload can leave on a result", () => {
+    // The result union is the whole exit surface of the submission path. It may carry
+    // statuses and — on the stored variant alone — the reservation's own id. A path, a
+    // bucket, a hash or anything from a provider would be a leak, and this is where it
+    // would appear first.
+    const flow = stripTsComments(read("lib/receipts/receipt-submission-flow.ts"));
+    const union = /export type ReceiptSubmissionResult =([\s\S]*?\n)\n/.exec(flow);
+    assert.ok(union, "the result union was not found");
+
+    for (const forbidden of [
+      "objectPath",
+      "bucket",
+      "sha256",
+      "fileName",
+      "mimeType",
+      "merchant",
+      "confidence",
+      "provider",
+    ]) {
+      assert.ok(!union[1].includes(forbidden), `the result union carries ${forbidden}`);
+    }
+
+    // Exhaustive: the union's only non-status field is the submission id.
+    const fields = [...union[1].matchAll(/^\s{6}(\w+):/gm)].map((match) => match[1]);
+    assert.deepEqual([...new Set(fields)].sort(), ["status", "submissionId"]);
+  });
+
+  test("the id appears on the stored variant and on no failure variant", () => {
+    const flow = stripTsComments(read("lib/receipts/receipt-submission-flow.ts"));
+    for (const variant of flow.match(/\{ status: "(?!submitted")[^}]*\}/g) ?? []) {
+      assert.ok(!variant.includes("submissionId"), `a failure carries an id: ${variant}`);
+    }
+  });
+
+  test("no raw error, provider payload or backend text is logged or returned", () => {
+    for (const path of SUBMISSION_PATH) {
+      const code = stripTsComments(read(path));
+      for (const line of code.split("\n").filter((text) => /console\./.test(text))) {
+        for (const expression of [...line.matchAll(/\$\{([^}]*)\}/g)].map((m) => m[1].trim())) {
+          assert.equal(expression, "category", `${path} logs ${expression}`);
+        }
+      }
+      // The message of a Supabase or Storage error is never bound: only SQLSTATE codes are.
+      assert.ok(!/error\.message/.test(code), `${path} reads an error message`);
+      assert.ok(!/JSON\.stringify\(\s*(?:error|result)\b/.test(code), `${path} serializes an error`);
     }
   });
 

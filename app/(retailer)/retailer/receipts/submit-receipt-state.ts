@@ -1,4 +1,5 @@
 import { MAX_RECEIPT_FILE_MEGABYTES } from "@/lib/uploads/upload-policy";
+import { MAX_EXTRACTION_INPUT_MEGABYTES } from "@/lib/receipts/receipt-extraction-eligibility";
 // TYPE-ONLY, so it is erased at build time and no server-only code follows it into the
 // browser bundle. It is imported purely so `satisfies` below fails the build if a new
 // rejection reason is added to the validator without a sentence being written for it.
@@ -93,6 +94,39 @@ export const RECEIPT_DUPLICATE_ERROR =
  */
 export const RECEIPT_TRANSPORT_ERROR =
   "We couldn't send that receipt. Nothing was submitted — please check your connection and try again.";
+
+/**
+ * THE PARTIAL SUCCESS: the receipt is stored, and the automatic reading did not begin.
+ *
+ * IT IS A SUCCESS MESSAGE, NOT AN ERROR, and it is rendered in the success slot. That is
+ * the honest classification: the reservation, the upload and the finalize all completed,
+ * the receipt is in the private bucket, it appears in the submission history, and a
+ * reviewer will see it. Nothing about it needs re-doing, and re-submitting the same photo
+ * would simply be refused as a duplicate.
+ *
+ * IT ALSO DOES NOT CLAIM THE READING STARTED. Saying only "Receipt submitted" would leave
+ * a person believing the values were being read when no attempt exists. The sentence
+ * states both facts, in that order.
+ *
+ * No status code, no endpoint name, no provider name, no configuration detail and no
+ * backend text appears in it — the request module returns a plain status and nothing else.
+ */
+export const RECEIPT_EXTRACTION_NOT_STARTED_MESSAGE =
+  "Receipt submitted successfully, but automatic data extraction could not be started.";
+
+/**
+ * The same partial success, for an image the reader does not accept.
+ *
+ * Separated from the sentence above because the cause is different and so is the advice:
+ * nothing was wrong and nothing failed, the photograph is simply outside what the reader
+ * takes. It names the two formats and the size so the next photograph can be read, and it
+ * says plainly that the receipt itself is fine.
+ *
+ * The numbers come from @/lib/receipts/receipt-extraction-eligibility, which is the module
+ * the Server Action actually consults, so the sentence cannot drift from the rule.
+ */
+export const RECEIPT_EXTRACTION_UNSUPPORTED_IMAGE_MESSAGE =
+  `Receipt submitted successfully. Automatic data extraction was not started because it needs a JPEG or PNG photo of ${MAX_EXTRACTION_INPUT_MEGABYTES} MB or smaller.`;
 
 /**
  * One message per distinct, user-actionable file problem.
