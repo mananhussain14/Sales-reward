@@ -425,9 +425,11 @@ select is((select count(*)::integer from supabase_migrations.schema_migrations
            where version = '20260828090000'), 1,
   'A1. Migration 70 is recorded exactly once');
 
-select is((select count(*)::integer from supabase_migrations.schema_migrations
-           where version > '20260828090000'), 0,
-  'A2. no migration after 20260828090000 exists — Migration 71 has not begun');
+select is((select coalesce(string_agg(version, ',' order by version), 'NONE')
+           from supabase_migrations.schema_migrations
+           where version > '20260828090000'),
+  '20260828210000',
+  'A2. the only migration after 20260828090000 is approved Migration 71');
 
 select has_function('public', 'sales_staff_earnings_profile', array[]::text[],
   'A3. the context helper exists with the exact signature');
