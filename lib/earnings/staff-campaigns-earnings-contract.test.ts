@@ -61,6 +61,7 @@ import {
   rewardRuleLabel,
   targetOutcome,
   targetStatement,
+  unitsRemaining,
   wasCapped,
 } from "./earnings-presentation.ts";
 
@@ -81,6 +82,19 @@ const CAMPAIGN_DETAIL_PAGE = join(
   "app/(retailer)/retailer/my-campaigns/[campaignId]/page.tsx",
 );
 const EARNINGS_PAGE = join(ROOT, "app/(retailer)/retailer/my-earnings/page.tsx");
+
+/**
+ * The card component the campaign list renders each campaign through.
+ *
+ * The list page owns the reads, the sections and the ordering; the CARD owns the markup
+ * for one campaign. The guards below scan BOTH as one surface, because a rule like "cards
+ * link by the authoritative campaign id" is about what reaches the browser, not about
+ * which file it was written in.
+ */
+const CAMPAIGN_LIST_CARD = join(
+  ROOT,
+  "components/sales-staff/campaign-list-card.tsx",
+);
 const NAV_ITEMS = join(ROOT, "components/retailer-portal/retailer-nav-items.tsx");
 const FIXTURE = join(
   ROOT,
@@ -312,11 +326,13 @@ describe("1. the adapters call exactly the deployed RPCs, by exact name", () => 
  * 15-28. CURRENT CAMPAIGNS
  * ======================================================================= */
 describe("2. the Current Campaigns page", () => {
-  const page = code(CAMPAIGNS_PAGE);
+  // The route and the card it renders each campaign through, as one surface.
+  const page = `${code(CAMPAIGNS_PAGE)}\n${code(CAMPAIGN_LIST_CARD)}`;
 
   test("15. it renders campaigns from the staff list read", () => {
     assert.match(page, /listMyStaffCampaigns/);
-    assert.match(page, /campaigns\.filter/);
+    // Sectioned by the state the backend derived, never re-derived here.
+    assert.match(page, /opportunities\.filter/);
   });
 
   test("16 & 17. ACTIVE and SCHEDULED are the sections, and the badge names them", () => {
@@ -439,7 +455,10 @@ describe("2. the Current Campaigns page", () => {
   test("28. a campaign with no progress row renders no progress bar", () => {
     // The page renders the block only when a progress row exists for that campaign, and
     // only TARGET_BONUS campaigns appear in the progress contract.
-    assert.match(page, /progress !== undefined && <TargetProgressBlock/);
+    // The gauge is rendered only where the progress contract returned a row, and only
+    // TARGET_BONUS campaigns appear in that contract.
+    assert.match(page, /progress !== null && \(/);
+    assert.match(page, /<TargetProgress/);
     const byId = progressByCampaignId([]);
     assert.equal(byId.get("22222222-2222-4222-8222-222222222222"), undefined);
   });
@@ -663,7 +682,13 @@ describe("4. the earnings summary", () => {
   });
 
   test("43c. the page heading is the approved one", () => {
-    assert.match(code(EARNINGS_PAGE), /title="My campaign earnings"/);
+    // A visible <h1>, not a prop: the hero carries the heading now.
+    assert.match(code(EARNINGS_PAGE), /My campaign earnings/);
+    // And it is never any of the words the schema cannot honour.
+    assert.doesNotMatch(
+      code(EARNINGS_PAGE),
+      /<h1[^>]*>\s*(Wallet|Balance|Available coins)/,
+    );
   });
 });
 
@@ -901,11 +926,14 @@ describe("7. navigation and feature boundaries", () => {
     assert.match(nav, /label:\s*"My campaign earnings"/);
     assert.match(nav, /href:\s*"\/retailer\/my-campaigns"/);
     assert.match(nav, /href:\s*"\/retailer\/my-earnings"/);
-    // Both belong to the submitter list, and only that list.
+    // Both belong to the submitter list, and only that list. HOME_ITEM leads it as of
+    // the experience redesign: the landing screen and the submission screen are
+    // separate routes, because the landing's primary action opens the submission flow.
     assert.match(
       nav,
-      /kind === "submitter"\)\s*\{\s*return \[RECEIPTS_ITEM, MY_CAMPAIGNS_ITEM, MY_EARNINGS_ITEM\]/,
+      /kind === "submitter"\)\s*\{\s*return \[HOME_ITEM, RECEIPTS_ITEM, MY_CAMPAIGNS_ITEM, MY_EARNINGS_ITEM\]/,
     );
+    assert.match(nav, /href:\s*"\/retailer\/home"/);
   });
 
   test("64. owner and reader navigation is unchanged", () => {
@@ -961,12 +989,27 @@ describe("7. navigation and feature boundaries", () => {
     }
   });
 
-  test("67b. the ONE subtraction is capReduction, over two stored values on one row", () => {
+  test("67b. every subtraction is over two stored values on one row, and none over coins", () => {
     const presentation = code(join(ROOT, "lib/earnings/earnings-presentation.ts"));
     const subtractions = presentation.match(/[a-zA-Z.]+\s-\s[a-zA-Z.]+/g) ?? [];
-    assert.deepEqual(subtractions, ["reward.coinsUncapped - reward.rewardCoins"]);
-    // It reconstructs nothing: both operands are stored fields of the same reward.
+
+    // EXACTLY TWO, and both name stored fields of a single row on each side. Neither
+    // reconstructs a figure the database already decided.
+    //
+    //   capReduction    labels the gap between two stored COIN amounts on one reward.
+    //   unitsRemaining  labels the gap between two stored UNIT counts on one progress
+    //                   row. It is a display value: `targetReached` remains the
+    //                   database's answer and the only one, and a caller must not infer
+    //                   completion from a zero here.
+    assert.deepEqual(subtractions, [
+      "reward.coinsUncapped - reward.rewardCoins",
+      "progress.targetUnits - progress.progressUnits",
+    ]);
     assert.equal(capReduction({ coinsUncapped: 25, rewardCoins: 12 }), 13);
+    assert.equal(unitsRemaining({ progressUnits: 3, targetUnits: 8 }), 5);
+    // Floored: progress may legitimately exceed the target, and "-1 more units" is not
+    // a sentence a screen may render.
+    assert.equal(unitsRemaining({ progressUnits: 9, targetUnits: 8 }), 0);
   });
 
   test("68. NO migration file is touched by this feature", () => {

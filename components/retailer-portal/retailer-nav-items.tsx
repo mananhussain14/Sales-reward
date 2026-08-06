@@ -3,6 +3,14 @@ import type { ReactNode } from "react";
 export type RetailerNavItem = {
   label: string;
   href: string;
+  /**
+   * The label for the mobile bottom bar, where a four-word entry would truncate.
+   *
+   * Optional: an item with no short form is one whose full label already fits. The
+   * ACCESSIBLE name always comes from `label`, so shortening the visible text never
+   * shortens what a screen reader announces.
+   */
+  shortLabel?: string;
   /** SVG <path> element(s) rendered inside a shared 24x24 stroked <svg>. */
   icon: ReactNode;
 };
@@ -52,6 +60,25 @@ const STAFF_ITEM: RetailerNavItem = {
   ),
 };
 
+/**
+ * The Sales Staff landing.
+ *
+ * A SEPARATE entry from OVERVIEW_ITEM above, which is the Retailer Owner's read-only
+ * organization summary behind a different RPC and a different role. The two share nothing
+ * but a shape.
+ *
+ * It exists as its own destination because the landing screen and the submission screen
+ * cannot be the same page: the landing's primary call to action OPENS the submission
+ * flow, and a control cannot open the screen it is already on.
+ */
+const HOME_ITEM: RetailerNavItem = {
+  label: "Home",
+  href: "/retailer/home",
+  icon: (
+    <path d="M2.25 12l8.954-8.955a1.5 1.5 0 012.122 0L22.5 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75" />
+  ),
+};
+
 const RECEIPTS_ITEM: RetailerNavItem = {
   label: "Receipts",
   href: "/retailer/receipts",
@@ -85,6 +112,7 @@ const CAMPAIGNS_ITEM: RetailerNavItem = {
  */
 const MY_CAMPAIGNS_ITEM: RetailerNavItem = {
   label: "Current campaigns",
+  shortLabel: "Campaigns",
   href: "/retailer/my-campaigns",
   icon: (
     <path d="M10.34 15.84c-.688-.06-1.386-.09-2.09-.09H7.5a4.5 4.5 0 110-9h.75c.704 0 1.402-.03 2.09-.09m0 9.18c.253.962.584 1.892.985 2.783.247.55.06 1.21-.463 1.511l-.657.38c-.551.318-1.24.117-1.526-.421a20.75 20.75 0 01-1.44-3.685m4.101-.585a20.85 20.85 0 018.834 2.535M10.34 6.66a20.85 20.85 0 008.834-2.535M18.75 4.971c.487.147.982.28 1.486.396a24.5 24.5 0 010 9.266c-.504.115-.999.249-1.486.396m0-10.058a20.83 20.83 0 01.42 5.03c0 1.716-.146 3.395-.42 5.028" />
@@ -101,6 +129,7 @@ const MY_CAMPAIGNS_ITEM: RetailerNavItem = {
  */
 const MY_EARNINGS_ITEM: RetailerNavItem = {
   label: "My campaign earnings",
+  shortLabel: "Earnings",
   href: "/retailer/my-earnings",
   icon: (
     <path d="M12 6v12m-3-2.818l.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -151,7 +180,7 @@ export function retailerNavItems(
   kind: "owner" | "reader" | "submitter",
 ): RetailerNavItem[] {
   if (kind === "submitter") {
-    return [RECEIPTS_ITEM, MY_CAMPAIGNS_ITEM, MY_EARNINGS_ITEM];
+    return [HOME_ITEM, RECEIPTS_ITEM, MY_CAMPAIGNS_ITEM, MY_EARNINGS_ITEM];
   }
   if (kind === "reader") {
     return [STAFF_ITEM, PRODUCTS_ITEM];

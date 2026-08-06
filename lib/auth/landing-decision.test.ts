@@ -141,7 +141,7 @@ describe("selectLanding — no open redirect", () => {
         "/access-denied",
         "/login",
         "/retailer",
-        "/retailer/receipts",
+        "/retailer/home",
         "/retailer/staff",
       ],
     );
@@ -197,11 +197,11 @@ describe("selectLanding — every role lands where it is actually authorized", (
     assert.notEqual(destinationOf(decision), LANDING_ROUTES.retailer);
   });
 
-  test("R4. a Sales Staff member lands on receipt submission and history", () => {
+  test("R4. a Sales Staff member lands on the Sales Staff Home", () => {
     const decision = selectLanding("unauthorized", "submitter");
     assert.deepEqual(decision, {
       kind: "salesStaff",
-      destination: "/retailer/receipts",
+      destination: "/retailer/home",
     });
     assert.notEqual(destinationOf(decision), LANDING_ROUTES.retailer);
     assert.notEqual(destinationOf(decision), LANDING_ROUTES.retailerStaff);

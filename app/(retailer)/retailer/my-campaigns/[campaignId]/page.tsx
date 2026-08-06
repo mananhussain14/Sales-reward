@@ -12,12 +12,7 @@ import {
   NO_PRODUCTS_MESSAGE,
   formatEarningsDate,
   formatUnits,
-  progressAriaLabel,
   progressByCampaignId,
-  progressPercent,
-  progressScopeExplanation,
-  progressScopeLabel,
-  targetStatement,
 } from "@/lib/earnings/earnings-presentation";
 import {
   // ALIASED DELIBERATELY. The campaign vocabulary's formatCoins ALREADY appends the
@@ -37,14 +32,24 @@ import {
   stackingExplanation,
   stackingLabel,
 } from "@/lib/campaigns/campaign-vocabulary";
+import Link from "next/link";
 import { CampaignStateBadge } from "@/components/campaigns/campaign-state-badge";
+import { TargetProgress } from "@/components/sales-staff/target-progress";
+import { CampaignQualifiers, RewardTypeIcon } from "@/components/sales-staff/campaign-visuals";
+import { AddReceiptAction } from "@/components/sales-staff/add-receipt";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { buttonClasses } from "@/components/ui/button";
 import { cardClasses } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
-import { BackLink, PageHeader, SectionHeader } from "@/components/ui/page-header";
-import { ProgressBar } from "@/components/ui/progress-bar";
-import { ProductsIcon } from "@/components/ui/icons";
+import { BackLink, SectionHeader } from "@/components/ui/page-header";
+import { FeatureCard, IconDisc, Reveal, SoftBackdrop } from "@/components/ui/surfaces";
+import {
+  ArrowUpRightIcon,
+  ClockIcon,
+  ProductsIcon,
+  RewardIcon,
+} from "@/components/ui/icons";
 
 export const metadata: Metadata = {
   title: "Campaign · Retailer Portal",
@@ -83,35 +88,48 @@ function Fact({ label, children }: { label: string; children: React.ReactNode })
 }
 
 function TargetProgressPanel({ progress }: { progress: CampaignTargetProgress }) {
-  const statement = targetStatement(progress);
-
   return (
-    <section className={cardClasses("standard", "p-5")}>
-      <SectionHeader
-        title={progressScopeLabel(progress.performanceScope)}
-        description={progressScopeExplanation(progress.performanceScope)}
-      />
-      <div className="mt-4">
-        <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <span className="text-sm text-slate-600">Progress towards target</span>
-          <span className="text-sm tabular-nums text-slate-700">
-            {formatUnits(progress.progressUnits)} of{" "}
-            {formatUnits(progress.targetUnits)} units
-          </span>
-        </div>
-        <ProgressBar
-          className="mt-2"
-          percent={progressPercent(progress)}
-          label={progressAriaLabel(progress)}
-          valueNow={progress.progressUnits}
-          valueMax={progress.targetUnits}
-          tone={statement.tone}
+    <section className={cardClasses("standard", "p-5 sm:p-6")}>
+      <SectionHeader title="Target progress" />
+      <div className="mt-5">
+        <TargetProgress
+          progress={progress}
+          variant="detail"
+          idSuffix={`-detail-${progress.campaignId}`}
         />
-        <div className="mt-3">
-          <Badge tone={statement.tone}>{statement.label}</Badge>
-        </div>
-        <p className="mt-2 text-sm text-slate-600">{statement.detail}</p>
       </div>
+    </section>
+  );
+}
+
+/**
+ * What a seller actually has to do, in the order it happens on a shop floor.
+ *
+ * A numbered restatement of the eligibility, reward and scope rules the cards above
+ * already carry as labels. It invents nothing: every line is one of the shared
+ * vocabulary's explanations, which the Vendor surfaces render from the same source.
+ */
+function WhatYouNeedToDo({
+  steps,
+}: {
+  steps: string[];
+}) {
+  return (
+    <section className={cardClasses("standard", "p-5 sm:p-6")}>
+      <SectionHeader title="What you need to do" />
+      <ol className="mt-4 flex flex-col gap-3">
+        {steps.map((step, index) => (
+          <li key={step} className="flex gap-3">
+            <span
+              aria-hidden="true"
+              className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-indigo-50 text-xs font-semibold text-indigo-700"
+            >
+              {index + 1}
+            </span>
+            <p className="text-sm text-slate-700">{step}</p>
+          </li>
+        ))}
+      </ol>
     </section>
   );
 }
@@ -174,16 +192,78 @@ export default async function StaffCampaignDetailPage({
 
   const isSnapshot = campaign.productEligibilityResolution === "SNAPSHOT";
 
+  /**
+   * The steps, restated from the shared vocabulary. Order matters: a sale happens, then
+   * it is verified, then the campaign is evaluated.
+   */
+  const steps = [
+    productScopePlainLabel(campaign.productScope) +
+      (isSnapshot
+        ? " — the list below was frozen when this campaign was published."
+        : " — the list below can change, because eligibility is checked when a sale is verified."),
+    performanceExplanation(campaign.performanceScope),
+    campaign.reward.ruleType === null
+      ? "This campaign's reward rule is not available."
+      : ruleTypeExplanation(campaign.reward.ruleType),
+    stackingExplanation(campaign.stackingMode),
+  ];
+
   return (
-    <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
+    <SoftBackdrop>
+      <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
       <BackLink href="/retailer/my-campaigns">Back to current campaigns</BackLink>
 
-      <PageHeader
-        eyebrow="Campaign"
-        title={campaign.campaignName}
-        description={campaign.description ?? undefined}
-        actions={<CampaignStateBadge state={campaign.derivedState} />}
-      />
+      {/* ---- Hero ---------------------------------------------------------
+          Re-recognises the campaign from the list: the same disc tone, the same
+          status pill, and the reward sentence a seller came to read. */}
+      <Reveal>
+        <FeatureCard tone={progress?.targetReached ? "emerald" : "indigo"} className="p-6 sm:p-8">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-indigo-600">
+              Campaign
+            </p>
+            <CampaignStateBadge state={campaign.derivedState} />
+          </div>
+
+          <h1 className="mt-2 text-2xl font-semibold tracking-tight break-words text-slate-900">
+            {campaign.campaignName}
+          </h1>
+          {campaign.description !== null && (
+            <p className="mt-2 max-w-2xl text-sm break-words text-slate-600">
+              {campaign.description}
+            </p>
+          )}
+
+          {summary !== null && (
+            <div className="mt-5 flex items-start gap-3 rounded-2xl bg-white/70 px-4 py-3">
+              <IconDisc
+                tone={progress?.targetReached ? "emerald" : "indigo"}
+                size={40}
+                icon={<RewardIcon className="h-5 w-5" />}
+              />
+              <div className="min-w-0">
+                <p className="text-xs font-medium text-slate-500">Reward</p>
+                <p className="text-lg font-semibold tracking-tight text-slate-900">
+                  {summary}
+                </p>
+              </div>
+            </div>
+          )}
+
+          <div className="mt-4 flex flex-wrap gap-2">
+            {campaign.reward.ruleType !== null && (
+              <Badge tone="indigo" icon={<RewardTypeIcon campaign={campaign} />}>
+                {ruleTypeLabel(campaign.reward.ruleType)}
+              </Badge>
+            )}
+          </div>
+
+          <CampaignQualifiers
+            campaign={campaign}
+            className="mt-3 flex flex-wrap gap-1.5"
+          />
+        </FeatureCard>
+      </Reveal>
 
       {/* ---- The offer ---------------------------------------------------- */}
       <section className={cardClasses("standard", "p-5")}>
@@ -244,10 +324,34 @@ export default async function StaffCampaignDetailPage({
           <Fact label="Starts">{formatEarningsDate(campaign.startsAt) ?? "—"}</Fact>
           <Fact label="Ends">{formatEarningsDate(campaign.endsAt) ?? "—"}</Fact>
           <Fact label="Stacking">{stackingLabel(campaign.stackingMode)}</Fact>
+          {campaign.timezoneName !== null && (
+            <Fact label="Campaign time zone">{campaign.timezoneName}</Fact>
+          )}
         </dl>
+
+        {/* Dates above are rendered in UTC; the campaign's own period is evaluated in
+            the zone below. Saying so is what keeps "starts 6 Jun" from being read as a
+            promise about the reader's local midnight. */}
+        <p className="mt-4 flex items-start gap-2 text-xs text-slate-500">
+          <ClockIcon className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          <span>
+            Dates are shown in UTC.
+            {campaign.timezoneName !== null
+              ? ` This campaign's period is evaluated in ${campaign.timezoneName}.`
+              : ""}
+          </span>
+        </p>
       </section>
 
-      {progress !== undefined && <TargetProgressPanel progress={progress} />}
+      {progress !== undefined && (
+        <Reveal index={1}>
+          <TargetProgressPanel progress={progress} />
+        </Reveal>
+      )}
+
+      <Reveal index={2}>
+        <WhatYouNeedToDo steps={steps} />
+      </Reveal>
 
       {progressResult.status === "unavailable" && (
         <Alert tone="warning" role="status" title="Target progress unavailable">
@@ -372,6 +476,37 @@ export default async function StaffCampaignDetailPage({
           </>
         )}
       </section>
-    </div>
+
+      {/* ---- The way to what this campaign has already paid ------------------
+          Offered to a SELLER only. This whole route is gated on the Sales Staff
+          portal kind, and STAFF_EARNINGS_VIEW is mapped to SALES_STAFF alone, so
+          there is no other reader to withhold it from. */}
+      <section
+        className={cardClasses(
+          "standard",
+          "flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6",
+        )}
+      >
+        <div className="min-w-0">
+          <h2 className="text-base font-semibold text-slate-900">
+            Rewards you have already earned
+          </h2>
+          <p className="mt-1 text-sm text-slate-600">
+            Rewards from this campaign are listed with the rest of your reward history.
+          </p>
+        </div>
+        <div className="flex shrink-0 flex-wrap gap-3">
+          <AddReceiptAction compact />
+          <Link
+            href="/retailer/my-earnings"
+            className={buttonClasses({ variant: "outline" })}
+          >
+            My campaign earnings
+            <ArrowUpRightIcon className="h-4 w-4" aria-hidden="true" />
+          </Link>
+        </div>
+      </section>
+      </div>
+    </SoftBackdrop>
   );
 }

@@ -100,6 +100,23 @@ export function RetailerShell({
   const pathname = usePathname();
   const navItems = retailerNavItems(accessKind);
 
+  /**
+   * Sales Staff get a bottom navigation bar below `lg` instead of a drawer.
+   *
+   * FOUR DESTINATIONS FIT A BAR; SEVEN DO NOT. An Owner has up to five entries and a
+   * Manager two, but only the Sales Staff experience is one a person uses standing up,
+   * one-handed, on a shop floor — and a bar puts every destination one thumb away instead
+   * of behind a menu. The Owner and Manager drawers are untouched.
+   *
+   * The bar REPLACES the drawer rather than joining it: two navigations for one set of
+   * links is noise, and a hamburger that opens a menu duplicating the bar underneath it
+   * is worse than either alone.
+   *
+   * This is presentation. Which items appear, and in what chrome, protects nothing — the
+   * layout decides access on the server and every RPC decides again in SQL.
+   */
+  const useBottomBar = accessKind === "submitter";
+
   const closeSidebar = useCallback(() => setSidebarOpen(false), []);
 
   // Close the mobile drawer when Escape is pressed.
@@ -131,7 +148,13 @@ export function RetailerShell({
         id="retailer-sidebar"
         className={cn(
           "fixed inset-y-0 left-0 z-50 w-64 transform border-r border-slate-200 bg-white transition-transform duration-200 ease-in-out lg:translate-x-0",
-          sidebarOpen ? "translate-x-0 shadow-modal lg:shadow-none" : "-translate-x-full",
+          // With a bottom bar there is no drawer to slide: the rail simply is not there
+          // below `lg`, so it cannot be opened, focused or read out.
+          useBottomBar
+            ? "hidden lg:block"
+            : sidebarOpen
+              ? "translate-x-0 shadow-modal lg:shadow-none"
+              : "-translate-x-full",
         )}
       >
         <div className="flex h-16 items-center border-b border-slate-100 px-5">
@@ -188,8 +211,8 @@ export function RetailerShell({
         </nav>
       </aside>
 
-      {/* Backdrop for the mobile drawer. */}
-      {sidebarOpen && (
+      {/* Backdrop for the mobile drawer. Never rendered when there is no drawer. */}
+      {sidebarOpen && !useBottomBar && (
         <button
           type="button"
           aria-label="Close navigation menu"
@@ -208,7 +231,11 @@ export function RetailerShell({
             }
             aria-expanded={sidebarOpen}
             aria-controls="retailer-sidebar"
-            className="inline-flex h-10 w-10 items-center justify-center rounded-xl text-slate-600 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 lg:hidden"
+            className={cn(
+              "h-10 w-10 items-center justify-center rounded-xl text-slate-600 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500",
+              // Nothing to open when the destinations are already on screen.
+              useBottomBar ? "hidden" : "inline-flex lg:hidden",
+            )}
           >
             <svg
               viewBox="0 0 24 24"
@@ -265,11 +292,79 @@ export function RetailerShell({
 
         <main
           id="main-content"
-          className="sr-animate-fade-in flex-1 px-4 py-6 sm:px-6 lg:px-8"
+          className={cn(
+            "sr-animate-fade-in flex-1 px-4 py-6 sm:px-6 lg:px-8",
+            // Room for the bar, so the last element of any page is reachable and never
+            // sits underneath it. Removed once the bar is gone at `lg`.
+            useBottomBar && "pb-24 lg:pb-6",
+          )}
         >
           {children}
         </main>
       </div>
+
+      {/* Sales Staff bottom navigation, below `lg` only. */}
+      {useBottomBar && (
+        <nav
+          aria-label="Retailer portal"
+          className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/95 backdrop-blur-md lg:hidden"
+          // Keeps the row clear of a home indicator on a phone.
+          style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
+        >
+          <ul className="mx-auto flex max-w-lg items-stretch">
+            {navItems.map((item) => {
+              const active = isActiveNavItem(pathname, item.href);
+
+              return (
+                <li key={item.href} className="min-w-0 flex-1">
+                  <Link
+                    href={item.href}
+                    aria-current={active ? "page" : undefined}
+                    className={cn(
+                      "relative flex h-16 flex-col items-center justify-center gap-1 px-1 text-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500",
+                      active
+                        ? "text-indigo-700"
+                        : "text-slate-500 hover:text-slate-900",
+                    )}
+                  >
+                    {/* The selected indicator is a SHAPE as well as a hue — the bar's
+                        equivalent of the sidebar's indigo rail. Colour alone would be
+                        the only channel otherwise. */}
+                    <span
+                      aria-hidden="true"
+                      className={cn(
+                        "absolute inset-x-3 top-0 h-0.5 rounded-b-full bg-indigo-600 transition-opacity",
+                        active ? "opacity-100" : "opacity-0",
+                      )}
+                    />
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth={1.75}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="h-5 w-5 shrink-0"
+                      aria-hidden="true"
+                    >
+                      {item.icon}
+                    </svg>
+                    {/* The visible text may be shortened to fit; the accessible name
+                        never is. */}
+                    <span className="w-full truncate text-xs font-medium">
+                      <span aria-hidden="true">
+                        {item.shortLabel ?? item.label}
+                      </span>
+                      <span className="sr-only">{item.label}</span>
+                    </span>
+                    <NavProgressReporter />
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        </nav>
+      )}
       </div>
     </NavProgressProvider>
   );

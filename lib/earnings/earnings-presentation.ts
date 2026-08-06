@@ -187,6 +187,41 @@ export function progressPercent(progress: {
 }
 
 /**
+ * Progress as a fraction, clamped to 0..1 — the value a ring is DRAWN from.
+ *
+ * Clamped for the same reason `progressPercent` is: an arc cannot sweep past its own
+ * circumference, and a team that needed 8 units and sold 9 would otherwise overdraw its
+ * own start. THE CLAMP APPLIES ONLY TO THE DRAWING. `progressUnits` and `targetUnits`
+ * are rendered beside the ring untouched, so 9 of 8 stays 9 of 8 while the arc rests at
+ * full.
+ */
+export function progressFraction(progress: {
+  progressUnits: number;
+  targetUnits: number;
+}): number {
+  if (progress.targetUnits <= 0) return 0;
+  const raw = progress.progressUnits / progress.targetUnits;
+  if (!Number.isFinite(raw) || raw <= 0) return 0;
+  return Math.min(1, raw);
+}
+
+/**
+ * How many more units the subject needs, floored at zero.
+ *
+ * A SUBTRACTION OF TWO STORED COUNTS, not a projection. Floored because progress may
+ * exceed the target, and "-1 more units" is not a sentence. Zero here does not mean the
+ * target was reached — `targetReached` is the database's answer and the only one — so
+ * callers must not infer completion from this value.
+ */
+export function unitsRemaining(progress: {
+  progressUnits: number;
+  targetUnits: number;
+}): number {
+  const remaining = progress.targetUnits - progress.progressUnits;
+  return remaining > 0 ? remaining : 0;
+}
+
+/**
  * What the screen may truthfully say about one target campaign.
  *
  * FOUR OUTCOMES, AND THE THIRD IS THE WHOLE POINT:
@@ -290,6 +325,88 @@ export function progressAriaLabel(progress: {
   return `${progressScopeLabel(progress.performanceScope)}: ${formatUnits(
     progress.progressUnits,
   )} of ${formatUnits(progress.targetUnits)} units`;
+}
+
+/**
+ * `9 of 8 units`. Both numbers are stored values; NEITHER is rounded to fit the ring.
+ *
+ * The numerator is a fact and the indicator beside it is only a drawing. Reducing 9 to 8
+ * so the two agree would make a target look smaller than it is.
+ */
+export function progressValueLabel(progress: {
+  progressUnits: number;
+  targetUnits: number;
+}): string {
+  return `${formatUnits(progress.progressUnits)} of ${formatUnits(
+    progress.targetUnits,
+  )} units`;
+}
+
+/**
+ * How far there is left to go, as a sentence.
+ *
+ * Every branch is decided by the two stored booleans and a subtraction of two stored
+ * counts. Nothing here promises a reward, predicts one, or tells a reader they were paid
+ * when the bonus went elsewhere.
+ *
+ * The `remaining === 0` branch is not a rounding artefact: a subject may have counted up
+ * to the target while the database has not yet recorded it as reached, because evaluation
+ * runs when a reviewer verifies the sale. Said plainly rather than guessed at.
+ */
+export function progressHeadline(progress: {
+  performanceScope: EarningPerformanceScope;
+  progressUnits: number;
+  targetUnits: number;
+  targetReached: boolean;
+  bonusAwardedToMe: boolean;
+}): string {
+  if (!progress.targetReached) {
+    const remaining = unitsRemaining(progress);
+    if (remaining === 0) {
+      return "This target has not been recorded as reached yet.";
+    }
+    const more = `${formatUnits(remaining)} more eligible ${
+      remaining === 1 ? "unit" : "units"
+    }`;
+    return progress.performanceScope === "RETAILER_TEAM"
+      ? `${more} to reach the team target.`
+      : `${more} to reach your target.`;
+  }
+
+  if (progress.bonusAwardedToMe) return "Target reached — reward recorded.";
+  if (progress.performanceScope === "RETAILER_TEAM") {
+    return "The team has reached the target.";
+  }
+  return "This target has been reached.";
+}
+
+/**
+ * The whole progress block as ONE screen-reader utterance, in visual order.
+ *
+ * The ring itself is `aria-hidden`: a bare circular indicator announces a percentage and
+ * nothing about WHOSE units it counts, which is precisely the confusion a team target
+ * creates. The numerator and denominator come first and the percentage second, because
+ * the percentage is the derived value of the two.
+ *
+ * "percent" is spelled out so a reader hears "10 percent" rather than "10 modulo".
+ */
+export function progressSemanticLabel(progress: {
+  performanceScope: EarningPerformanceScope;
+  progressUnits: number;
+  targetUnits: number;
+  targetReached: boolean;
+  bonusAwardedToMe: boolean;
+}): string {
+  const statement = targetStatement(progress);
+  return [
+    `${progressScopeLabel(progress.performanceScope)}: ${progressValueLabel(
+      progress,
+    )}, ${progressPercent(progress)} percent.`,
+    `${statement.label}.`,
+    progressHeadline(progress),
+    statement.detail,
+    progressScopeExplanation(progress.performanceScope),
+  ].join(" ");
 }
 
 /* ---------------------------------------------------------------------------

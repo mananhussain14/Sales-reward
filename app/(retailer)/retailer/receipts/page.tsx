@@ -12,12 +12,19 @@ import {
 import { formatFileSize } from "@/lib/receipts/receipt-file";
 import { formatOwnerTimestamp } from "@/lib/retailers/owner-status-normalization";
 import { SubmitReceiptForm } from "@/app/(retailer)/retailer/receipts/submit-receipt-form";
-import { PageHeader, SectionHeader } from "@/components/ui/page-header";
+import { SectionHeader } from "@/components/ui/page-header";
+import { ReceiptStepsStrip } from "@/components/sales-staff/receipt-steps";
+import {
+  FeatureCard,
+  IconDisc,
+  Reveal,
+  SoftBackdrop,
+} from "@/components/ui/surfaces";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { cardClasses } from "@/components/ui/card";
-import { InboxIcon, LocationIcon } from "@/components/ui/icons";
+import { InboxIcon, LocationIcon, ReceiptIcon } from "@/components/ui/icons";
 
 export const metadata: Metadata = {
   title: "Receipts · Retailer Portal",
@@ -102,12 +109,34 @@ export default async function RetailerReceiptsPage() {
   const shops = assigned.status === "ok" ? assigned.shops : [];
 
   return (
+    <SoftBackdrop>
     <div className="mx-auto w-full max-w-4xl space-y-8">
-      <PageHeader
-        eyebrow="Sales staff"
-        title="Receipts"
-        description="Submit a customer receipt for one of your shops, and review what you have sent."
-      />
+      {/* ---- Instruction hero ---------------------------------------------- */}
+      <Reveal>
+        <FeatureCard tone="indigo" className="p-6 sm:p-8">
+          <p className="text-xs font-semibold uppercase tracking-wide text-indigo-600">
+            Sales staff
+          </p>
+          <div className="mt-2 flex items-start gap-4">
+            <IconDisc
+              tone="indigo"
+              size={48}
+              icon={<ReceiptIcon className="h-6 w-6" />}
+            />
+            <div className="min-w-0">
+              <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+                Add a receipt
+              </h1>
+              <p className="mt-1 max-w-2xl text-sm text-slate-600">
+                Submit a customer receipt for one of your shops. Submitting sends it
+                for review; not every receipt qualifies.
+              </p>
+            </div>
+          </div>
+
+          <ReceiptStepsStrip className="mt-6" />
+        </FeatureCard>
+      </Reveal>
 
       {/* ------------------------------------------------------------------ */}
       {/* Submit                                                              */}
@@ -254,5 +283,6 @@ export default async function RetailerReceiptsPage() {
         )}
       </section>
     </div>
+    </SoftBackdrop>
   );
 }

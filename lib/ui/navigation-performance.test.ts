@@ -47,6 +47,7 @@ const LOADING_ROUTES = [
   "app/(admin)/audit-logs/loading.tsx",
   "app/(retailer)/retailer/loading.tsx",
   "app/(retailer)/retailer/staff/loading.tsx",
+  "app/(retailer)/retailer/home/loading.tsx",
   "app/(retailer)/retailer/receipts/loading.tsx",
   "app/(retailer)/retailer/shops/loading.tsx",
   "app/(retailer)/retailer/products/loading.tsx",
