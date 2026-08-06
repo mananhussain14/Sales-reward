@@ -21,9 +21,14 @@
 //                             complete without uploading anything.
 //
 // WHAT NEVER LEAVES THIS MODULE. The object path, the bucket name and the file hash are
-// consumed here and appear in no value returned to the caller — the flow's result union
-// carries a status and nothing else. The file bytes are held only long enough to hash
-// and upload them; they are never written to PostgreSQL.
+// consumed here and appear in no value returned to the caller. The file bytes are held
+// only long enough to hash and upload them; they are never written to PostgreSQL.
+//
+// THE ONE VALUE THAT DOES LEAVE is the submission id the reservation generated, on the
+// `submitted` variant alone, so the caller can ask that this receipt be read. It is
+// server-side material and stops at the Server Action — it is never placed in the state
+// the browser receives. See the header of @/lib/receipts/receipt-submission-flow, which
+// owns that result type and states the three properties that make it safe.
 import { createClient } from "@/lib/supabase/server";
 import {
   createAdminClient,
