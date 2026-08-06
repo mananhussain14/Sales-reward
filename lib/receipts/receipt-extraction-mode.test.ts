@@ -13,10 +13,14 @@ import assert from "node:assert/strict";
 import {
   DEFAULT_FAKE_PENDING_MS,
   MAX_FAKE_PENDING_MS,
+  RECEIPT_EXTRACTION_MODE_AZURE,
   RECEIPT_EXTRACTION_MODE_ENV,
   RECEIPT_EXTRACTION_MODE_FAKE,
+  isAzureExtractionEnabled,
   isFakeExtractionEnabled,
+  isReceiptExtractionEnabled,
   resolveFakePendingMs,
+  resolveReceiptExtractionEdgeMode,
 } from "./receipt-extraction-mode.ts";
 
 describe("isFakeExtractionEnabled", () => {
@@ -57,6 +61,74 @@ describe("isFakeExtractionEnabled", () => {
 
   test("the variable name is a constant, so the safety test has one anchor", () => {
     assert.equal(RECEIPT_EXTRACTION_MODE_ENV, "RECEIPT_EXTRACTION_MODE");
+  });
+});
+
+
+describe("resolveReceiptExtractionEdgeMode", () => {
+  test("the exact Azure literal enables Azure mode", () => {
+    assert.equal(
+      resolveReceiptExtractionEdgeMode("azure"),
+      RECEIPT_EXTRACTION_MODE_AZURE,
+    );
+    assert.equal(isAzureExtractionEnabled("azure"), true);
+    assert.equal(isFakeExtractionEnabled("azure"), false);
+    assert.equal(isReceiptExtractionEnabled("azure"), true);
+  });
+
+  test("the exact fake literal still enables only fake mode", () => {
+    assert.equal(
+      resolveReceiptExtractionEdgeMode("fake"),
+      RECEIPT_EXTRACTION_MODE_FAKE,
+    );
+    assert.equal(isFakeExtractionEnabled("fake"), true);
+    assert.equal(isAzureExtractionEnabled("fake"), false);
+    assert.equal(isReceiptExtractionEnabled("fake"), true);
+  });
+
+  test("absent and unknown values resolve to disabled", () => {
+    for (const value of [
+      undefined,
+      null,
+      "",
+      "disabled",
+      "DISABLED",
+      "true",
+      "enabled",
+      "production",
+      1,
+      true,
+      {},
+      [],
+    ]) {
+      assert.equal(
+        resolveReceiptExtractionEdgeMode(value),
+        "disabled",
+        String(value),
+      );
+      assert.equal(isReceiptExtractionEnabled(value), false);
+    }
+  });
+
+  test("Azure near-misses fail closed", () => {
+    for (const value of [
+      "AZURE",
+      "Azure",
+      "aZuRe",
+      " azure",
+      "azure ",
+      " azure ",
+      "\tazure",
+      "azure\n",
+      "AZURE_DOCUMENT_INTELLIGENCE",
+    ]) {
+      assert.equal(
+        resolveReceiptExtractionEdgeMode(value),
+        "disabled",
+        JSON.stringify(value),
+      );
+      assert.equal(isAzureExtractionEnabled(value), false);
+    }
   });
 });
 

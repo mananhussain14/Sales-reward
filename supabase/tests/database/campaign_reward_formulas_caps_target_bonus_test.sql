@@ -597,16 +597,16 @@ select is((select count(*)::integer from supabase_migrations.schema_migrations
   'A1. Migration 67 is recorded exactly once');
 
 -- SUPERSEDED IN PART BY PHASES 2A-D, 2A-E AND 2B: Migrations 68 (20260826090000), 69
--- (20260827090000) and 70 (20260828090000) were created by approval and are named
--- exactly. Migration 70 reads rewards and never writes one; G8 and G9 of its own suite
--- pin this migration's two functions by source hash. The rule this assertion owns is
--- that nothing beyond them has been applied.
+-- (20260827090000), 70 (20260828090000) and 71 (20260828210000) were created by
+-- approval and are named exactly. Migration 70 reads rewards and never writes one;
+-- Migration 71 adds Azure receipt-extraction readiness. Neither changes this
+-- migration's reward functions. The rule this assertion owns is that nothing beyond them
+-- has been applied.
 select is((select coalesce(string_agg(version, ',' order by version), 'NONE')
            from supabase_migrations.schema_migrations
            where version > '20260825090000'),
-  '20260826090000,20260827090000,20260828090000',
-  'A2. the only migrations after 20260825090000 are the approved Migrations 68, 69 '
-  'and 70');
+  '20260826090000,20260827090000,20260828090000,20260828210000',
+  'A2. the only migrations after 20260825090000 are approved Migrations 68 through 71');
 
 select has_function('public', 'campaign_reward_calculation_for_evaluation', array['uuid'],
   'A3. the pure calculation exists with the exact signature');

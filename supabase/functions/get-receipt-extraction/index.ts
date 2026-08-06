@@ -28,7 +28,9 @@
 //   response body, no header and no log line. Every response is a re-read through the
 //   caller's own RPC.
 //
-// NO AZURE. No endpoint, credential, SDK, region or service name appears in this file.
+// PROVIDER NETWORK IS ISOLATED. This function reads server-only configuration and
+// delegates provider construction to the shared selector. The stored provider/model pair
+// determines what may poll an attempt, and this function never calls fetch directly.
 
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2.110.6";
 
@@ -41,16 +43,19 @@ import {
   type ExtractionResponseStatus,
 } from "../../../lib/receipts/receipt-extraction-request-contract.ts";
 import {
-  isFakeExtractionEnabled,
+  AZURE_DI_API_VERSION_ENV,
+  AZURE_DI_ENDPOINT_ENV,
+  AZURE_DI_KEY_ENV,
+} from "../../../lib/receipts/receipt-extraction-azure-config.ts";
+import {
+  isReceiptExtractionEnabled,
   RECEIPT_EXTRACTION_FIXTURE_ENV,
   RECEIPT_EXTRACTION_FAKE_PENDING_MS_ENV,
   RECEIPT_EXTRACTION_MODE_ENV,
-  resolveFakePendingMs,
 } from "../../../lib/receipts/receipt-extraction-mode.ts";
 import {
-  createFakeProviderForKey,
-  resolveFakeFixtureKey,
-} from "../../../lib/receipts/receipt-extraction-fake-provider.ts";
+  resolveReceiptExtractionPollProvider,
+} from "../../../lib/receipts/receipt-extraction-provider-selection.ts";
 import {
   runExtractionPollFlow,
   type ExtractionPollPorts,
@@ -115,7 +120,7 @@ function asInteger(value: unknown, fallback: number): number {
  */
 function safeExtractionPayload(
   row: Record<string, unknown>,
-  edgeFakeEnabled: boolean,
+  edgeEnabled: boolean,
 ): Record<string, unknown> {
   return {
     submission_id: row.submission_id,
@@ -124,7 +129,7 @@ function safeExtractionPayload(
     attempt_number: row.attempt_number,
     attempts_used: row.attempts_used,
     attempts_remaining: row.attempts_remaining,
-    retry_allowed: row.retry_allowed === true && edgeFakeEnabled,
+    retry_allowed: row.retry_allowed === true && edgeEnabled,
     manual_confirmation_allowed: row.manual_confirmation_allowed,
     confirmation_exists: row.confirmation_exists,
     failure_code: row.failure_code,
@@ -243,7 +248,10 @@ async function handleRequest(request: Request): Promise<Response> {
   // unreadable id, which costs the client nothing: it knows it owns the receipt.
   if (row === null) return json("not-found", 404);
 
-  const edgeFakeEnabled = isFakeExtractionEnabled(Deno.env.get(RECEIPT_EXTRACTION_MODE_ENV));
+  const edgeMode =
+    Deno.env.get(RECEIPT_EXTRACTION_MODE_ENV);
+  const edgeEnabled =
+    isReceiptExtractionEnabled(edgeMode);
 
   // ---- 9/10. Scope-expire ONE stale attempt, then re-read ---------------------
   // Runs regardless of the Edge gate: reaping is cleanup, not execution, and an operator who
@@ -271,11 +279,11 @@ async function handleRequest(request: Request): Promise<Response> {
 
   // ---- 11. Stored evidence is returned regardless of the gate -----------------
   if (row.status === "SUCCEEDED" || row.status === "FAILED") {
-    return json("ok", 200, { extraction: safeExtractionPayload(row, edgeFakeEnabled) });
+    return json("ok", 200, { extraction: safeExtractionPayload(row, edgeEnabled) });
   }
 
   // ---- 12/13. Still open: NOW the gate decides whether any work happens -------
-  if (!edgeFakeEnabled) {
+  if (!edgeEnabled) {
     // No claim, no poll, no operation registration, no completion. The row is returned as it
     // stands; nothing about the configuration appears in the response.
     logFailure("extraction mode disabled");
@@ -284,24 +292,11 @@ async function handleRequest(request: Request): Promise<Response> {
 
   const extractionId = nonEmptyString(row.extraction_id);
   if (extractionId === null) {
-    return json("ok", 200, { extraction: safeExtractionPayload(row, edgeFakeEnabled) });
+    return json("ok", 200, { extraction: safeExtractionPayload(row, edgeEnabled) });
   }
 
-  // Env-only selection, as in request-receipt-extraction: the file hash is not plumbed to
-  // the worker in Milestone A, so the default fixture applies when the variable is unset.
-  const fixture = resolveFakeFixtureKey({
-    fixtureEnv: Deno.env.get(RECEIPT_EXTRACTION_FIXTURE_ENV),
-    fileSha256: null,
-  });
-  if (fixture.status !== "ok") {
-    logFailure("configured fixture is unknown");
-    return json("unavailable", 503);
-  }
-
-  const provider = createFakeProviderForKey(
-    fixture.key,
-    resolveFakePendingMs(Deno.env.get(RECEIPT_EXTRACTION_FAKE_PENDING_MS_ENV)),
-  );
+  // Provider construction occurs only after worker state is read. The stored
+  // provider and model are the authority for selecting what may poll this attempt.
 
   // ---- 14. Read worker state, poll once, complete when terminal ---------------
   const ports: ExtractionPollPorts = {
@@ -322,10 +317,20 @@ async function handleRequest(request: Request): Promise<Response> {
       return {
         status: "ok",
         state: {
-          status: typeof stateRow.status === "string" ? stateRow.status : "",
-          claimToken: nonEmptyString(stateRow.worker_claim_token),
-          providerOperationId: nonEmptyString(stateRow.provider_operation_id),
-          startedAtMs: startedAt === null ? null : Date.parse(startedAt),
+          status:
+            typeof stateRow.status === "string"
+              ? stateRow.status
+              : "",
+          providerName: nonEmptyString(stateRow.provider),
+          providerModel: nonEmptyString(stateRow.provider_model),
+          claimToken:
+            nonEmptyString(stateRow.worker_claim_token),
+          providerOperationId:
+            nonEmptyString(stateRow.provider_operation_id),
+          startedAtMs:
+            startedAt === null
+              ? null
+              : Date.parse(startedAt),
         },
       };
     },
@@ -369,7 +374,25 @@ async function handleRequest(request: Request): Promise<Response> {
       return { status: "ok" };
     },
 
-    provider,
+    resolveProvider({ providerName, providerModel }) {
+      return resolveReceiptExtractionPollProvider({
+        mode: edgeMode,
+        fakeFixture:
+          Deno.env.get(RECEIPT_EXTRACTION_FIXTURE_ENV),
+        fakePendingMs:
+          Deno.env.get(
+            RECEIPT_EXTRACTION_FAKE_PENDING_MS_ENV,
+          ),
+        azureEndpoint:
+          Deno.env.get(AZURE_DI_ENDPOINT_ENV),
+        azureKey:
+          Deno.env.get(AZURE_DI_KEY_ENV),
+        azureApiVersion:
+          Deno.env.get(AZURE_DI_API_VERSION_ENV),
+        providerName,
+        providerModel,
+      });
+    },
     nowMs: Date.now(),
   };
 
@@ -383,10 +406,10 @@ async function handleRequest(request: Request): Promise<Response> {
       return json("unavailable", 503);
     }
     if (finalRow === null) return json("not-found", 404);
-    return json("ok", 200, { extraction: safeExtractionPayload(finalRow, edgeFakeEnabled) });
+    return json("ok", 200, { extraction: safeExtractionPayload(finalRow, edgeEnabled) });
   }
 
-  return json("ok", 200, { extraction: safeExtractionPayload(row, edgeFakeEnabled) });
+  return json("ok", 200, { extraction: safeExtractionPayload(row, edgeEnabled) });
 }
 
 Deno.serve(async (request: Request): Promise<Response> => {
