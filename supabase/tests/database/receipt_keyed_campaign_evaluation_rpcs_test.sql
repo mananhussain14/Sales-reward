@@ -419,16 +419,17 @@ select is((select count(*)::integer from supabase_migrations.schema_migrations
            where version = '20260827090000'), 1,
   'A1. Migration 69 is recorded exactly once');
 
--- SUPERSEDED IN PART BY PHASE 2B: Migrations 70 (20260828090000) and
--- 71 (20260828210000) were created by approval and are named exactly. Migration 70 adds
--- Sales Staff earnings reads. Migration 71 adds Azure receipt-extraction readiness.
--- Neither touches this migration's wrappers. The rule this assertion still
--- owns is that nothing beyond them has been applied.
+-- SUPERSEDED IN PART BY PHASE 2B: Migrations 70 (20260828090000),
+-- 71 (20260828210000) and 72 (20260829090000) were created by approval and are named
+-- exactly. Migration 70 adds Sales Staff earnings reads. Migration 71 adds Azure
+-- receipt-extraction readiness. Migration 72 corrects retry eligibility in one
+-- receipt-extraction read. None touches this migration's wrappers. The rule this
+-- assertion still owns is that nothing beyond them has been applied.
 select is((select coalesce(string_agg(version, ',' order by version), 'NONE')
            from supabase_migrations.schema_migrations
            where version > '20260827090000'),
-  '20260828090000,20260828210000',
-  'A2. the only migrations after 20260827090000 are approved Migrations 70 and 71');
+  '20260828090000,20260828210000,20260829090000',
+  'A2. the only migrations after 20260827090000 are approved Migrations 70, 71 and 72');
 
 select has_function('public', 'evaluate_receipt_campaigns', array['uuid'],
   'A3. the execution wrapper exists with the exact signature');
