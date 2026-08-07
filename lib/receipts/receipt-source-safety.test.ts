@@ -126,8 +126,15 @@ describe("no path, bucket, hash or error detail is ever logged", () => {
     // THE THIRD ENTRY is the extraction request module, added when the web application
     // began initiating a reading. It performs one outbound call and reports it under the
     // same discipline as the other two: a fixed category, never a body, a token or an id.
+    //
+    // THE FOURTH is the extraction POLL module, added when the web began following a
+    // reading to its conclusion. It is called repeatedly — once every three seconds while
+    // an attempt is open — which makes the discipline matter more here than anywhere else
+    // in the feature: a log line carrying an id or a body would be written forty times per
+    // receipt. It reports a fixed category and nothing else.
     const IO_MODULES = [
       "lib/receipts/receipt-data.ts",
+      "lib/receipts/receipt-extraction-poll-request.ts",
       "lib/receipts/receipt-extraction-request.ts",
       "lib/receipts/receipt-submissions.ts",
     ];

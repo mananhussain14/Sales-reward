@@ -13,14 +13,28 @@ import type { ReceiptFileRejection } from "@/lib/receipts/receipt-file";
  * endpoint — so exporting a plain object from there is a runtime error.
  *
  * THE BROWSER-VISIBLE SURFACE IS ONLY WHAT IS HERE: two field messages, one form
- * message, one success message, and the shop the person had selected (echoed back so a
- * rejected submission does not lose their choice).
+ * message, one success message, the shop the person had selected (echoed back so a
+ * rejected submission does not lose their choice), and — on the one branch where a
+ * reading is actually underway — the id of the receipt just submitted.
  *
- * There is NO submission id, storage bucket, object path, file hash, profile id,
- * membership id, organization id, or provider detail — none is produced by the action,
- * because the submission service returns a status and nothing else. The file itself is
- * never echoed back either: a rejected submission asks for it again, which is both
- * safer and what the browser's file input does anyway.
+ * There is NO storage bucket, object path, file hash, profile id, membership id,
+ * organization id, or provider detail. The file itself is never echoed back either: a
+ * rejected submission asks for it again, which is both safer and what the browser's file
+ * input does anyway.
+ *
+ * WHY THE SUBMISSION ID IS NOW HERE, WHEN IT DELIBERATELY WAS NOT BEFORE. The web had no
+ * use for one until this milestone: it asked for a reading and stopped. But
+ * `get-receipt-extraction` is keyed on a submission id, and calling that function is what
+ * finalizes a PROCESSING attempt into SUCCEEDED or FAILED — so the browser must hold the
+ * id of the receipt it just submitted in order to see the reading through.
+ *
+ * The widening grants nothing. Every endpoint that accepts the id re-derives the caller
+ * from auth.uid(), and assert_my_receipt_extraction_access requires
+ * `submitted_by_profile_id = auth.uid()`; naming somebody else's receipt returns
+ * `not-found`, byte-identically to naming one that does not exist. It is set on the
+ * `submitted` branch ALONE — where an attempt is open or already exists — and stays null
+ * for a duplicate, a refusal, an upload failure, a skipped image and a reading that could
+ * not be started, because in every one of those there is nothing to poll.
  *
  * WHY THE MESSAGES MOVED HERE. The size and type rules are now checked in TWO places:
  * once in the browser before a request is sent, and once again on the server from the
@@ -43,6 +57,11 @@ export type SubmitReceiptState = {
   successMessage: string | null;
   /** The shop id the operator had chosen, so the selector can be restored. */
   selectedShopId: string;
+  /**
+   * The receipt whose reading the panel should follow, or null when there is nothing to
+   * follow. Non-null on the `submitted` branch alone — see this module's header.
+   */
+  extractionSubmissionId: string | null;
 };
 
 export const INITIAL_SUBMIT_RECEIPT_STATE: SubmitReceiptState = {
@@ -50,6 +69,7 @@ export const INITIAL_SUBMIT_RECEIPT_STATE: SubmitReceiptState = {
   formError: null,
   successMessage: null,
   selectedShopId: "",
+  extractionSubmissionId: null,
 };
 
 /**
