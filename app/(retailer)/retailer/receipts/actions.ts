@@ -79,6 +79,9 @@ function fail(
     formError: null,
     successMessage: null,
     selectedShopId,
+    // A failure has nothing to poll: no attempt was created on any branch that reaches
+    // here, so the panel must not appear.
+    extractionSubmissionId: null,
     ...state,
   };
 }
@@ -251,6 +254,12 @@ export async function submitReceiptAction(
         successMessage: `Receipt submitted from ${validation.file.fileName}.`,
         // Cleared so the next submission starts from a blank form.
         selectedShopId: "",
+        // THE ONLY BRANCH THAT CARRIES AN ID. `submitted` is precisely the case where
+        // request_receipt_extraction reported an attempt open or already existing, so it
+        // is the only case where there is a reading to follow. The id comes from the
+        // reservation — never from the form — and is re-authorized on every use.
+        extractionSubmissionId:
+          submission.status === "submitted" ? submission.submissionId : null,
       };
     // BOTH OF THE NEXT TWO ARE SUCCESSES. The receipt is stored in each of them, so
     // neither may be reported as a failure and neither clears anything the person would
@@ -262,6 +271,10 @@ export async function submitReceiptAction(
         formError: null,
         successMessage: RECEIPT_EXTRACTION_NOT_STARTED_MESSAGE,
         selectedShopId: "",
+        // No attempt was created, so there is nothing to poll. Showing a progress panel
+        // here would tell a person their receipt is being read when it is not — the exact
+        // misstatement RECEIPT_EXTRACTION_NOT_STARTED_MESSAGE exists to prevent.
+        extractionSubmissionId: null,
       };
     case "submitted-extraction-skipped":
       return {
@@ -269,6 +282,8 @@ export async function submitReceiptAction(
         formError: null,
         successMessage: RECEIPT_EXTRACTION_UNSUPPORTED_IMAGE_MESSAGE,
         selectedShopId: "",
+        // Nothing was asked of the reader, so there is nothing to follow.
+        extractionSubmissionId: null,
       };
     case "duplicate":
       return fail(

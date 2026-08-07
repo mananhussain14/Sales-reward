@@ -17,6 +17,7 @@ import { receiptSelectionRejection } from "@/lib/receipts/receipt-upload-preflig
 import { runGuardedSubmission } from "@/lib/receipts/receipt-submission-attempt";
 import { MAX_RECEIPT_FILE_MEGABYTES } from "@/lib/uploads/upload-policy";
 import type { AssignedReceiptShop } from "@/lib/receipts/receipt-normalization";
+import { ReceiptExtractionPanel } from "@/app/(retailer)/retailer/receipts/receipt-extraction-panel";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Label, selectClasses, SelectChevron } from "@/components/ui/field";
@@ -124,6 +125,8 @@ async function runReceiptSubmission(
       formError: null,
       successMessage: null,
       selectedShopId,
+      // Nothing was sent, so nothing was stored and there is no reading to follow.
+      extractionSubmissionId: null,
     };
   }
 
@@ -146,6 +149,8 @@ async function runReceiptSubmission(
       formError: RECEIPT_TRANSPORT_ERROR,
       successMessage: null,
       selectedShopId,
+      // The request never reached the action, so nothing was reserved, uploaded or read.
+      extractionSubmissionId: null,
     },
   });
 }
@@ -267,6 +272,18 @@ export function SubmitReceiptForm({ shops }: SubmitReceiptFormProps) {
             </p>
           </div>
         </div>
+      )}
+
+      {/* THE READING, FOLLOWED TO A CONCLUSION.
+          Rendered only when the action reported an attempt is actually open — the
+          `submitted` branch alone sets this id. Keying on it remounts the panel for each
+          new receipt, so a second submission starts a fresh run rather than inheriting the
+          previous receipt's state. */}
+      {state.extractionSubmissionId && (
+        <ReceiptExtractionPanel
+          key={state.extractionSubmissionId}
+          submissionId={state.extractionSubmissionId}
+        />
       )}
 
       <div className="space-y-2">

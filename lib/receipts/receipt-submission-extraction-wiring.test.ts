@@ -36,6 +36,8 @@ const STATE = "app/(retailer)/retailer/receipts/submit-receipt-state.ts";
 const FORM = "app/(retailer)/retailer/receipts/submit-receipt-form.tsx";
 const PAGE = "app/(retailer)/retailer/receipts/page.tsx";
 const REQUEST_MODULE = "lib/receipts/receipt-extraction-request.ts";
+/** The web's one caller of the read function, added by the polling milestone. */
+const POLL_MODULE = "lib/receipts/receipt-extraction-poll-request.ts";
 const FLOW = "lib/receipts/receipt-submission-extraction-flow.ts";
 const ELIGIBILITY = "lib/receipts/receipt-extraction-eligibility.ts";
 const SUBMISSION_FLOW = "lib/receipts/receipt-submission-flow.ts";
@@ -123,15 +125,23 @@ describe("2. the exact function name, declared once", () => {
     assert.match(CONFIG, new RegExp(`\\[functions\\.${NAME}\\][\\s\\S]{0,200}?enabled = true`));
   });
 
-  test("the polling function is NOT called from the web — see the follow-up note", () => {
-    // Deliberate scope: this milestone initiates a reading and does not watch it. If a
-    // later milestone adds polling, this assertion is the place that says so out loud.
-    for (const path of WEB_SOURCES) {
-      assert.ok(
-        !code(path).includes("get-receipt-extraction"),
-        `${path} polls, which this milestone does not ship`,
-      );
-    }
+  test("the polling function IS now called from the web — the follow-up landed", () => {
+    // THIS ASSERTION USED TO SAY THE OPPOSITE, and said so deliberately: the milestone
+    // that shipped the request left the reading unwatched and named this line as the place
+    // that would announce the change. This is that change.
+    //
+    // It matters more than a scope note. `get-receipt-extraction` is not a passive status
+    // read — calling it is what polls the provider for a PROCESSING attempt and records
+    // the terminal row. While nothing on the web called it, a web-submitted receipt could
+    // reach PROCESSING and stay there until the reaper marked it WORKER_ABANDONED. So the
+    // assertion is inverted rather than deleted: the web MUST hold a caller.
+    const holders = WEB_SOURCES.filter((path) => code(path).includes("get-receipt-extraction"));
+
+    assert.deepEqual(
+      holders,
+      [POLL_MODULE],
+      "exactly one web module may name the polling function",
+    );
   });
 });
 
@@ -244,44 +254,67 @@ describe("5. the canonical id, and only the canonical id", () => {
   });
 });
 
-describe("6. no submission id reaches the browser", () => {
-  test("the browser-visible state has no field an id could occupy", () => {
+describe("6. the submission id reaches the browser on ONE branch, and carries nothing with it", () => {
+  // THIS SECTION USED TO ASSERT THAT NO ID REACHED THE BROWSER AT ALL, which was the right
+  // rule while the web had no use for one: it asked for a reading and stopped. Polling
+  // changes the requirement, because `get-receipt-extraction` is keyed on a submission id
+  // and calling it is what finalizes an attempt. The browser must hold the id of the
+  // receipt it just submitted or the reading is never completed by anyone.
+  //
+  // So the rule is NARROWED rather than dropped. What still must hold, and is asserted
+  // below: the id appears on the success branch alone, no other identifier or storage
+  // detail travels with it, and the id itself is never rendered as text.
+  //
+  // The widening grants nothing. assert_my_receipt_extraction_access requires
+  // `submitted_by_profile_id = auth.uid()`, so the only id useful to a person is one for a
+  // receipt they submitted; naming another returns `not-found`, byte-identically to naming
+  // one that does not exist.
+
+  test("the browser-visible state exposes the submission id and no other identifier", () => {
     const source = code(STATE);
-    for (const forbidden of ["submissionId", "submission_id", "extractionId"]) {
+    assert.ok(
+      source.includes("extractionSubmissionId"),
+      "the state must carry the id the panel polls with",
+    );
+    for (const forbidden of ["extractionId", "submission_id", "profileId", "organizationId"]) {
       assert.ok(!source.includes(forbidden), `SubmitReceiptState exposes ${forbidden}`);
     }
   });
 
-  test("the id is named in exactly one place, and it is not a returned value", () => {
-    // The action mentions `submissionId` once: destructuring the port's argument on its
-    // way to the request module. Every other use — a return, a state field, a template
-    // string, a log — would be a step toward the browser.
-    const mentions = code(ACTION)
-      .split("\n")
-      .filter((line) => line.includes("submissionId"));
-
-    assert.deepEqual(
-      mentions.map((line) => line.trim()),
-      ["{ requestExtraction: ({ submissionId }) => requestReceiptExtraction(submissionId) },"],
+  test("only the `submitted` branch carries a non-null id", () => {
+    const source = code(ACTION);
+    assert.match(
+      source,
+      /extractionSubmissionId:\s*\n?\s*submission\.status === "submitted" \? submission\.submissionId : null/,
+      "the id is not gated on a stored receipt with an open attempt",
     );
+    // Every other returned state pins it to null: a duplicate, a refusal, an upload
+    // failure, an unsupported image and a reading that could not start all have no
+    // attempt to follow, and a progress panel there would be a false statement.
+    const nulls = source.match(/extractionSubmissionId:\s*null/g) ?? [];
+    assert.ok(nulls.length >= 3, `expected at least 3 null branches, found ${nulls.length}`);
   });
 
-  test("no returned state names an id", () => {
+  test("no returned state carries a bucket, path or hash alongside it", () => {
     for (const block of code(ACTION).split("return {").slice(1)) {
       const literal = block.slice(0, block.indexOf("};"));
-      assert.ok(!literal.includes("submissionId"), literal);
-      assert.ok(!literal.includes("submission_id"), literal);
+      for (const forbidden of ["objectPath", "bucket", "sha256", "storage", "submission_id"]) {
+        assert.ok(!literal.includes(forbidden), `${forbidden} in: ${literal}`);
+      }
     }
   });
 
-  test("neither the form nor the page renders an id", () => {
-    for (const path of [FORM, PAGE]) {
-      assert.ok(!code(path).includes("submission_id"), `${path} renders a raw id`);
-    }
-    // The page keys its history rows on `submissionId`, which is a React key and not
-    // rendered text. The form — the Client Component that receives the action's state —
-    // must not name it at all.
-    assert.ok(!code(FORM).includes("submissionId"), "the form handles a submission id");
+  test("the form passes the id to the panel and never renders it as text", () => {
+    const source = code(FORM);
+    // Handed to a component as a prop and used as a React key — both structural uses.
+    assert.match(source, /submissionId=\{state\.extractionSubmissionId\}/);
+    assert.match(source, /key=\{state\.extractionSubmissionId\}/);
+    // Never interpolated into visible copy.
+    assert.ok(
+      !/\{state\.extractionSubmissionId\}\s*</.test(source),
+      "the form renders the raw id as text",
+    );
+    assert.ok(!code(PAGE).includes("submission_id"), "the page renders a raw id");
   });
 });
 
