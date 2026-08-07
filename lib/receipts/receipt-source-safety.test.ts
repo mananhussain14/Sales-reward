@@ -132,8 +132,14 @@ describe("no path, bucket, hash or error detail is ever logged", () => {
     // an attempt is open — which makes the discipline matter more here than anywhere else
     // in the feature: a log line carrying an id or a body would be written forty times per
     // receipt. It reports a fixed category and nothing else.
+    //
+    // THE FIFTH is the line-item reader, added when the web began displaying what was read.
+    // It is the one module here that handles the extracted VALUES themselves, so its log
+    // discipline is what stops a customer's purchase appearing in an operator log: it reports
+    // a fixed category, and for a malformed payload a FIELD NAME — never a field value.
     const IO_MODULES = [
       "lib/receipts/receipt-data.ts",
+      "lib/receipts/receipt-extraction-line-items.ts",
       "lib/receipts/receipt-extraction-poll-request.ts",
       "lib/receipts/receipt-extraction-request.ts",
       "lib/receipts/receipt-submissions.ts",
@@ -233,15 +239,42 @@ describe("client components stay client-safe", () => {
     }
   });
 
-  test("12. no hidden form field is introduced at all", () => {
-    // The form submits exactly two named values, `shopId` and `receipt`, both visible
-    // controls. There is no hidden field for a Retailer, profile, membership, bucket,
-    // path or status to ride in on.
+  test("12. the only hidden field is the shop, and only the shop", () => {
+    // The form submits exactly two named values, `shopId` and `receipt`. There is no hidden
+    // field for a Retailer, profile, membership, bucket, path or status to ride in on.
+    //
+    // `shopId` MAY be hidden, and is, for a staff member assigned to exactly one shop: with no
+    // choice to make there is no control to render, so the same value a <select> would have
+    // posted travels in a hidden input instead. That is a change to the FORM ENCODING and not to
+    // the trust model — the value is one of the two the form was always allowed to send, and
+    // supabase/tests/database/sales_staff_receipt_shop_authorization_test.sql proves the id is
+    // worth nothing on its own: reserve_receipt_submission re-derives the caller from auth.uid()
+    // and refuses every shop they are not actively assigned to.
+    //
+    // The assertion is on the NAME SET rather than on the absence of hidden inputs, because that
+    // is the property that actually matters: a hidden `retailerOrganizationId` must fail here
+    // even though a hidden `shopId` does not.
+    const ALLOWED_HIDDEN_NAMES = ["shopId"];
+
     for (const file of CLIENT_FILES) {
-      assert.ok(
-        !/type="hidden"/.test(file.source),
-        `${file.path} introduces a hidden field`,
-      );
+      const hidden = [
+        ...file.source.matchAll(/<input\b[^>]*type="hidden"[^>]*>/g),
+      ].map((match) => match[0]);
+
+      for (const field of hidden) {
+        const name = /name="([^"]*)"/.exec(field);
+        assert.ok(name !== null, `${file.path} has an unnamed hidden field: ${field}`);
+        assert.ok(
+          ALLOWED_HIDDEN_NAMES.includes(name[1]),
+          `${file.path} introduces a hidden ${name[1]} field`,
+        );
+        // And its value comes from component state, never from anything server-shaped.
+        assert.match(
+          field,
+          /value=\{selectedShopId\}/,
+          `${file.path} hidden field carries an unexpected value: ${field}`,
+        );
+      }
     }
   });
 });

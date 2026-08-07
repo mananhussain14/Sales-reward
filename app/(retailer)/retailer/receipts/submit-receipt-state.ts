@@ -148,6 +148,38 @@ export const RECEIPT_EXTRACTION_NOT_STARTED_MESSAGE =
 export const RECEIPT_EXTRACTION_UNSUPPORTED_IMAGE_MESSAGE =
   `Receipt submitted successfully. Automatic data extraction was not started because it needs a JPEG or PNG photo of ${MAX_EXTRACTION_INPUT_MEGABYTES} MB or smaller.`;
 
+/* ---------------------------------------------------------------------------
+ * The three shop states. Sentences only — the rules are in
+ * @/lib/receipts/receipt-shop-selection, and the authorization is in SQL.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * NO ACTIVE ASSIGNMENT. Worded so it cannot be mistaken for a permission problem: they ARE
+ * allowed to submit receipts, there is simply no shop to submit against until someone at
+ * their Retailer assigns them to one. No shop is fabricated to fill the gap.
+ */
+export const RECEIPT_NO_ACTIVE_SHOP_MESSAGE = "You are not assigned to an active shop.";
+
+/** What to do about it, said separately so the fact above stands on its own. */
+export const RECEIPT_NO_ACTIVE_SHOP_HINT =
+  "Ask someone at your Retailer to assign you to a shop, then come back to this page.";
+
+/** MORE THAN ONE ASSIGNMENT. The question is asked before the photograph is chosen. */
+export const RECEIPT_SHOP_CHOICE_HINT = "Select the shop where this sale happened.";
+
+/** Shown in place of the file picker until that question is answered. */
+export const RECEIPT_SHOP_FIRST_MESSAGE =
+  "Choose the shop above first, then add the receipt photo.";
+
+/**
+ * EXACTLY ONE ASSIGNMENT. The shop is context, not a question, so it is stated rather than
+ * offered — and stated in full, because a person submitting for the wrong shop is exactly what
+ * a silent automatic choice would cause.
+ */
+export function receiptFixedShopNotice(shopLabel: string): string {
+  return `Submitting for: ${shopLabel}`;
+}
+
 /**
  * One message per distinct, user-actionable file problem.
  *

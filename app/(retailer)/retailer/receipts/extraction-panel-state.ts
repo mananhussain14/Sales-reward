@@ -84,6 +84,37 @@ export const EXTRACTION_SUCCEEDED_TITLE = "We read your receipt";
 export const EXTRACTION_SUCCEEDED_BODY =
   "Check these details against the paper receipt. A reviewer confirms them next.";
 
+/* ---------------------------------------------------------------------------
+ * C2. The items read from a SUCCEEDED receipt. READ-ONLY, and worded so.
+ * ------------------------------------------------------------------------- */
+
+export const EXTRACTION_ITEMS_TITLE = "Items read from this receipt";
+
+/** Shown while the one line-item read is in flight. It never implies a failure. */
+export const EXTRACTION_ITEMS_LOADING_MESSAGE = "Getting the items…";
+
+/**
+ * Shown when the line-item read could not be completed.
+ *
+ * It is careful about what it does NOT say: the receipt was read and stored, so this is a
+ * display problem rather than a reading problem, and the sentence may not be readable as
+ * "your receipt was lost". A lapsed session and a database fault share this sentence, because
+ * naming which one would tell any caller whether our database is healthy.
+ */
+export const EXTRACTION_ITEMS_UNAVAILABLE_MESSAGE =
+  "We couldn't show the items just now. Your receipt was read and saved.";
+
+/**
+ * The sentence that tells a person, plainly, that these values are not theirs to change.
+ *
+ * IT IS THE MILESTONE'S BOUNDARY STATED TO THE PERSON rather than only in a commit message.
+ * Matching items to Vendor products, excluding an unrelated line and everything downstream of
+ * that are later milestones; until they exist, the honest thing is to say what these values are
+ * for and who acts on them.
+ */
+export const EXTRACTION_ITEMS_READ_ONLY_NOTE =
+  "These are the reader's own values, kept exactly as read. Check them against the paper receipt.";
+
 /**
  * E. The foreground budget ran out while the attempt was still open.
  *

@@ -357,10 +357,18 @@ describe("7. one request, never a retry", () => {
 
 describe("8. no direct access to the reading's own tables", () => {
   test("no web module names receipt_extractions or its line items", () => {
+    // ANCHORED TO A POSITION A TABLE NAME COULD OCCUPY — a quoted or dotted identifier — rather
+    // than to the bare word. `list_my_receipt_extraction_line_items`, the authorized RPC the web
+    // reads a receipt's items through, CONTAINS the table's name as a substring; a plain
+    // `includes` would therefore fail on the very call that exists to avoid touching the table.
+    // What must never appear is the table itself as something addressable.
     for (const path of WEB_SOURCES) {
       const source = code(path);
       for (const table of ["receipt_extractions", "receipt_extraction_line_items"]) {
-        assert.ok(!source.includes(table), `${path} names ${table}`);
+        assert.ok(
+          !new RegExp(`["'\`.]${table}\\b`).test(source),
+          `${path} names ${table} as a table`,
+        );
       }
     }
   });
