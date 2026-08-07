@@ -425,11 +425,14 @@ select is((select count(*)::integer from supabase_migrations.schema_migrations
            where version = '20260828090000'), 1,
   'A1. Migration 70 is recorded exactly once');
 
+-- Migration 71 (20260828210000) adds Azure receipt-extraction readiness and Migration 72
+-- (20260829090000) corrects retry eligibility in one receipt-extraction read. Neither
+-- touches this migration's earnings reads.
 select is((select coalesce(string_agg(version, ',' order by version), 'NONE')
            from supabase_migrations.schema_migrations
            where version > '20260828090000'),
-  '20260828210000',
-  'A2. the only migration after 20260828090000 is approved Migration 71');
+  '20260828210000,20260829090000',
+  'A2. the only migrations after 20260828090000 are approved Migrations 71 and 72');
 
 select has_function('public', 'sales_staff_earnings_profile', array[]::text[],
   'A3. the context helper exists with the exact signature');

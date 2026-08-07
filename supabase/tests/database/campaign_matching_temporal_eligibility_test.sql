@@ -1895,15 +1895,18 @@ select ok((select bool_and(p.prosrc !~* '\mnow\s*\(|\mcurrent_timestamp\M|publis
   'Q16. neither reads now() or campaigns.published_version_id');
 
 -- SUPERSEDED IN PART BY PHASES 2A-C, 2A-D AND 2A-E: Migrations 67 (20260825090000),
--- 68 (20260826090000), 69 (20260827090000), 70 (20260828090000) and
--- 71 (20260828210000) were created by approval and are named exactly. Migration 71
--- adds Azure receipt-extraction readiness and no campaign matching function.
+-- 68 (20260826090000), 69 (20260827090000), 70 (20260828090000),
+-- 71 (20260828210000) and 72 (20260829090000) were created by approval and are named
+-- exactly. Migration 71 adds Azure receipt-extraction readiness and Migration 72
+-- corrects retry eligibility in one receipt-extraction read; neither adds or changes a
+-- campaign matching function.
 -- The rule this assertion still owns is that NOTHING beyond them has been applied.
 select is((select coalesce(string_agg(version, ',' order by version), 'NONE')
            from supabase_migrations.schema_migrations
            where version > '20260824090000'),
-  '20260825090000,20260826090000,20260827090000,20260828090000,20260828210000',
-  'Q17. the only migrations after 20260824090000 are approved Migrations 67 through 71');
+  '20260825090000,20260826090000,20260827090000,20260828090000,20260828210000,'
+  || '20260829090000',
+  'Q17. the only migrations after 20260824090000 are approved Migrations 67 through 72');
 
 select is((select count(*)::integer from supabase_migrations.schema_migrations
            where version = '20260824090000'), 1,
