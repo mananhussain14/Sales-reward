@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   pollReceiptExtractionAction,
+  readReceiptLineItemsAction,
   retryReceiptExtractionAction,
 } from "@/app/(retailer)/retailer/receipts/extraction-actions";
 import {
@@ -10,6 +11,8 @@ import {
   EXTRACTION_FAILED_FALLBACK_MESSAGE,
   EXTRACTION_FAILED_TITLE,
   EXTRACTION_FAILURE_MESSAGES,
+  EXTRACTION_ITEMS_LOADING_MESSAGE,
+  EXTRACTION_ITEMS_UNAVAILABLE_MESSAGE,
   EXTRACTION_OFFLINE_MESSAGE,
   EXTRACTION_PROCESSING_BODY,
   EXTRACTION_PROCESSING_TITLE,
@@ -24,9 +27,16 @@ import {
   EXTRACTION_SUCCEEDED_TITLE,
   type ExtractionView,
 } from "@/app/(retailer)/retailer/receipts/extraction-panel-state";
+import { ReceiptLineItems } from "@/app/(retailer)/retailer/receipts/receipt-line-items";
 import { runExtractionPollLoop } from "@/lib/receipts/receipt-extraction-poll-loop";
 import { shouldOfferRetry } from "@/lib/receipts/receipt-extraction-polling";
 import { formatMinorAmount } from "@/lib/receipts/receipt-extraction-display";
+import { loadLineItemsForStatus } from "@/lib/receipts/receipt-line-item-load";
+import {
+  describeLineItems,
+  lineItemsDetectedLabel,
+} from "@/lib/receipts/receipt-line-item-view";
+import type { LineItemView } from "@/lib/receipts/receipt-extraction-normalization";
 import { Button } from "@/components/ui/button";
 import { AlertTriangleIcon, CheckCircleIcon } from "@/components/ui/icons";
 
@@ -57,6 +67,17 @@ import { AlertTriangleIcon, CheckCircleIcon } from "@/components/ui/icons";
  * Strict Mode double-mount, a Check again, a retry — cannot report into state or schedule
  * another poll. Combined with the loop's initial yield, the discarded Strict Mode run is
  * cancelled before it ever issues a request.
+ *
+ * ============================================================================
+ * THE LINE-ITEM READ IS A SECOND, STRICTLY LATER REQUEST — NEVER A SECOND LOOP
+ * ============================================================================
+ * There is exactly one polling implementation here, and this milestone does not add another.
+ * The items are read by a SINGLE request that is issued only after the loop has already
+ * ENDED at SUCCEEDED, so the two can never be in flight together: the gate lives in
+ * @/lib/receipts/receipt-line-item-load, which returns `skipped` without calling anything for
+ * QUEUED, PROCESSING and FAILED. A second generation counter (`itemsRunRef`) protects that
+ * request the way `runRef` protects the loop, so a Strict Mode double-mount or a retry cannot
+ * leave two reads racing to set the same state.
  */
 
 type ReceiptExtractionPanelProps = {
@@ -76,9 +97,23 @@ type PanelPhase =
   /** No attempt for this receipt, or not ours. */
   | "gone";
 
+/**
+ * The line-item read, as the panel holds it.
+ *
+ * `idle` and `loading` are DISTINCT from `unavailable`: a read still in flight must not be
+ * rendered as one that failed, and a reading that has not settled yet has not been asked for
+ * at all.
+ */
+type LineItemsState =
+  | { readonly kind: "idle" }
+  | { readonly kind: "loading" }
+  | { readonly kind: "ok"; readonly items: readonly LineItemView[] }
+  | { readonly kind: "unavailable" };
+
 export function ReceiptExtractionPanel({ submissionId }: ReceiptExtractionPanelProps) {
   const [view, setView] = useState<ExtractionView | null>(null);
   const [phase, setPhase] = useState<PanelPhase>("watching");
+  const [lineItems, setLineItems] = useState<LineItemsState>({ kind: "idle" });
   /** True when the most recent poll could not reach the service. Cleared by the next one. */
   const [offline, setOffline] = useState(false);
   const [retrying, setRetrying] = useState(false);
@@ -93,6 +128,9 @@ export function ReceiptExtractionPanel({ submissionId }: ReceiptExtractionPanelP
 
   /** The generation counter. See the component header. */
   const runRef = useRef(0);
+
+  /** The same guarantee for the one line-item read. See the component header. */
+  const itemsRunRef = useRef(0);
 
   useEffect(() => {
     const myRun = runRef.current + 1;
@@ -145,6 +183,54 @@ export function ReceiptExtractionPanel({ submissionId }: ReceiptExtractionPanelP
     };
   }, [submissionId, resumeToken]);
 
+  /**
+   * The status the loop SETTLED on, or null while it is still running.
+   *
+   * Derived rather than stored, and deliberately the only input the effect below keys on: it
+   * changes exactly once per reading, so the read cannot be issued twice for one settlement,
+   * and it is null for every open attempt, so nothing is issued while the loop is polling.
+   */
+  const settledStatus = phase === "settled" ? view?.status ?? null : null;
+
+  useEffect(() => {
+    // A reading that has not settled asks for nothing. FAILED settles too, and the gate in the
+    // pure module answers `skipped` for it — there are no line items on a failed attempt.
+    if (settledStatus === null) return;
+
+    const myRun = itemsRunRef.current + 1;
+    itemsRunRef.current = myRun;
+
+    let cancelled = false;
+    const isCancelled = () => cancelled || itemsRunRef.current !== myRun;
+
+    void (async () => {
+      const outcome = await loadLineItemsForStatus(settledStatus, {
+        read: () => readReceiptLineItemsAction(submissionId),
+      });
+
+      // Checked after the await: this panel may have been superseded or unmounted while the
+      // request was in flight, and reporting now would update a dead tree.
+      if (isCancelled()) return;
+
+      if (outcome.status === "skipped") {
+        setLineItems({ kind: "idle" });
+        return;
+      }
+      if (outcome.status === "ok") {
+        setLineItems({ kind: "ok", items: outcome.lineItems });
+        return;
+      }
+      // A lapsed session and a fault look identical here on purpose. The panel does not sign
+      // the person out over a display read: the receipt is stored and was read, and the poll
+      // path is the one that owns the signed-out state.
+      setLineItems({ kind: "unavailable" });
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [settledStatus, submissionId, resumeToken]);
+
   const checkAgain = useCallback(() => {
     setOffline(false);
     setPhase("watching");
@@ -166,8 +252,9 @@ export function ReceiptExtractionPanel({ submissionId }: ReceiptExtractionPanelP
       const result = await retryReceiptExtractionAction(submissionId);
       if (result.status === "requested") {
         // A fresh attempt exists, so the previous FAILED view must not linger behind the
-        // progress state.
+        // progress state — nor may items read from an earlier attempt of this receipt.
         setView(null);
+        setLineItems({ kind: "idle" });
         setPhase("watching");
         setResumeToken((token) => token + 1);
         return;
@@ -190,10 +277,17 @@ export function ReceiptExtractionPanel({ submissionId }: ReceiptExtractionPanelP
   // says nothing at all rather than inventing a state.
   if (phase === "gone") return null;
 
-  const settledStatus = phase === "settled" ? view?.status ?? null : null;
-
   if (settledStatus === "SUCCEEDED" && view !== null) {
-    return <SucceededPanel view={view} />;
+    /* `loading` is DERIVED rather than stored: a succeeded reading whose items have not
+       arrived yet is, by definition, the one still in flight. Storing it would mean calling
+       setState synchronously from the effect above, which is a cascading render for a fact the
+       existing state already implies. */
+    return (
+      <SucceededPanel
+        view={view}
+        lineItems={lineItems.kind === "idle" ? { kind: "loading" } : lineItems}
+      />
+    );
   }
 
   if (settledStatus === "FAILED" && view !== null) {
@@ -274,7 +368,13 @@ function PanelShell({
   );
 }
 
-function SucceededPanel({ view }: { view: ExtractionView }) {
+function SucceededPanel({
+  view,
+  lineItems,
+}: {
+  view: ExtractionView;
+  lineItems: LineItemsState;
+}) {
   const rows: Array<{ label: string; value: string }> = [];
 
   if (view.merchantName.value) rows.push({ label: "Merchant", value: view.merchantName.value });
@@ -283,7 +383,10 @@ function SucceededPanel({ view }: { view: ExtractionView }) {
   if (view.transactionTime.value)
     rows.push({ label: "Time", value: view.transactionTime.value });
   if (view.documentNumber.value)
-    rows.push({ label: "Receipt no.", value: view.documentNumber.value });
+    // The reader's `document_number`, which is an INVOICE number as often as a receipt
+    // number. Labelling it "Receipt no." made a staff member holding an invoice doubt
+    // whether the value beside it was theirs.
+    rows.push({ label: "Invoice / receipt no.", value: view.documentNumber.value });
 
   const money = (minor: number | null) =>
     formatMinorAmount(minor, view.currencyCode.value, view.currencyMinorUnit);
@@ -318,12 +421,39 @@ function SucceededPanel({ view }: { view: ExtractionView }) {
         </p>
       )}
 
-      {view.lineItemCount > 0 && (
-        <p className="mt-3 text-xs text-slate-500">
-          {view.lineItemCount} item{view.lineItemCount === 1 ? "" : "s"} were read from this
-          receipt.
+      {/* THE ITEMS THEMSELVES, once the one authorized read has answered.
+          Every line the contract returned is rendered — the count beside the heading is
+          derived from that same array, so the number and the list cannot disagree. */}
+      {lineItems.kind === "ok" && lineItems.items.length > 0 && (
+        <ReceiptLineItems
+          items={describeLineItems(
+            lineItems.items,
+            view.currencyCode.value,
+            view.currencyMinorUnit,
+          )}
+        />
+      )}
+
+      {lineItems.kind === "loading" && view.lineItemCount > 0 && (
+        <p className="mt-3 text-xs text-slate-500">{EXTRACTION_ITEMS_LOADING_MESSAGE}</p>
+      )}
+
+      {lineItems.kind === "unavailable" && (
+        <p className="mt-3 text-xs text-slate-600">
+          {EXTRACTION_ITEMS_UNAVAILABLE_MESSAGE}
         </p>
       )}
+
+      {/* The stored count, for the two cases where the list itself is not on screen: the read
+          could not be completed, or it answered with fewer than the attempt recorded. It states
+          what the reader FOUND and never what the paper receipt contained. */}
+      {view.lineItemCount > 0 &&
+        (lineItems.kind === "unavailable" ||
+          (lineItems.kind === "ok" && lineItems.items.length === 0)) && (
+          <p className="mt-1 text-xs text-slate-500">
+            {lineItemsDetectedLabel(view.lineItemCount)}
+          </p>
+        )}
 
       {view.warningCodes.length > 0 && (
         // The codes themselves are NOT rendered — they are an internal vocabulary. Their

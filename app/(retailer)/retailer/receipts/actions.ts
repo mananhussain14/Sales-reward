@@ -251,7 +251,7 @@ export async function submitReceiptAction(
       return {
         fieldErrors: {},
         formError: null,
-        successMessage: `Receipt submitted from ${validation.file.fileName}.`,
+        successMessage: `Invoice / receipt submitted from ${validation.file.fileName}.`,
         // Cleared so the next submission starts from a blank form.
         selectedShopId: "",
         // THE ONLY BRANCH THAT CARRIES AN ID. `submitted` is precisely the case where

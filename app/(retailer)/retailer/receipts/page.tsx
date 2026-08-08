@@ -12,6 +12,10 @@ import {
 import { formatFileSize } from "@/lib/receipts/receipt-file";
 import { formatOwnerTimestamp } from "@/lib/retailers/owner-status-normalization";
 import { SubmitReceiptForm } from "@/app/(retailer)/retailer/receipts/submit-receipt-form";
+import {
+  RECEIPT_NO_ACTIVE_SHOP_HINT,
+  RECEIPT_NO_ACTIVE_SHOP_MESSAGE,
+} from "@/app/(retailer)/retailer/receipts/submit-receipt-state";
 import { SectionHeader } from "@/components/ui/page-header";
 import { ReceiptStepsStrip } from "@/components/sales-staff/receipt-steps";
 import {
@@ -28,7 +32,8 @@ import { InboxIcon, LocationIcon, ReceiptIcon } from "@/components/ui/icons";
 
 export const metadata: Metadata = {
   title: "Receipts · Retailer Portal",
-  description: "Submit customer receipts and review your own submission history.",
+  description:
+    "Submit customer invoices / receipts and review your own submission history.",
 };
 
 /**
@@ -125,11 +130,11 @@ export default async function RetailerReceiptsPage() {
             />
             <div className="min-w-0">
               <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
-                Add a receipt
+                Add an invoice / receipt
               </h1>
               <p className="mt-1 max-w-2xl text-sm text-slate-600">
-                Submit a customer receipt for one of your shops. Submitting sends it
-                for review; not every receipt qualifies.
+                Submit a customer invoice / receipt for one of your shops. Submitting
+                sends it for review; not every sale qualifies.
               </p>
             </div>
           </div>
@@ -143,7 +148,7 @@ export default async function RetailerReceiptsPage() {
       {/* ------------------------------------------------------------------ */}
       <section aria-labelledby="submit-heading" className="space-y-3">
         <SectionHeader
-          title={<span id="submit-heading">Submit a receipt</span>}
+          title={<span id="submit-heading">Submit an invoice / receipt</span>}
         />
 
         <div className={cardClasses("standard", "p-5 sm:p-6")}>
@@ -152,11 +157,15 @@ export default async function RetailerReceiptsPage() {
           ) : shops.length === 0 ? (
             /* Authorized, but not assigned to any active shop yet. Worded so it cannot
                be mistaken for a permission problem — they ARE allowed to submit, there
-               is simply nowhere to submit against until an owner assigns them. */
+               is simply nowhere to submit against until an owner assigns them.
+               THE FORM IS NOT RENDERED AT ALL on this branch, so there is no file input and no
+               Submit control to disable: the capability is absent rather than switched off. The
+               sentences are the same constants the form itself uses, so the two can never
+               disagree about what a person with no assignment is told. */
             <EmptyState
               icon={<LocationIcon className="h-6 w-6" />}
-              title="No shops assigned yet"
-              description="You’ll be able to submit receipts once someone at your Retailer assigns you to a shop."
+              title={RECEIPT_NO_ACTIVE_SHOP_MESSAGE}
+              description={RECEIPT_NO_ACTIVE_SHOP_HINT}
             />
           ) : (
             <SubmitReceiptForm shops={shops} />
@@ -178,8 +187,8 @@ export default async function RetailerReceiptsPage() {
           <EmptyState
             icon={<InboxIcon className="h-6 w-6" />}
             tone="indigo"
-            title="No receipts yet"
-            description="Receipts you submit will appear here, with their current status."
+            title="Nothing submitted yet"
+            description="Invoices and receipts you submit will appear here, with their current status."
           />
         ) : (
           <>
@@ -188,7 +197,7 @@ export default async function RetailerReceiptsPage() {
               <div className="overflow-x-auto">
                 <table className="min-w-full divide-y divide-slate-100">
                   <caption className="sr-only">
-                    Receipts you have submitted, newest first
+                    Invoices and receipts you have submitted, newest first
                   </caption>
                   <thead className="border-b border-slate-200 bg-slate-50">
                     <tr>

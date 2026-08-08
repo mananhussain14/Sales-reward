@@ -24,8 +24,8 @@ const STEPS = [
     detail: "Only shops you are currently assigned to are listed.",
   },
   {
-    title: "Add the receipt photo",
-    detail: "One clear image of the whole receipt.",
+    title: "Add the invoice / receipt",
+    detail: "One clear image of the whole invoice or receipt.",
   },
   {
     title: "Submit securely",
@@ -33,7 +33,7 @@ const STEPS = [
   },
   {
     title: "A reviewer verifies the sale",
-    detail: "Rewards are decided after that, and not every receipt qualifies.",
+    detail: "Rewards are decided after that, and not every sale qualifies.",
   },
 ];
 

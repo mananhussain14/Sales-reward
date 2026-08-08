@@ -70,19 +70,50 @@ export type ExtractionRetryResult =
  * ------------------------------------------------------------------------- */
 
 /** A. Preparing — the attempt exists and no worker has picked it up yet. */
-export const EXTRACTION_QUEUED_TITLE = "Preparing to read your receipt";
+export const EXTRACTION_QUEUED_TITLE = "Preparing to read your invoice / receipt";
 export const EXTRACTION_QUEUED_BODY =
   "This usually takes a few seconds. You can stay on this page.";
 
 /** B. Reading — a worker holds the attempt and the provider is working. */
-export const EXTRACTION_PROCESSING_TITLE = "Reading your receipt";
+export const EXTRACTION_PROCESSING_TITLE = "Reading your invoice / receipt";
 export const EXTRACTION_PROCESSING_BODY =
   "We're picking out the merchant, date and totals.";
 
 /** C. Succeeded. */
-export const EXTRACTION_SUCCEEDED_TITLE = "We read your receipt";
+export const EXTRACTION_SUCCEEDED_TITLE = "We read your invoice / receipt";
 export const EXTRACTION_SUCCEEDED_BODY =
-  "Check these details against the paper receipt. A reviewer confirms them next.";
+  "Check these details against the paper invoice / receipt. A reviewer confirms them next.";
+
+/* ---------------------------------------------------------------------------
+ * C2. The items read from a SUCCEEDED receipt. READ-ONLY, and worded so.
+ * ------------------------------------------------------------------------- */
+
+export const EXTRACTION_ITEMS_TITLE = "Items read from this invoice / receipt";
+
+/** Shown while the one line-item read is in flight. It never implies a failure. */
+export const EXTRACTION_ITEMS_LOADING_MESSAGE = "Getting the items…";
+
+/**
+ * Shown when the line-item read could not be completed.
+ *
+ * It is careful about what it does NOT say: the receipt was read and stored, so this is a
+ * display problem rather than a reading problem, and the sentence may not be readable as
+ * "your receipt was lost". A lapsed session and a database fault share this sentence, because
+ * naming which one would tell any caller whether our database is healthy.
+ */
+export const EXTRACTION_ITEMS_UNAVAILABLE_MESSAGE =
+  "We couldn't show the items just now. Your invoice / receipt was read and saved.";
+
+/**
+ * The sentence that tells a person, plainly, that these values are not theirs to change.
+ *
+ * IT IS THE MILESTONE'S BOUNDARY STATED TO THE PERSON rather than only in a commit message.
+ * Matching items to Vendor products, excluding an unrelated line and everything downstream of
+ * that are later milestones; until they exist, the honest thing is to say what these values are
+ * for and who acts on them.
+ */
+export const EXTRACTION_ITEMS_READ_ONLY_NOTE =
+  "These are the reader's own values, kept exactly as read. Check them against the paper invoice / receipt.";
 
 /**
  * E. The foreground budget ran out while the attempt was still open.
@@ -93,7 +124,7 @@ export const EXTRACTION_SUCCEEDED_BODY =
  */
 export const EXTRACTION_STILL_WORKING_TITLE = "Still being read";
 export const EXTRACTION_STILL_WORKING_BODY =
-  "This one is taking longer than usual. Your receipt is safe and the reading is still underway.";
+  "This one is taking longer than usual. Your invoice / receipt is safe and the reading is still underway.";
 export const EXTRACTION_CHECK_AGAIN_LABEL = "Check again";
 
 /** The retry control. Shown only when the backend says `retry_allowed`. */
@@ -109,18 +140,18 @@ export const EXTRACTION_RETRY_LABEL = "Try reading it again";
  */
 export const EXTRACTION_FAILURE_MESSAGES = {
   IMAGE_NOT_A_RECEIPT:
-    "That photo didn't look like a receipt, so we couldn't read it. A clear photo of the whole receipt works best.",
+    "That image didn't look like an invoice or receipt, so we couldn't read it. A clear image of the whole document works best.",
   IMAGE_UNUSABLE:
-    "We couldn't use that photo. A sharper, well-lit photo of the whole receipt works best.",
+    "We couldn't use that image. A sharper, well-lit image of the whole invoice / receipt works best.",
   EXTRACTION_UNAVAILABLE:
-    "We couldn't read this receipt automatically. Your receipt is submitted, and a reviewer will enter the details.",
+    "We couldn't read this invoice / receipt automatically. It is submitted, and a reviewer will enter the details.",
 } as const satisfies Record<ClientExtractionFailureCode, string>;
 
 /** Shown for a FAILED attempt whose code did not arrive. Same advice, no cause claimed. */
 export const EXTRACTION_FAILED_FALLBACK_MESSAGE =
   EXTRACTION_FAILURE_MESSAGES.EXTRACTION_UNAVAILABLE;
 
-export const EXTRACTION_FAILED_TITLE = "We couldn't read this receipt";
+export const EXTRACTION_FAILED_TITLE = "We couldn't read this invoice / receipt";
 
 /**
  * Shown when the session lapsed mid-poll.
@@ -129,7 +160,7 @@ export const EXTRACTION_FAILED_TITLE = "We couldn't read this receipt";
  * any of this ran.
  */
 export const EXTRACTION_SIGNED_OUT_MESSAGE =
-  "Your session ended, so we stopped checking. Your receipt is submitted — sign in again to see the result.";
+  "Your session ended, so we stopped checking. Your invoice / receipt is submitted — sign in again to see the result.";
 
 /**
  * Shown when polling cannot reach the service at all and the budget is spent.
@@ -137,7 +168,7 @@ export const EXTRACTION_SIGNED_OUT_MESSAGE =
  * A connection problem, not a reading problem, and worded so it cannot be read as one.
  */
 export const EXTRACTION_OFFLINE_MESSAGE =
-  "We couldn't check the reading just now. Your receipt is submitted — check again in a moment.";
+  "We couldn't check the reading just now. Your invoice / receipt is submitted — check again in a moment.";
 
 /**
  * The remaining gap this milestone does NOT close, stated to the person rather than only

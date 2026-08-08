@@ -47,6 +47,20 @@ import type { ReceiptFileRejection } from "@/lib/receipts/receipt-file";
  * NOTHING HERE IS VALIDATION AND NOTHING HERE IS AUTHORIZATION. These are sentences.
  * The rules they describe are enforced by @/lib/receipts/receipt-file from the bytes on
  * the server, and again by the database.
+ *
+ * ============================================================================
+ * "INVOICE / RECEIPT" IS THE USER-FACING NAME FOR THE UPLOADED DOCUMENT
+ * ============================================================================
+ * SalesReward accepts an itemized sales invoice OR a point-of-sale receipt, and a Sales
+ * Staff member holding an invoice should not have to guess whether this screen is for them.
+ * So every sentence a person reads names both.
+ *
+ * THE INTERNAL VOCABULARY IS DELIBERATELY UNTOUCHED. The constants in this file are still
+ * `RECEIPT_*`, the state type is still `SubmitReceiptState`, the form field is still
+ * `receipt`, the route is still /retailer/receipts, and the tables, RPCs and Edge Functions
+ * are still `receipt_*`. Renaming any of those would be a schema and contract change wearing
+ * a copy change's clothes — and every one of them is proved unchanged by
+ * lib/receipts/receipt-document-terminology.test.ts.
  */
 export type SubmitReceiptState = {
   fieldErrors: {
@@ -82,7 +96,7 @@ export const INITIAL_SUBMIT_RECEIPT_STATE: SubmitReceiptState = {
  * estate, and distinguishing them here would reintroduce exactly that disclosure.
  */
 export const RECEIPT_GENERIC_ERROR =
-  "We couldn't submit that receipt. Check the details and try again.";
+  "We couldn't submit that invoice / receipt. Check the details and try again.";
 
 /**
  * Shown when the reservation succeeded but the file did not reach storage.
@@ -92,11 +106,11 @@ export const RECEIPT_GENERIC_ERROR =
  * retrying the same photo is the right next step.
  */
 export const RECEIPT_UPLOAD_FAILED_ERROR =
-  "Your receipt could not be uploaded. Please check your connection and try again.";
+  "Your invoice / receipt could not be uploaded. Please check your connection and try again.";
 
 /** Shown when this person already has a live submission of this exact file. */
 export const RECEIPT_DUPLICATE_ERROR =
-  "You've already submitted this receipt. Choose a different photo, or check your history below.";
+  "You've already submitted this invoice / receipt. Choose a different image, or check your history below.";
 
 /**
  * Shown when the submission never reached the Server Action, or reached it and the
@@ -113,7 +127,7 @@ export const RECEIPT_DUPLICATE_ERROR =
  * No status code, no framework name, no storage detail, and no stack appears in it.
  */
 export const RECEIPT_TRANSPORT_ERROR =
-  "We couldn't send that receipt. Nothing was submitted — please check your connection and try again.";
+  "We couldn't send that invoice / receipt. Nothing was submitted — please check your connection and try again.";
 
 /**
  * THE PARTIAL SUCCESS: the receipt is stored, and the automatic reading did not begin.
@@ -132,7 +146,7 @@ export const RECEIPT_TRANSPORT_ERROR =
  * backend text appears in it — the request module returns a plain status and nothing else.
  */
 export const RECEIPT_EXTRACTION_NOT_STARTED_MESSAGE =
-  "Receipt submitted successfully, but automatic data extraction could not be started.";
+  "Invoice / receipt submitted successfully, but automatic data extraction could not be started.";
 
 /**
  * The same partial success, for an image the reader does not accept.
@@ -146,7 +160,44 @@ export const RECEIPT_EXTRACTION_NOT_STARTED_MESSAGE =
  * the Server Action actually consults, so the sentence cannot drift from the rule.
  */
 export const RECEIPT_EXTRACTION_UNSUPPORTED_IMAGE_MESSAGE =
-  `Receipt submitted successfully. Automatic data extraction was not started because it needs a JPEG or PNG photo of ${MAX_EXTRACTION_INPUT_MEGABYTES} MB or smaller.`;
+  `Invoice / receipt submitted successfully. Automatic data extraction was not started because it needs a JPEG or PNG image of ${MAX_EXTRACTION_INPUT_MEGABYTES} MB or smaller.`;
+
+/* ---------------------------------------------------------------------------
+ * The three shop states. Sentences only — the rules are in
+ * @/lib/receipts/receipt-shop-selection, and the authorization is in SQL.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * NO ACTIVE ASSIGNMENT. Worded so it cannot be mistaken for a permission problem: they ARE
+ * allowed to submit receipts, there is simply no shop to submit against until someone at
+ * their Retailer assigns them to one. No shop is fabricated to fill the gap.
+ */
+export const RECEIPT_NO_ACTIVE_SHOP_MESSAGE = "You are not assigned to an active shop.";
+
+/** What to do about it, said separately so the fact above stands on its own. */
+export const RECEIPT_NO_ACTIVE_SHOP_HINT =
+  "Ask someone at your Retailer to assign you to a shop, then come back to this page.";
+
+/**
+ * MORE THAN ONE ASSIGNMENT. The question is asked before the document is chosen, and the
+ * sentence says so: it states the ORDER, not just the requirement, because the order is the
+ * part a person cannot infer from a disabled control.
+ */
+export const RECEIPT_SHOP_CHOICE_HINT =
+  "Select the shop where this sale happened before adding the invoice / receipt.";
+
+/** Shown in place of the file picker until that question is answered. */
+export const RECEIPT_SHOP_FIRST_MESSAGE =
+  "Select the shop above first, then add the invoice / receipt.";
+
+/**
+ * EXACTLY ONE ASSIGNMENT. The shop is context, not a question, so it is stated rather than
+ * offered — and stated in full, because a person submitting for the wrong shop is exactly what
+ * a silent automatic choice would cause.
+ */
+export function receiptFixedShopNotice(shopLabel: string): string {
+  return `Submitting for: ${shopLabel}`;
+}
 
 /**
  * One message per distinct, user-actionable file problem.
@@ -158,10 +209,10 @@ export const RECEIPT_EXTRACTION_UNSUPPORTED_IMAGE_MESSAGE =
  * derives from the bytes rather than from what the browser claimed.
  */
 export const RECEIPT_FILE_MESSAGES = {
-  missing: "Choose a receipt photo to upload.",
-  empty: "That file is empty. Choose a different photo.",
-  "too-large": `That file is too large. Receipts must be ${MAX_RECEIPT_FILE_MEGABYTES} MB or smaller.`,
-  "unsupported-type": "Receipts must be a JPEG, PNG or WebP image.",
+  missing: "Choose an invoice / receipt image to upload.",
+  empty: "That file is empty. Choose a different image.",
+  "too-large": `That file is too large. An invoice / receipt must be ${MAX_RECEIPT_FILE_MEGABYTES} MB or smaller.`,
+  "unsupported-type": "An invoice / receipt must be a JPEG, PNG or WebP image.",
   "invalid-name": "That file name could not be read. Rename the file and try again.",
-  "too-many-files": "Upload one receipt at a time.",
+  "too-many-files": "Upload one invoice / receipt at a time.",
 } as const satisfies Record<ReceiptFileRejection, string>;

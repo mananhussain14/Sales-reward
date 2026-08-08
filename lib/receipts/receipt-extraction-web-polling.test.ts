@@ -241,23 +241,36 @@ describe("4. polling cannot create an extraction attempt", () => {
   });
 });
 
-describe("5. both Server Actions re-establish their own footing", () => {
+describe("5. every Server Action re-establishes its own footing", () => {
+  /**
+   * How many actions this module exports. The two counts below are compared against THIS
+   * rather than against a literal, so adding an action without its guard fails here instead of
+   * requiring two numbers to be remembered.
+   */
+  function exportedActionCount(): number {
+    return (code(ACTIONS).match(/^export async function /gm) ?? []).length;
+  }
+
+  test("there are three: poll, retry, and the line-item read", () => {
+    assert.equal(exportedActionCount(), 3);
+  });
+
   test("each re-resolves portal access before doing anything", () => {
     const source = code(ACTIONS);
     assert.match(source, /getRetailerPortalAccess/);
-    // One shared gate, called from both actions.
+    // One shared gate, called from every action.
     const guards = source.match(/await refuseUnlessSubmitter\(\)/g) ?? [];
-    assert.equal(guards.length, 2);
+    assert.equal(guards.length, exportedActionCount());
   });
 
   test("only a submitter passes the gate", () => {
     assert.match(code(ACTIONS), /access\.kind !== "submitter"/);
   });
 
-  test("the submission id is validated as a UUID in both actions", () => {
+  test("the submission id is validated as a UUID in every action", () => {
     const source = code(ACTIONS);
     const checks = source.match(/UUID_PATTERN\.test/g) ?? [];
-    assert.equal(checks.length, 2);
+    assert.equal(checks.length, exportedActionCount());
   });
 
   test("no caller identity is accepted as a parameter", () => {

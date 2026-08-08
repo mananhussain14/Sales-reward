@@ -6,7 +6,12 @@ import { submitReceiptAction } from "@/app/(retailer)/retailer/receipts/actions"
 import {
   INITIAL_SUBMIT_RECEIPT_STATE,
   RECEIPT_FILE_MESSAGES,
+  RECEIPT_NO_ACTIVE_SHOP_HINT,
+  RECEIPT_NO_ACTIVE_SHOP_MESSAGE,
+  RECEIPT_SHOP_CHOICE_HINT,
+  RECEIPT_SHOP_FIRST_MESSAGE,
   RECEIPT_TRANSPORT_ERROR,
+  receiptFixedShopNotice,
   type SubmitReceiptState,
 } from "@/app/(retailer)/retailer/receipts/submit-receipt-state";
 import {
@@ -15,13 +20,24 @@ import {
 } from "@/lib/receipts/receipt-file";
 import { receiptSelectionRejection } from "@/lib/receipts/receipt-upload-preflight";
 import { runGuardedSubmission } from "@/lib/receipts/receipt-submission-attempt";
+import {
+  initialSelectedShopId,
+  receiptSelectionGate,
+  receiptShopLabel,
+  reconcileSelectedShopId,
+} from "@/lib/receipts/receipt-shop-selection";
 import { MAX_RECEIPT_FILE_MEGABYTES } from "@/lib/uploads/upload-policy";
 import type { AssignedReceiptShop } from "@/lib/receipts/receipt-normalization";
 import { ReceiptExtractionPanel } from "@/app/(retailer)/retailer/receipts/receipt-extraction-panel";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Label, selectClasses, SelectChevron } from "@/components/ui/field";
-import { CheckCircleIcon, UploadIcon, XIcon } from "@/components/ui/icons";
+import {
+  CheckCircleIcon,
+  LocationIcon,
+  UploadIcon,
+  XIcon,
+} from "@/components/ui/icons";
 
 /**
  * The receipt submission form.
@@ -84,6 +100,23 @@ import { CheckCircleIcon, UploadIcon, XIcon } from "@/components/ui/icons";
  *    relatives — is re-thrown untouched and reaches the router; only a genuine
  *    operational failure becomes RECEIPT_TRANSPORT_ERROR. No digest, status code or
  *    message is read to make that decision.
+ *
+ * 3. IT ASKS FOR THE SHOP FIRST, WHICH IS WHY A REFUSAL NO LONGER COSTS A PHOTOGRAPH.
+ *    A browser cannot repopulate a file input from the server, so this form used to clear the
+ *    picker after EVERY attempt — including a refused one. A person could therefore choose a
+ *    photograph, submit without a shop, be told to choose a shop, and find their photograph
+ *    gone. Two changes remove that, and the ORDER of them matters:
+ *
+ *      * The picker is not usable until the shop is settled (immediately, when there is only
+ *        one assigned shop; after the person chooses, when there are several). So the refusal
+ *        that discarded the photograph is now unreachable through the form.
+ *      * The picker is cleared on SUCCESS ALONE. A refused submission keeps the file that is
+ *        still sitting in the native input, so what is on screen is exactly what a second
+ *        click would send. Changing the shop selection clears nothing at all.
+ *
+ *    Neither is validation. The Server Action still re-reads the assigned-shop set for the
+ *    authenticated caller and refuses an id outside it, and reserve_receipt_submission proves
+ *    the whole chain again in SQL from auth.uid().
  */
 
 type SubmitReceiptFormProps = {
@@ -166,6 +199,31 @@ export function SubmitReceiptForm({ shops }: SubmitReceiptFormProps) {
   const [chosen, setChosen] = useState<{ name: string; size: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  /**
+   * The shop this submission is for.
+   *
+   * CLIENT STATE, because the file picker's availability depends on it and a `defaultValue`
+   * cannot be read during render. It starts on the single assigned shop when there is exactly
+   * one, and EMPTY otherwise — see @/lib/receipts/receipt-shop-selection, which owns that rule
+   * and explains why no default is invented for a person with several shops.
+   *
+   * It is not authorization and it is not the shop the server uses. The value posted from here
+   * is re-checked against a fresh read of the caller's assigned set in the Server Action, and
+   * again in SQL by reserve_receipt_submission.
+   */
+  const [heldShopId, setHeldShopId] = useState(() => initialSelectedShopId(shops));
+
+  /**
+   * The shop the form ACTS on.
+   *
+   * DERIVED FROM THE HELD VALUE AND THE CURRENT LIST, rather than read straight out of state,
+   * because the list can change under a form that is already on screen: an owner may withdraw an
+   * assignment or close a shop while somebody is choosing a photograph. Deriving means a
+   * selection that is no longer assigned corrects itself during render — no effect, no cascading
+   * update, and nothing else touched, so a shop disappearing never discards a chosen file.
+   */
+  const selectedShopId = reconcileSelectedShopId(shops, heldShopId);
+
   /** Whether a file is currently being dragged over the drop target. Cosmetic only. */
   const [dragging, setDragging] = useState(false);
 
@@ -194,7 +252,6 @@ export function SubmitReceiptForm({ shops }: SubmitReceiptFormProps) {
   }, [chosen]);
 
   const maxMegabytes = MAX_RECEIPT_FILE_MEGABYTES;
-  const disabled = pending || shops.length === 0;
 
   // Immediate feedback on the CURRENT selection, evaluated by the same pure function the
   // submission path uses, so the person learns a photo is too big at the moment they
@@ -204,8 +261,32 @@ export function SubmitReceiptForm({ shops }: SubmitReceiptFormProps) {
   const selectionError =
     selectionRejection === null ? null : RECEIPT_FILE_MESSAGES[selectionRejection];
 
-  // The selection's own problem wins while a file is chosen; after a submission attempt
-  // the picker is cleared and whatever the server said is what remains on screen.
+  /**
+   * Every enable/disable decision on this form, taken in ONE pure function that is unit-tested
+   * directly. Nothing below re-derives any of it, so a rule cannot quietly differ between the
+   * file input, the drop target and the Submit button.
+   */
+  const gate = receiptSelectionGate({
+    shopCount: shops.length,
+    selectedShopId,
+    fileChosen: chosen !== null,
+    pending,
+    fileRejected: selectionError !== null,
+  });
+
+  /** The one flag every file-selection control reads. */
+  const fileDisabled = !gate.fileSelectionEnabled;
+
+  /**
+   * Whether to replace the drop target with an explanation instead of offering it.
+   *
+   * `pending` is excluded deliberately: a submission in flight disables the picker, but
+   * swapping the whole target out mid-upload would look like the file had been taken away.
+   */
+  const pickerLocked = fileDisabled && !pending;
+
+  // The selection's own problem wins while a file is chosen; a refused submission keeps its
+  // file, so the server's sentence is what remains beside it until the file changes.
   const receiptError = selectionError ?? state.fieldErrors.receipt ?? null;
 
   // Clears the selected file and resets the native input. Presentation only — it
@@ -215,6 +296,35 @@ export function SubmitReceiptForm({ shops }: SubmitReceiptFormProps) {
     setDragging(false);
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
+
+  /**
+   * Resets the form after a SUCCESSFUL submission, and only then.
+   *
+   * The success branches of the Server Action are the only ones that clear anything: the
+   * receipt is committed, so the picker must not keep offering a file that would now be
+   * refused as a duplicate. A refusal reaches this effect with `successMessage === null` and
+   * therefore keeps both the file and the shop — which is the bug this milestone fixes.
+   *
+   * IT RESETS ONCE PER RESULT, not once per render. `handledStateRef` remembers the state
+   * object it has already acted on, because `shops` arrives as a fresh array whenever the
+   * server component re-renders — which it does immediately after a success, since the action
+   * revalidates this page. Without the ref, that re-render would run this effect a second time
+   * and silently discard a file the person had already chosen for their NEXT receipt: the very
+   * class of bug this milestone exists to remove.
+   */
+  const handledStateRef = useRef<SubmitReceiptState | null>(null);
+
+  useEffect(() => {
+    if (state.successMessage === null) return;
+    if (handledStateRef.current === state) return;
+    handledStateRef.current = state;
+
+    setChosen(null);
+    setDragging(false);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    // Back to the starting point: the single assigned shop, or no choice made yet.
+    setHeldShopId(initialSelectedShopId(shops));
+  }, [state, shops]);
 
   /**
    * Accepts a dropped file by handing it to the REAL input.
@@ -230,7 +340,8 @@ export function SubmitReceiptForm({ shops }: SubmitReceiptFormProps) {
   function acceptDroppedFiles(files: FileList) {
     const input = fileInputRef.current;
     const file = files.item(0);
-    if (input === null || file === null || disabled) return;
+    // The same gate the input itself obeys: a drop cannot bypass shop selection.
+    if (input === null || file === null || fileDisabled) return;
 
     const transfer = new DataTransfer();
     transfer.items.add(file);
@@ -240,14 +351,11 @@ export function SubmitReceiptForm({ shops }: SubmitReceiptFormProps) {
 
   return (
     <form
-      action={async (payload: FormData) => {
-        await formAction(payload);
-        // Clear the picker after every attempt: the browser cannot repopulate a file
-        // input from the server, so leaving a stale name on screen would misdescribe
-        // what a second click would send.
-        setChosen(null);
-        if (fileInputRef.current) fileInputRef.current.value = "";
-      }}
+      /* The action is passed straight through. NOTHING is cleared here: the reset belongs to
+         the effect above, which can tell a success from a refusal — this wrapper could not, and
+         clearing unconditionally is exactly what used to discard a refused submission's
+         photograph. */
+      action={formAction}
       className="space-y-5"
       noValidate
     >
@@ -286,39 +394,104 @@ export function SubmitReceiptForm({ shops }: SubmitReceiptFormProps) {
         />
       )}
 
-      <div className="space-y-2">
-        <Label htmlFor="shopId">Shop</Label>
-        <div className="relative">
-          <select
-            id="shopId"
-            name="shopId"
-            required
-            disabled={disabled}
-            defaultValue={state.selectedShopId}
-            aria-describedby={state.fieldErrors.shopId ? "shopId-error" : undefined}
-            className={selectClasses(Boolean(state.fieldErrors.shopId))}
-          >
-            <option value="">Select a shop…</option>
-            {shops.map((shop) => (
-              <option key={shop.shopId} value={shop.shopId}>
-                {shop.shopCode ? `${shop.shopName} · ${shop.shopCode}` : shop.shopName}
-              </option>
-            ))}
-          </select>
-          <SelectChevron />
+      {/* ---------------------------------------------------------------- */}
+      {/* THE SHOP — asked, stated, or absent. Always BEFORE the photo.     */}
+      {/* ---------------------------------------------------------------- */}
+
+      {gate.mode === "unassigned" && (
+        /* Authorized, but with nowhere to submit. No shop is invented, and the wording cannot
+           be read as a permission refusal — they ARE a submitter. */
+        <div
+          role="status"
+          className="flex items-start gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4"
+        >
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white text-slate-500 shadow-sm">
+            <LocationIcon className="h-5 w-5" />
+          </span>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-slate-900">
+              {RECEIPT_NO_ACTIVE_SHOP_MESSAGE}
+            </p>
+            <p className="mt-0.5 text-sm text-slate-600">{RECEIPT_NO_ACTIVE_SHOP_HINT}</p>
+          </div>
         </div>
-        {state.fieldErrors.shopId && (
-          <p id="shopId-error" role="alert" className="text-sm font-medium text-red-700">
-            {state.fieldErrors.shopId}
+      )}
+
+      {gate.showFixedShopNotice && (
+        /* ONE ASSIGNED SHOP: chosen automatically and shown as context, with no control to
+           change it. The id travels in a hidden input — a convenience for the form encoding and
+           NOT an authorization: the Server Action re-reads the caller's assigned set and
+           reserve_receipt_submission proves the assignment again in SQL, so a tampered value
+           here buys nothing. */
+        <div className="space-y-2">
+          <input type="hidden" name="shopId" value={selectedShopId} />
+          <div className="flex items-center gap-2.5 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-slate-500 shadow-sm">
+              <LocationIcon className="h-4 w-4" />
+            </span>
+            <p className="min-w-0 text-sm font-medium text-slate-800">
+              {receiptFixedShopNotice(receiptShopLabel(shops[0]))}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {gate.showShopSelector && (
+        /* THE REQUIREMENT IS CARRIED BY FOUR SIGNALS, NOT ONE, because a person who misses
+           it loses their place in the flow: a heavier label, a red asterisk, the word
+           "Required", and a hint that states the ORDER rather than only the obligation.
+           None of them is colour ALONE — the asterisk and the word are both text, so the
+           requirement survives a monochrome screen and a colour-vision difference.
+
+           `aria-required` is what actually tells assistive technology, and it is set from
+           the same `required` attribute the browser already honours; the asterisk and the
+           word are `aria-hidden` inside Label so the requirement is announced once, not
+           three times. */
+        <div className="space-y-2">
+          <Label htmlFor="shopId" required requiredNote emphasis>
+            Shop
+          </Label>
+          <div className="relative">
+            <select
+              id="shopId"
+              name="shopId"
+              required
+              aria-required="true"
+              disabled={pending}
+              value={selectedShopId}
+              onChange={(event) => setHeldShopId(event.currentTarget.value)}
+              aria-describedby={
+                state.fieldErrors.shopId ? "shopId-error" : "shopId-hint"
+              }
+              className={selectClasses(Boolean(state.fieldErrors.shopId))}
+            >
+              {/* NOTHING IS PRESELECTED. Defaulting to whichever shop sorts first would
+                  attribute a sale to a shop nobody chose. */}
+              <option value="">Select a shop…</option>
+              {shops.map((shop) => (
+                <option key={shop.shopId} value={shop.shopId}>
+                  {receiptShopLabel(shop)}
+                </option>
+              ))}
+            </select>
+            <SelectChevron />
+          </div>
+          {state.fieldErrors.shopId && (
+            <p id="shopId-error" role="alert" className="text-sm font-medium text-red-700">
+              {state.fieldErrors.shopId}
+            </p>
+          )}
+          <p id="shopId-hint" className="text-xs text-slate-500">
+            {RECEIPT_SHOP_CHOICE_HINT} Only the shops you are currently assigned to are
+            listed.
           </p>
-        )}
-        <p className="text-xs text-slate-500">
-          Only the shops you are currently assigned to are listed.
-        </p>
-      </div>
+        </div>
+      )}
 
       <div className="space-y-2">
-        <Label htmlFor="receipt">Receipt photo</Label>
+        {/* The field NAME is still `receipt` — see this component's header and
+            ./submit-receipt-state.ts. Only the words a person reads changed. */}
+        <Label htmlFor="receipt">Invoice / receipt image</Label>
 
         {/*
           A large tap-to-upload target, mobile-first. The real <input type="file">
@@ -336,7 +509,10 @@ export function SubmitReceiptForm({ shops }: SubmitReceiptFormProps) {
              type from the file's leading bytes and ignores what the browser claims. */
           accept={SUPPORTED_RECEIPT_MIME_TYPES.join(",")}
           required
-          disabled={disabled}
+          /* Disabled until the shop is settled. A disabled input cannot be opened by its own
+             label either, which is what makes "no usable file picker yet" true for a pointer,
+             a tap and the keyboard alike rather than only for the styling. */
+          disabled={fileDisabled}
           onChange={(event) => {
             const file = event.currentTarget.files?.[0];
             setChosen(file ? { name: file.name, size: file.size } : null);
@@ -379,13 +555,32 @@ export function SubmitReceiptForm({ shops }: SubmitReceiptFormProps) {
               <button
                 type="button"
                 onClick={clearChosen}
-                disabled={disabled}
+                disabled={fileDisabled}
                 className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
               >
                 <XIcon className="h-4 w-4" />
                 <span className="sr-only">Remove selected file</span>
               </button>
             </div>
+          </div>
+        ) : pickerLocked ? (
+          /* THE PICKER IS NOT OFFERED YET, and the reason is stated where the picker would
+             have been. Rendering a disabled-looking drop target with no explanation is how a
+             person concludes the page is broken; rendering the sentence instead is how they
+             learn what to do next. There is no label wrapping the input here, so there is
+             nothing to click. */
+          <div
+            role="status"
+            className="flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50/70 px-6 py-8 text-center"
+          >
+            <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-slate-400 shadow-sm">
+              <UploadIcon className="h-6 w-6" />
+            </span>
+            <span className="text-sm font-medium text-slate-600">
+              {gate.mode === "unassigned"
+                ? RECEIPT_NO_ACTIVE_SHOP_MESSAGE
+                : RECEIPT_SHOP_FIRST_MESSAGE}
+            </span>
           </div>
         ) : (
           /* Drag-and-drop is ADDITIVE: the label still wraps the real file input, so
@@ -396,7 +591,7 @@ export function SubmitReceiptForm({ shops }: SubmitReceiptFormProps) {
             onDragOver={(event) => {
               // Required for a drop to fire at all — the default is to refuse it.
               event.preventDefault();
-              if (!disabled) setDragging(true);
+              if (!fileDisabled) setDragging(true);
             }}
             onDragLeave={() => setDragging(false)}
             onDrop={(event) => {
@@ -414,13 +609,13 @@ export function SubmitReceiptForm({ shops }: SubmitReceiptFormProps) {
               <UploadIcon className="h-6 w-6" />
             </span>
             <span className="text-sm font-semibold text-slate-900">
-              {dragging ? "Drop the image to attach it" : "Add a receipt photo"}
+              {dragging ? "Drop the image to attach it" : "Add the invoice / receipt"}
             </span>
             <span className="text-xs text-slate-500">
               Tap to choose a file, or drag one here
             </span>
             <span className="text-xs text-slate-500">
-              One JPEG, PNG or WebP image, up to {maxMegabytes} MB
+              One JPEG, PNG or WebP image of the invoice / receipt, up to {maxMegabytes} MB
             </span>
           </label>
         )}
@@ -432,28 +627,28 @@ export function SubmitReceiptForm({ shops }: SubmitReceiptFormProps) {
         )}
 
         <p id="receipt-hint" className="text-xs text-slate-500">
-          One JPEG, PNG or WebP image, up to {maxMegabytes} MB.
+          One JPEG, PNG or WebP image of the invoice / receipt, up to {maxMegabytes} MB.
         </p>
       </div>
 
       {/*
-        `disabled` already covers `pending`, so a second click cannot start a second
-        submission while one is in flight — which matters here because the upload is a
-        MUTATION with no idempotency contract: a duplicate send is a duplicate reserve.
-        `selectionError` is folded in so the control is not offered for a file that
-        cannot succeed; the pre-flight check refuses it anyway if the form is submitted
-        by keyboard.
+        ONE FLAG, FROM ONE FUNCTION. `submitEnabled` already covers all of it: a shop settled,
+        a file chosen, that file not already refused by the shared pre-flight check, and no
+        submission in flight — so a second click cannot start a second submission, which
+        matters because the upload is a MUTATION with no idempotency contract and a duplicate
+        send is a duplicate reserve. None of it is re-derived here; the pre-flight check and
+        the Server Action refuse an incomplete form anyway if it is submitted by keyboard.
       */}
       <Button
         type="submit"
         variant="primary"
         size="lg"
-        disabled={disabled || selectionError !== null}
+        disabled={!gate.submitEnabled}
         loading={pending}
         loadingLabel="Submitting…"
         className="w-full sm:w-auto"
       >
-        Submit receipt
+        Submit invoice / receipt
       </Button>
     </form>
   );
