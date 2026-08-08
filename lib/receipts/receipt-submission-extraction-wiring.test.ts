@@ -505,9 +505,11 @@ describe("11. the partial success is a success", () => {
   });
 
   test("the exact sentence the milestone requires is the one that ships", () => {
+    // The two load-bearing halves are unchanged: it reports a SUCCESS, and it does not claim
+    // the reading began. Only the document's user-facing name gained "invoice /".
     assert.match(
       read(STATE),
-      /"Receipt submitted successfully, but automatic data extraction could not be started\."/,
+      /"Invoice \/ receipt submitted successfully, but automatic data extraction could not be started\."/,
     );
   });
 

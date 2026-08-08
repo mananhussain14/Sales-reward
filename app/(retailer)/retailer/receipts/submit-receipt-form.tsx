@@ -437,13 +437,26 @@ export function SubmitReceiptForm({ shops }: SubmitReceiptFormProps) {
       )}
 
       {gate.showShopSelector && (
+        /* THE REQUIREMENT IS CARRIED BY FOUR SIGNALS, NOT ONE, because a person who misses
+           it loses their place in the flow: a heavier label, a red asterisk, the word
+           "Required", and a hint that states the ORDER rather than only the obligation.
+           None of them is colour ALONE — the asterisk and the word are both text, so the
+           requirement survives a monochrome screen and a colour-vision difference.
+
+           `aria-required` is what actually tells assistive technology, and it is set from
+           the same `required` attribute the browser already honours; the asterisk and the
+           word are `aria-hidden` inside Label so the requirement is announced once, not
+           three times. */
         <div className="space-y-2">
-          <Label htmlFor="shopId">Shop</Label>
+          <Label htmlFor="shopId" required requiredNote emphasis>
+            Shop
+          </Label>
           <div className="relative">
             <select
               id="shopId"
               name="shopId"
               required
+              aria-required="true"
               disabled={pending}
               value={selectedShopId}
               onChange={(event) => setHeldShopId(event.currentTarget.value)}
@@ -476,7 +489,9 @@ export function SubmitReceiptForm({ shops }: SubmitReceiptFormProps) {
       )}
 
       <div className="space-y-2">
-        <Label htmlFor="receipt">Receipt photo</Label>
+        {/* The field NAME is still `receipt` — see this component's header and
+            ./submit-receipt-state.ts. Only the words a person reads changed. */}
+        <Label htmlFor="receipt">Invoice / receipt image</Label>
 
         {/*
           A large tap-to-upload target, mobile-first. The real <input type="file">
@@ -594,13 +609,13 @@ export function SubmitReceiptForm({ shops }: SubmitReceiptFormProps) {
               <UploadIcon className="h-6 w-6" />
             </span>
             <span className="text-sm font-semibold text-slate-900">
-              {dragging ? "Drop the image to attach it" : "Add a receipt photo"}
+              {dragging ? "Drop the image to attach it" : "Add the invoice / receipt"}
             </span>
             <span className="text-xs text-slate-500">
               Tap to choose a file, or drag one here
             </span>
             <span className="text-xs text-slate-500">
-              One JPEG, PNG or WebP image, up to {maxMegabytes} MB
+              One JPEG, PNG or WebP image of the invoice / receipt, up to {maxMegabytes} MB
             </span>
           </label>
         )}
@@ -612,7 +627,7 @@ export function SubmitReceiptForm({ shops }: SubmitReceiptFormProps) {
         )}
 
         <p id="receipt-hint" className="text-xs text-slate-500">
-          One JPEG, PNG or WebP image, up to {maxMegabytes} MB.
+          One JPEG, PNG or WebP image of the invoice / receipt, up to {maxMegabytes} MB.
         </p>
       </div>
 
@@ -633,7 +648,7 @@ export function SubmitReceiptForm({ shops }: SubmitReceiptFormProps) {
         loadingLabel="Submitting…"
         className="w-full sm:w-auto"
       >
-        Submit receipt
+        Submit invoice / receipt
       </Button>
     </form>
   );

@@ -383,7 +383,10 @@ function SucceededPanel({
   if (view.transactionTime.value)
     rows.push({ label: "Time", value: view.transactionTime.value });
   if (view.documentNumber.value)
-    rows.push({ label: "Receipt no.", value: view.documentNumber.value });
+    // The reader's `document_number`, which is an INVOICE number as often as a receipt
+    // number. Labelling it "Receipt no." made a staff member holding an invoice doubt
+    // whether the value beside it was theirs.
+    rows.push({ label: "Invoice / receipt no.", value: view.documentNumber.value });
 
   const money = (minor: number | null) =>
     formatMinorAmount(minor, view.currencyCode.value, view.currencyMinorUnit);

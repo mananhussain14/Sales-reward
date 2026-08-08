@@ -32,7 +32,8 @@ import { InboxIcon, LocationIcon, ReceiptIcon } from "@/components/ui/icons";
 
 export const metadata: Metadata = {
   title: "Receipts · Retailer Portal",
-  description: "Submit customer receipts and review your own submission history.",
+  description:
+    "Submit customer invoices / receipts and review your own submission history.",
 };
 
 /**
@@ -129,11 +130,11 @@ export default async function RetailerReceiptsPage() {
             />
             <div className="min-w-0">
               <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
-                Add a receipt
+                Add an invoice / receipt
               </h1>
               <p className="mt-1 max-w-2xl text-sm text-slate-600">
-                Submit a customer receipt for one of your shops. Submitting sends it
-                for review; not every receipt qualifies.
+                Submit a customer invoice / receipt for one of your shops. Submitting
+                sends it for review; not every sale qualifies.
               </p>
             </div>
           </div>
@@ -147,7 +148,7 @@ export default async function RetailerReceiptsPage() {
       {/* ------------------------------------------------------------------ */}
       <section aria-labelledby="submit-heading" className="space-y-3">
         <SectionHeader
-          title={<span id="submit-heading">Submit a receipt</span>}
+          title={<span id="submit-heading">Submit an invoice / receipt</span>}
         />
 
         <div className={cardClasses("standard", "p-5 sm:p-6")}>
@@ -186,8 +187,8 @@ export default async function RetailerReceiptsPage() {
           <EmptyState
             icon={<InboxIcon className="h-6 w-6" />}
             tone="indigo"
-            title="No receipts yet"
-            description="Receipts you submit will appear here, with their current status."
+            title="Nothing submitted yet"
+            description="Invoices and receipts you submit will appear here, with their current status."
           />
         ) : (
           <>
@@ -196,7 +197,7 @@ export default async function RetailerReceiptsPage() {
               <div className="overflow-x-auto">
                 <table className="min-w-full divide-y divide-slate-100">
                   <caption className="sr-only">
-                    Receipts you have submitted, newest first
+                    Invoices and receipts you have submitted, newest first
                   </caption>
                   <thead className="border-b border-slate-200 bg-slate-50">
                     <tr>

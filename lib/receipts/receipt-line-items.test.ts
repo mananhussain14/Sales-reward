@@ -633,7 +633,7 @@ describe("22. a refused or failed read is handled without leaking anything", () 
     const state = code(PANEL_STATE);
     assert.match(state, /EXTRACTION_ITEMS_UNAVAILABLE_MESSAGE =/);
     // The receipt WAS read and saved; the sentence must not suggest otherwise.
-    assert.match(state, /Your receipt was read and saved\./);
+    assert.match(state, /Your invoice \/ receipt was read and saved\./);
   });
 });
 

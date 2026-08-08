@@ -70,6 +70,8 @@ export function Label({
   children,
   optional = false,
   required = false,
+  emphasis = false,
+  requiredNote = false,
   className,
 }: {
   htmlFor: string;
@@ -77,17 +79,43 @@ export function Label({
   optional?: boolean;
   /** Renders a visible required marker, so a requirement is not left to color/placement. */
   required?: boolean;
+  /**
+   * Raises the label to a heavier weight and a darker tone.
+   *
+   * For the rare field whose requirement must be impossible to miss — not a general dial.
+   * The weight is SWAPPED here rather than appended by the caller, because `cn` is a plain
+   * joiner: two competing `font-*` classes in one attribute are resolved by stylesheet order,
+   * not by the order they were written, so a caller-supplied override would be a coin toss.
+   */
+  emphasis?: boolean;
+  /**
+   * Adds a small "Required" word beside the marker.
+   *
+   * `aria-hidden`, like the asterisk: the control's own `required`/`aria-required` is what
+   * tells assistive technology, and repeating it in the accessible name would have a screen
+   * reader announce the requirement twice. This is for the eye only.
+   */
+  requiredNote?: boolean;
   className?: string;
 }) {
   return (
     <label
       htmlFor={htmlFor}
-      className={cn("block text-sm font-medium text-slate-800", className)}
+      className={cn(
+        "block text-sm",
+        emphasis ? "font-semibold text-slate-900" : "font-medium text-slate-800",
+        className,
+      )}
     >
       {children}
       {required && (
         <span className="ml-1 text-red-600" aria-hidden="true">
           *
+        </span>
+      )}
+      {required && requiredNote && (
+        <span className="ml-2 text-xs font-medium uppercase tracking-wide text-red-600" aria-hidden="true">
+          Required
         </span>
       )}
       {optional && (

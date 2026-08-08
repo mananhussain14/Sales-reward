@@ -239,7 +239,7 @@ describe("6-8, 10. multiple active assigned shops", () => {
   test("the guidance sentence is the required one", () => {
     assert.match(
       code(FORM_STATE),
-      /RECEIPT_SHOP_CHOICE_HINT =\s*"Select the shop where this sale happened\."/,
+      /RECEIPT_SHOP_CHOICE_HINT =\s*\n?\s*"Select the shop where this sale happened before adding the invoice \/ receipt\."/,
     );
     assert.ok(code(FORM).includes("RECEIPT_SHOP_CHOICE_HINT"));
   });
